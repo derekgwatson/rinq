@@ -57,17 +57,22 @@ def resolve_tenant():
             session['tenant_id'] = tenants[0]['id']
             return
 
-    # Twilio webhooks (no session): resolve from the called number
-    if path.startswith('/api/voice/'):
-        called = request.form.get('To') or request.form.get('Called') or request.args.get('called', '')
-        if called:
-            called = called.strip()
-            if not called.startswith('+'):
-                called = '+' + called
-            tenant = master_db.get_tenant_for_number(called)
-            if tenant:
-                g.tenant = tenant
-                return
+    # Twilio webhooks (no session): resolve from phone numbers in the request
+    if path.startswith('/api/voice/') or path.startswith('/api/sip/'):
+        # Try all number fields — To, Called, From — any might be a registered number
+        for field in ('To', 'Called', 'From'):
+            number = request.form.get(field) or request.args.get(field.lower(), '')
+            if number:
+                number = number.strip()
+                # Skip SIP URIs for From field
+                if '@' in number:
+                    continue
+                if not number.startswith('+'):
+                    number = '+' + number
+                tenant = master_db.get_tenant_for_number(number)
+                if tenant:
+                    g.tenant = tenant
+                    return
 
         # Fallback: tenant_id in URL args
         tid = request.args.get('tenant_id')
@@ -76,6 +81,12 @@ def resolve_tenant():
             if tenant:
                 g.tenant = tenant
                 return
+
+        # Last resort: if only one tenant has Twilio configured, use it
+        tenants = [t for t in master_db.get_tenants() if t.get('twilio_account_sid')]
+        if len(tenants) == 1:
+            g.tenant = tenants[0]
+            return
 
         logger.warning(f"Could not resolve tenant for webhook: {path}")
 
