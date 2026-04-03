@@ -44,7 +44,6 @@ def init_integrations(provider: str = 'none', **kwargs):
             WatsonPermissionService,
             WatsonCustomerLookup,
             WatsonOrderLookup,
-            WatsonEmailService,
             WatsonAIReceptionist,
         )
         _staff_directory = WatsonStaffDirectory()
@@ -52,7 +51,6 @@ def init_integrations(provider: str = 'none', **kwargs):
         _permission_service = WatsonPermissionService()
         _customer_lookup = WatsonCustomerLookup()
         _order_lookup = WatsonOrderLookup()
-        _email_service = WatsonEmailService()
         _ai_receptionist = WatsonAIReceptionist()
         logger.info("Integrations initialized: watson (bot-team)")
 
