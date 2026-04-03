@@ -126,15 +126,16 @@ except ImportError:
 
 @app.route('/switch-tenant/<tenant_id>')
 def switch_tenant(tenant_id):
-    """Switch to a different tenant."""
+    """Switch to a different tenant (only if user has access)."""
     from flask import session
-    if not session.get('user_id'):
+    user_id = session.get('user_id')
+    if not user_id:
         return redirect('/login')
     if config.multi_tenant:
         from rinq.database.master import get_master_db
         master_db = get_master_db()
-        tenant = master_db.get_tenant(tenant_id)
-        if tenant:
+        role = master_db.get_user_role_in_tenant(user_id, tenant_id)
+        if role:
             session['tenant_id'] = tenant_id
     return redirect('/')
 
