@@ -54,7 +54,7 @@ def setup_tenant(args):
     from rinq.database.db import Database
     db_dir = os.path.join(config.tenants_dir, args.id)
     os.makedirs(db_dir, exist_ok=True)
-    db_path = os.path.join(db_dir, 'tina.db')
+    db_path = os.path.join(db_dir, 'rinq.db')
     Database(db_path=db_path)
     print(f"Tenant database provisioned at: {db_path}")
 

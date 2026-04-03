@@ -36,7 +36,7 @@ def get_tenant_db():
         from rinq.config import config
         db_dir = os.path.join(config.tenants_dir, tenant_id)
         os.makedirs(db_dir, exist_ok=True)
-        db_path = os.path.join(db_dir, 'tina.db')
+        db_path = os.path.join(db_dir, 'rinq.db')
         _tenant_dbs[tenant_id] = Database(db_path=db_path)
 
     return _tenant_dbs[tenant_id]

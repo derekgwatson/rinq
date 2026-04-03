@@ -22,7 +22,7 @@ class Database:
 
     def __init__(self, db_path: str = None):
         if db_path is None:
-            db_path = Path(__file__).parent / "tina.db"
+            db_path = Path(__file__).parent / "rinq.db"
         self.db_path = Path(db_path)
         self._init_db()
 
