@@ -28,6 +28,17 @@ class ResendEmailService(EmailService):
     def is_configured(self):
         return bool(self.api_key and self.from_email)
 
+    def _get_from_email(self) -> str:
+        """Get from address — tenant override or default."""
+        try:
+            from flask import g
+            tenant = getattr(g, 'tenant', None)
+            if tenant and tenant.get('email_from'):
+                return tenant['email_from']
+        except RuntimeError:
+            pass
+        return self.from_email
+
     def send_email(self, to: str, subject: str, text_body: str,
                    attachments: list[dict] = None,
                    metadata: dict = None) -> Optional[str]:
@@ -36,8 +47,9 @@ class ResendEmailService(EmailService):
             return None
 
         try:
+            from_addr = self._get_from_email()
             payload = {
-                'from': self.from_email,
+                'from': from_addr,
                 'to': [to],
                 'subject': subject,
                 'text': text_body,
