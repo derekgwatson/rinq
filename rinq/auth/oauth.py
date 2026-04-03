@@ -186,7 +186,11 @@ def callback():
             tenants = master_db.get_user_tenants(user['id'])
 
         if tenants:
-            session['tenant_id'] = tenants[0]['id']
+            # Pick tenant: match by request domain first, then first available
+            host = request.host.split(':')[0]
+            domain_match = next((t for t in tenants if t.get('domain') == host), None)
+            selected = domain_match or tenants[0]
+            session['tenant_id'] = selected['id']
         else:
             flash("You don't have access to any tenants.", "error")
             session.clear()
