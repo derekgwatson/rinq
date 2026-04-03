@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 from twilio.rest import Client
-from twilio.base.exceptions import TwilioRestException
+from twilio.base.exceptions import TwilioException, TwilioRestException
 
 from rinq.config import config
 from rinq.database.db import get_db
@@ -90,7 +90,7 @@ class TwilioService:
                 "type": account.type,
                 "date_created": str(account.date_created),
             }
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to get account info: {e}")
             return {"error": str(e)}
 
@@ -139,7 +139,7 @@ class TwilioService:
             logger.info(f"Synced {count} phone numbers from Twilio, removed {removed} stale")
             return {"success": True, "count": count, "removed": removed}
 
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to sync phone numbers: {e}")
             return {"success": False, "error": str(e)}
 
@@ -177,7 +177,7 @@ class TwilioService:
             logger.info(f"Configured status callback on {updated} phone numbers")
             return {"success": True, "updated": updated}
 
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to configure status callbacks: {e}")
             return {"success": False, "error": str(e)}
 
@@ -223,7 +223,7 @@ class TwilioService:
             logger.info(f"Updated forwarding for {phone_number['phone_number']} to {forward_to_e164}")
             return {"success": True, "forward_to": forward_to_e164}
 
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to update forwarding: {e}")
             return {"success": False, "error": str(e)}
 
@@ -288,7 +288,7 @@ class TwilioService:
                 "uri": recording.uri,
                 "media_url": f"https://api.twilio.com{recording.uri.replace('.json', '.mp3')}",
             }
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to get recording {recording_sid}: {e}")
             return {"error": str(e)}
 
@@ -298,7 +298,7 @@ class TwilioService:
             self.client.recordings(recording_sid).delete()
             logger.info(f"Deleted recording {recording_sid} from Twilio")
             return {"success": True}
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to delete recording {recording_sid}: {e}")
             return {"success": False, "error": str(e)}
 
@@ -318,7 +318,7 @@ class TwilioService:
                 }
                 for d in domains
             ]
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to get SIP domains: {e}")
             return []
 
@@ -335,7 +335,7 @@ class TwilioService:
                 "sid": domain.sid,
                 "domain_name": domain.domain_name,
             }
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to create SIP domain: {e}")
             return {"success": False, "error": str(e)}
 
@@ -371,7 +371,7 @@ class TwilioService:
                     "friendly_name": getattr(m, 'friendly_name', None),
                 })
             return result
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to get credential list mappings: {e}")
             return []
         except Exception as e:
@@ -390,7 +390,7 @@ class TwilioService:
                     "friendly_name": getattr(m, 'friendly_name', None),
                 })
             return result
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to get registration credential list mappings: {e}")
             return []
         except Exception as e:
@@ -418,7 +418,7 @@ class TwilioService:
                 )
                 results["calls"] = "linked"
                 logger.info(f"Linked credential list {credential_list_sid} to domain {domain_sid} for CALLS")
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to link credential list for calls: {e}")
             results["calls"] = f"error: {e}"
             results["success"] = False
@@ -436,7 +436,7 @@ class TwilioService:
                 )
                 results["registrations"] = "linked"
                 logger.info(f"Linked credential list {credential_list_sid} to domain {domain_sid} for REGISTRATIONS")
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to link credential list for registrations: {e}")
             results["registrations"] = f"error: {e}"
             results["success"] = False
@@ -517,7 +517,7 @@ class TwilioService:
                 }
                 for cl in cred_lists
             ]
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to get credential lists: {e}")
             return []
 
@@ -544,7 +544,7 @@ class TwilioService:
                 }
                 for c in credentials
             ]
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to get credentials: {e}")
             return []
 
@@ -609,7 +609,7 @@ class TwilioService:
                 "deactivated": deactivated
             }
 
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to sync credentials: {e}")
             return {"success": False, "error": str(e)}
 
@@ -647,7 +647,7 @@ class TwilioService:
                 "sid": cred.sid,
                 "username": username,
             }
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to create SIP credential: {e}")
             return {"success": False, "error": str(e)}
 
@@ -668,7 +668,7 @@ class TwilioService:
             self.db.update_user_password(credential_sid, new_password)
 
             return {"success": True}
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to update SIP credential password: {e}")
             return {"success": False, "error": str(e)}
 
@@ -678,7 +678,7 @@ class TwilioService:
             self.client.sip.credential_lists(credential_list_sid).credentials(credential_sid).delete()
             logger.info(f"Deleted SIP credential {credential_sid}")
             return {"success": True}
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to delete SIP credential: {e}")
             return {"success": False, "error": str(e)}
 
@@ -702,7 +702,7 @@ class TwilioService:
                 }
                 for cid in caller_ids
             ]
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to get outgoing caller IDs: {e}")
             return []
 
@@ -768,7 +768,7 @@ class TwilioService:
                 "deactivated": deactivated
             }
 
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to sync verified caller IDs: {e}")
             return {"success": False, "error": str(e)}
 
@@ -796,7 +796,7 @@ class TwilioService:
                 "call_sid": call.sid,
                 "status": call.status,
             }
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to make test call: {e}")
             return {"success": False, "error": str(e)}
 
@@ -814,7 +814,7 @@ class TwilioService:
             if queues:
                 return queues[0]
             return None
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to get queue {queue_name}: {e}")
             return None
 
@@ -845,7 +845,7 @@ class TwilioService:
                 "call_sid": call.sid,
                 "status": call.status,
             }
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to initiate call to {to}: {e}")
             return {"success": False, "error": str(e)}
 
@@ -872,7 +872,7 @@ class TwilioService:
                     'start_time': call.start_time.isoformat() if call.start_time else None,
                 })
             return result
-        except TwilioRestException as e:
+        except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to list active calls from Twilio: {e}")
             return []
 

@@ -2102,7 +2102,10 @@ def regenerate_desk_phone_password():
     db = get_db()
     user = get_current_user()
 
-    if not config.sip_credential_list_sid:
+    from flask import g
+    tenant = getattr(g, 'tenant', None)
+    cred_list_sid = (tenant.get('twilio_sip_credential_list_sid') if tenant else None) or config.sip_credential_list_sid
+    if not cred_list_sid:
         flash('Desk phone credentials not configured', 'error')
         return redirect(url_for('web.my_devices'))
 
@@ -2117,7 +2120,7 @@ def regenerate_desk_phone_password():
 
     # Update in Twilio
     result = service.update_user_credential_password(
-        credential_list_sid=config.sip_credential_list_sid,
+        credential_list_sid=cred_list_sid,
         credential_sid=credential['sid'],
         new_password=new_password
     )
@@ -2148,8 +2151,11 @@ def my_devices():
     db = get_db()
     user = get_current_user()
 
-    # Check if SIP is configured
-    sip_configured = bool(config.sip_credential_list_sid)
+    # Check if SIP is configured — use tenant's credential list SID if available
+    from flask import g
+    tenant = getattr(g, 'tenant', None)
+    tenant_sip_cred_list_sid = (tenant.get('twilio_sip_credential_list_sid') if tenant else None) or config.sip_credential_list_sid
+    sip_configured = bool(tenant_sip_cred_list_sid)
     sip_domain = None
     credential = None
     stored_password = None
@@ -2171,7 +2177,7 @@ def my_devices():
             username = _email_to_sip_username(user.email)
 
             # Check if this username already exists in Twilio
-            existing_creds = service.get_credentials_in_list()
+            existing_creds = service.get_credentials_in_list(tenant_sip_cred_list_sid)
             existing_cred = next((c for c in existing_creds if c['username'] == username), None)
 
             if existing_cred:
@@ -2198,7 +2204,7 @@ def my_devices():
                 new_password = _generate_sip_password()
 
                 result = service.create_user_credential(
-                    credential_list_sid=config.sip_credential_list_sid,
+                    credential_list_sid=tenant_sip_cred_list_sid,
                     username=username,
                     password=new_password,
                     friendly_name=user.name,
