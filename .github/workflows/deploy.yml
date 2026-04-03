@@ -1,0 +1,17 @@
+name: Deploy to production
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: 209.38.91.37
+          username: derek
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: /var/www/rinq/deploy.sh
