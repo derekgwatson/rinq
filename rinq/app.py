@@ -13,7 +13,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, redirect, session
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from rinq.config import config
@@ -132,7 +132,6 @@ except ImportError:
 @app.route('/switch-tenant/<tenant_id>')
 def switch_tenant(tenant_id):
     """Switch to a different tenant (only if user has access)."""
-    from flask import session
     user_id = session.get('user_id')
     if not user_id:
         return redirect('/login')
