@@ -1,17 +1,17 @@
 """
-Pluggable integration interfaces for Tina/Rinq.
+Pluggable integration interfaces for Rinq.
 
-Each interface defines what Tina needs from an external system.
-Implementations live in subpackages (e.g. watson/ for bot-team).
+Each interface defines what Rinq needs from an external system.
+Implementations live in subpackages (zendesk/, watson/, etc).
 
 Usage:
-    from rinq.integrations import get_staff_directory, get_ticket_service
-    staff = get_staff_directory()
-    people = staff.get_active_staff()
+    from rinq.integrations import get_ticket_service
+    tickets = get_ticket_service()
+    tickets.create_ticket(subject='Test', description='Hello')
 """
 
+import os
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -25,11 +25,14 @@ _email_service = None
 _ai_receptionist = None
 
 
-def init_integrations(provider: str = 'watson', **kwargs):
-    """Initialize all integration services for the given provider.
+def init_integrations(provider: str = 'none', **kwargs):
+    """Initialize integration services.
 
     Args:
-        provider: Which integration provider to use ('watson' for bot-team)
+        provider: Base provider ('watson' for bot-team, 'none' for standalone)
+
+    Individual integrations can also be configured via env vars:
+        RINQ_TICKET_PROVIDER=zendesk  (native Zendesk API)
     """
     global _staff_directory, _ticket_service, _permission_service
     global _customer_lookup, _order_lookup, _email_service, _ai_receptionist
@@ -52,8 +55,19 @@ def init_integrations(provider: str = 'watson', **kwargs):
         _email_service = WatsonEmailService()
         _ai_receptionist = WatsonAIReceptionist()
         logger.info("Integrations initialized: watson (bot-team)")
-    else:
-        raise ValueError(f"Unknown integration provider: {provider}")
+
+    # Override individual integrations via env vars
+    ticket_provider = os.environ.get('RINQ_TICKET_PROVIDER', '')
+    if ticket_provider == 'zendesk':
+        from rinq.integrations.zendesk import ZendeskTicketService
+        _ticket_service = ZendeskTicketService()
+        logger.info("Ticket service: zendesk (native API)")
+    elif not _ticket_service and provider == 'none':
+        # Auto-detect: if Zendesk env vars are set, use native Zendesk
+        if os.environ.get('ZENDESK_SUBDOMAIN'):
+            from rinq.integrations.zendesk import ZendeskTicketService
+            _ticket_service = ZendeskTicketService()
+            logger.info("Ticket service: zendesk (auto-detected from env)")
 
 
 def get_staff_directory():

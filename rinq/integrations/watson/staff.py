@@ -3,8 +3,14 @@
 import logging
 from typing import Optional
 
-from shared.http_client import BotHttpClient
-from shared.config.ports import get_bot_url
+try:
+    from shared.http_client import BotHttpClient
+except ImportError:
+    from rinq.vendor.http_client import BotHttpClient
+try:
+    from shared.config.ports import get_bot_url
+except ImportError:
+    from rinq.vendor.ports import get_bot_url
 
 from rinq.integrations.base import StaffDirectory
 
