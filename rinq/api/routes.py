@@ -7096,8 +7096,9 @@ def search_available_numbers():
         return jsonify({'error': 'Admin access required'}), 403
 
     country = request.args.get('country', 'AU')
-    area_code = request.args.get('area_code', '')
     locality = request.args.get('locality', '')
+    region = request.args.get('region', '')
+    contains = request.args.get('contains', '')
     limit = min(int(request.args.get('limit', '20')), 50)
 
     service = get_twilio_service()
@@ -7108,11 +7109,10 @@ def search_available_numbers():
         kwargs = {'limit': limit}
         if locality:
             kwargs['in_locality'] = locality
-        if area_code:
-            # Use contains with country prefix for more reliable results
-            country_prefix = {'AU': '+61', 'US': '+1', 'GB': '+44', 'NZ': '+64'}.get(country, '')
-            clean_code = area_code.lstrip('0')
-            kwargs['contains'] = f"{country_prefix}{clean_code}"
+        if region:
+            kwargs['in_region'] = region
+        if contains:
+            kwargs['contains'] = contains
 
         numbers = service.client.available_phone_numbers(country).local.list(**kwargs)
         results = []

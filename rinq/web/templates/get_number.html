@@ -21,8 +21,12 @@
             <input type="text" id="locality" placeholder="e.g. Canberra" style="padding: 8px; border-radius: 4px; border: 1px solid #ddd; width: 150px;">
         </div>
         <div>
-            <label style="font-size: 0.85em; color: #666;">Area Code (optional)</label>
-            <input type="text" id="area_code" placeholder="e.g. 02" style="padding: 8px; border-radius: 4px; border: 1px solid #ddd; width: 80px;">
+            <label style="font-size: 0.85em; color: #666;">State (optional)</label>
+            <input type="text" id="region" placeholder="e.g. NSW" style="padding: 8px; border-radius: 4px; border: 1px solid #ddd; width: 120px;">
+        </div>
+        <div>
+            <label style="font-size: 0.85em; color: #666;">Number contains (optional)</label>
+            <input type="text" id="contains" placeholder="e.g. +61261" style="padding: 8px; border-radius: 4px; border: 1px solid #ddd; width: 140px;">
         </div>
         <button onclick="searchNumbers()" class="btn" id="searchBtn">Search</button>
     </div>
@@ -45,7 +49,8 @@
 async function searchNumbers() {
     const country = document.getElementById('country').value;
     const locality = document.getElementById('locality').value.trim();
-    const areaCode = document.getElementById('area_code').value.trim();
+    const region = document.getElementById('region').value.trim();
+    const contains = document.getElementById('contains').value.trim();
 
     document.getElementById('loading').style.display = 'block';
     document.getElementById('results').style.display = 'none';
@@ -55,7 +60,8 @@ async function searchNumbers() {
     try {
         let url = `/api/numbers/search?country=${country}&limit=20`;
         if (locality) url += `&locality=${encodeURIComponent(locality)}`;
-        if (areaCode) url += `&area_code=${encodeURIComponent(areaCode)}`;
+        if (region) url += `&region=${encodeURIComponent(region)}`;
+        if (contains) url += `&contains=${encodeURIComponent(contains)}`;
 
         const resp = await fetch(url);
         const data = await resp.json();
