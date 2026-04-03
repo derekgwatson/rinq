@@ -78,6 +78,18 @@ def init_integrations(provider: str = 'none', **kwargs):
         _email_service = ResendEmailService()
         logger.info("Email service: resend (auto-detected from env)")
 
+    # Customer lookup — auto-detect from WATSON_CLARA_URL
+    if not _customer_lookup and os.environ.get('WATSON_CLARA_URL'):
+        from rinq.integrations.watson.customers import WatsonCustomerLookup
+        _customer_lookup = WatsonCustomerLookup()
+        logger.info("Customer lookup: watson/clara (auto-detected from env)")
+
+    # Order lookup — auto-detect from WATSON_OTTO_URL
+    if not _order_lookup and os.environ.get('WATSON_OTTO_URL'):
+        from rinq.integrations.watson.orders import WatsonOrderLookup
+        _order_lookup = WatsonOrderLookup()
+        logger.info("Order lookup: watson/otto (auto-detected from env)")
+
 
 def get_staff_directory():
     """Get the staff directory integration."""
