@@ -19,28 +19,28 @@
     <form method="post" action="{{ url_for('web.save_address') }}">
         <div style="margin-bottom: 12px;">
             <label style="display: block; font-size: 0.85em; color: #666; margin-bottom: 4px;">Business or Contact Name</label>
-            <input type="text" name="customer_name" value="{{ address.customer_name if address else '' }}" required
+            <input type="text" name="customer_name" autocomplete="organization" value="{{ address.customer_name if address else '' }}" required
                    style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ddd; box-sizing: border-box;">
         </div>
         <div style="margin-bottom: 12px;">
             <label style="display: block; font-size: 0.85em; color: #666; margin-bottom: 4px;">Street Address</label>
-            <input type="text" name="street" value="{{ address.street if address else '' }}" required
+            <input type="text" name="street" autocomplete="street-address" value="{{ address.street if address else '' }}" required
                    style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ddd; box-sizing: border-box;">
         </div>
         <div style="display: flex; gap: 10px; margin-bottom: 12px;">
             <div style="flex: 2;">
                 <label style="display: block; font-size: 0.85em; color: #666; margin-bottom: 4px;">City</label>
-                <input type="text" name="city" value="{{ address.city if address else '' }}" required
+                <input type="text" name="city" autocomplete="address-level2" value="{{ address.city if address else '' }}" required
                        style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ddd; box-sizing: border-box;">
             </div>
             <div style="flex: 1;">
                 <label style="display: block; font-size: 0.85em; color: #666; margin-bottom: 4px;">State</label>
-                <input type="text" name="region" value="{{ address.region if address else '' }}" required
+                <input type="text" name="region" autocomplete="address-level1" value="{{ address.region if address else '' }}" required
                        style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ddd; box-sizing: border-box;">
             </div>
             <div style="flex: 1;">
                 <label style="display: block; font-size: 0.85em; color: #666; margin-bottom: 4px;">Postcode</label>
-                <input type="text" name="postal_code" value="{{ address.postal_code if address else '' }}" required
+                <input type="text" name="postal_code" autocomplete="postal-code" value="{{ address.postal_code if address else '' }}" required
                        style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ddd; box-sizing: border-box;">
             </div>
         </div>
