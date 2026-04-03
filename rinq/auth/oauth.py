@@ -126,10 +126,15 @@ def callback():
     flow.code_verifier = code_verifier
 
     try:
-        flow.fetch_token(authorization_response=request.url)
+        # Behind reverse proxy, request.url may be http:// even though the
+        # actual request was https://. Force https to match the redirect_uri.
+        auth_response = request.url
+        if auth_response.startswith('http://') and 'localhost' not in auth_response:
+            auth_response = 'https://' + auth_response[7:]
+        flow.fetch_token(authorization_response=auth_response)
     except Exception as e:
-        logger.error(f"OAuth token fetch failed: {e}")
-        flash("Authentication failed. Please try again.", "error")
+        logger.error(f"OAuth token fetch failed: {e}", exc_info=True)
+        flash(f"Authentication failed: {e}", "error")
         return redirect(url_for('standalone_auth.login'))
 
     credentials = flow.credentials
