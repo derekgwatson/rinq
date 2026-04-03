@@ -46,11 +46,11 @@ class TransferService:
         """Get webhook base URL. Uses captured value if in a thread, otherwise config."""
         if self._base_url:
             return self._base_url
-        return self.base_url
+        return config.webhook_base_url
 
     def _capture_base_url(self):
         """Capture the base URL from request context for use in background threads."""
-        self._base_url = self.base_url
+        self._base_url = config.webhook_base_url
 
     def _build_extension_dial_twiml(self, extension: str, caller_id: str) -> str | None:
         """Build TwiML to dial a staff member by extension.
