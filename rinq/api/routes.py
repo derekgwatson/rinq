@@ -1137,6 +1137,7 @@ def voice_incoming():
                 response_parts.append('    </Dial>')
                 response_parts.append(f'    <Redirect>{xml_escape(no_answer_url)}</Redirect>')
 
+                get_twilio_service().capture_for_thread()
                 _ring_targets_into_conference(dial_targets, conference_name, called_number, call_sid, base_url=config.webhook_base_url)
 
                 db.log_activity(
@@ -1216,6 +1217,7 @@ def voice_incoming():
                 response_parts.append('    </Dial>')
                 response_parts.append(f'    <Redirect>{xml_escape(no_answer_url)}</Redirect>')
 
+                get_twilio_service().capture_for_thread()
                 _ring_targets_into_conference(dial_targets, conference_name, called_number, call_sid, base_url=config.webhook_base_url)
 
                 db.log_activity(
@@ -3288,6 +3290,7 @@ def queue_wait(queue_id):
             # Auto-ring agents when caller enters queue
             # - SIP calls use customer's number so agents see who's calling on desk phone
             # - Mobile calls use our Twilio number (required - can only use numbers we own)
+            get_twilio_service().capture_for_thread()
             _ring_agents_for_queue(queue_id, queue.get('name'), from_number, called_number, call_sid, base_url=config.webhook_base_url)
 
     if not queue:
@@ -3737,6 +3740,7 @@ def voice_extension_dial():
     conference_name = f"call_{call_sid}"
     db.set_call_conference(call_sid, conference_name)
 
+    get_twilio_service().capture_for_thread()
     _ring_targets_into_conference(dial_targets, conference_name, from_number, call_sid, base_url=config.webhook_base_url)
 
     no_answer_url = f"{config.webhook_base_url}/api/voice/extension-no-answer?called={quote(called_number, safe='')}&from={quote(from_number, safe='')}&flow_id={flow_id}"
@@ -4473,6 +4477,7 @@ def _handle_internal_extension_call(extension: str, from_identity: str, staff_em
     db.set_call_conference(call_sid, conference_name)
 
     # Ring recipient's devices via REST API into the conference
+    get_twilio_service().capture_for_thread()
     _ring_targets_into_conference(dial_targets, conference_name, dial_caller_id, call_sid, base_url=config.webhook_base_url)
 
     # Caller joins conference — hears ringback until recipient answers

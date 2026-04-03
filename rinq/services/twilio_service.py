@@ -26,6 +26,7 @@ class TwilioService:
 
     def __init__(self):
         self._clients = {}  # Cache clients per account SID
+        self._thread_account_sid = None  # Captured for background threads
 
     @property
     def db(self):
@@ -33,7 +34,7 @@ class TwilioService:
         return get_db()
 
     def _get_tenant_twilio_creds(self):
-        """Get Twilio creds for current tenant, falling back to global config."""
+        """Get Twilio creds for current tenant, falling back to thread capture, then global config."""
         try:
             from flask import g
             tenant = getattr(g, 'tenant', None)
@@ -41,23 +42,38 @@ class TwilioService:
                 return tenant['twilio_account_sid'], tenant['twilio_auth_token']
         except RuntimeError:
             pass
+        # In background threads, use captured creds
+        if self._thread_account_sid and self._thread_account_sid in self._clients:
+            return self._thread_account_sid, None  # Client already cached
         return config.twilio_account_sid, config.twilio_auth_token
+
+    def capture_for_thread(self):
+        """Capture current tenant's Twilio client for use in background threads.
+        Call this from request context before spawning threads."""
+        account_sid, auth_token = self._get_tenant_twilio_creds()
+        if account_sid and auth_token:
+            if account_sid not in self._clients:
+                self._clients[account_sid] = Client(account_sid, auth_token)
+            self._thread_account_sid = account_sid
 
     @property
     def client(self) -> Client:
         """Get Twilio client for current tenant."""
         account_sid, auth_token = self._get_tenant_twilio_creds()
-        if not account_sid or not auth_token:
+        if not account_sid:
             raise ValueError("Twilio credentials not configured")
-        if account_sid not in self._clients:
-            self._clients[account_sid] = Client(account_sid, auth_token)
+        if account_sid in self._clients:
+            return self._clients[account_sid]
+        if not auth_token:
+            raise ValueError("Twilio credentials not configured")
+        self._clients[account_sid] = Client(account_sid, auth_token)
         return self._clients[account_sid]
 
     @property
     def is_configured(self) -> bool:
         """Check if Twilio is configured for current tenant."""
         account_sid, auth_token = self._get_tenant_twilio_creds()
-        return bool(account_sid and auth_token)
+        return bool(account_sid)
 
     # =========================================================================
     # Account Info
