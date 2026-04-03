@@ -590,6 +590,11 @@ def save_address():
 @admin_required
 def get_number():
     """Search and purchase phone numbers."""
+    from flask import g
+    tenant = getattr(g, 'tenant', None)
+    if not tenant or not tenant.get('twilio_address_sid'):
+        flash('Please set up your business address before purchasing a number.', 'warning')
+        return redirect(url_for('web.setup_address'))
     return render_template('get_number.html', current_user=get_current_user())
 
 
