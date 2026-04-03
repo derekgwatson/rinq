@@ -39,9 +39,18 @@ def resolve_tenant():
             g.tenant = tenant
             return
 
-    # If user is logged in but no tenant selected, try their first tenant
+    # If user is logged in but no tenant selected, try domain match first
     user_id = session.get('user_id')
     if user_id:
+        # Try matching by domain
+        host = request.host.split(':')[0]
+        tenant = master_db.get_tenant_by_domain(host)
+        if tenant:
+            g.tenant = tenant
+            session['tenant_id'] = tenant['id']
+            return
+
+        # Fall back to first tenant
         tenants = master_db.get_user_tenants(user_id)
         if tenants:
             g.tenant = tenants[0]

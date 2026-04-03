@@ -51,6 +51,14 @@ class MasterDatabase:
         finally:
             conn.close()
 
+    def get_tenant_by_domain(self, domain: str):
+        conn = self._get_conn()
+        try:
+            row = conn.execute("SELECT * FROM tenants WHERE domain = ? AND is_active = 1", (domain,)).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
     def create_tenant(self, tenant_id: str, name: str, **kwargs):
         conn = self._get_conn()
         try:

@@ -92,7 +92,13 @@ def inject_globals():
         ctx['shared_css_url'] = None
         ctx['staging_banner'] = False
     ctx['config'] = config
-    ctx['product_name'] = config.product_name
+    # Per-tenant branding overrides default product name
+    from flask import g
+    tenant = getattr(g, 'tenant', None)
+    if tenant and tenant.get('product_name'):
+        ctx['product_name'] = tenant['product_name']
+    else:
+        ctx['product_name'] = config.product_name
     return ctx
 
 # Import blueprints AFTER auth is initialized
