@@ -124,6 +124,21 @@ except ImportError:
 # System Endpoints
 # =============================================================================
 
+@app.route('/switch-tenant/<tenant_id>')
+def switch_tenant(tenant_id):
+    """Switch to a different tenant."""
+    from flask import session
+    if not session.get('user_id'):
+        return redirect('/login')
+    if config.multi_tenant:
+        from rinq.database.master import get_master_db
+        master_db = get_master_db()
+        tenant = master_db.get_tenant(tenant_id)
+        if tenant:
+            session['tenant_id'] = tenant_id
+    return redirect('/')
+
+
 @app.route('/health')
 def health():
     """Health check endpoint."""
