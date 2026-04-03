@@ -62,12 +62,24 @@ def init_integrations(provider: str = 'none', **kwargs):
         from rinq.integrations.zendesk import ZendeskTicketService
         _ticket_service = ZendeskTicketService()
         logger.info("Ticket service: zendesk (native API)")
-    elif not _ticket_service and provider == 'none':
+    elif not _ticket_service:
         # Auto-detect: if Zendesk env vars are set, use native Zendesk
         if os.environ.get('ZENDESK_SUBDOMAIN'):
             from rinq.integrations.zendesk import ZendeskTicketService
             _ticket_service = ZendeskTicketService()
             logger.info("Ticket service: zendesk (auto-detected from env)")
+
+    # Email service
+    email_provider = os.environ.get('RINQ_EMAIL_PROVIDER', '')
+    if email_provider == 'resend':
+        from rinq.integrations.resend import ResendEmailService
+        _email_service = ResendEmailService()
+        logger.info("Email service: resend (native API)")
+    elif not _email_service:
+        if os.environ.get('RESEND_API_KEY'):
+            from rinq.integrations.resend import ResendEmailService
+            _email_service = ResendEmailService()
+            logger.info("Email service: resend (auto-detected from env)")
 
 
 def get_staff_directory():
