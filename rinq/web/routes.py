@@ -2037,7 +2037,12 @@ def _generate_sip_password() -> str:
         import string
         # Twilio requires min 12 chars with uppercase, lowercase, and digit
         chars = string.ascii_letters + string.digits
-        return '-'.join(''.join(secrets.choice(chars) for _ in range(5)) for _ in range(4))
+        while True:
+            password = '-'.join(''.join(secrets.choice(chars) for _ in range(5)) for _ in range(4))
+            if (any(c.isupper() for c in password)
+                    and any(c.islower() for c in password)
+                    and any(c.isdigit() for c in password)):
+                return password
 
 
 def _email_to_sip_username(email: str) -> str:
