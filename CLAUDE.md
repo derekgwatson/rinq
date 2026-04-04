@@ -10,11 +10,14 @@ Rinq is a multi-tenant cloud phone system built on Twilio. Extracted from the Wa
 
 ## Architecture
 
-### Multi-Tenant
+### Multi-Tenant (always-on, no single-tenant mode)
 - Master DB (`data/master.db`) — tenants, users, phone number→tenant mapping
 - Per-tenant databases (`data/tenants/{id}/rinq.db`) — phone system data
 - Tenant resolution: by domain (login), by phone number (Twilio webhooks)
 - Each tenant gets a Twilio subaccount with isolated numbers/billing
+- **Tenant isolation is critical** — never use global config for tenant-specific values
+- Use `get_twilio_config('twilio_*')` from `tenant.context` for all Twilio config (NOT `config.twilio_*`)
+- In-memory caches must be keyed by tenant ID
 
 ### Key Directories
 ```
@@ -39,7 +42,7 @@ rinq/
 │   └── ...
 ├── tenant/
 │   ├── middleware.py       # Request-level tenant resolution
-│   └── context.py          # Tenant DB/config access
+│   └── context.py          # Tenant DB/config access (get_twilio_config, get_db)
 ├── vendor/                 # Vendored modules for standalone operation
 ├── web/routes.py           # Web UI routes
 └── web/templates/          # Jinja2 templates
@@ -60,6 +63,14 @@ Pluggable via env vars. Current setup:
 | watson | tina.watsonblinds.com.au | Master account (ACe458...) | Production, 8 phone numbers |
 | derek | rinq.cc | Subaccount (AC9a44...) | Personal, 1 phone number |
 
+## Tenant Provisioning
+
+New tenants are fully automated via `provisioning.py` or CLI:
+- Creates Twilio subaccount, TwiML App, API key, SIP credential list + domain
+- SIP credentials auto-created per user on first visit to My Devices
+- CLI: `python -m rinq.cli setup-tenant --id foo --name "Foo" --email admin@foo.com`
+- Backfill SIP for existing tenants: `python -m rinq.cli setup-sip --tenant foo`
+
 ## Deployment
 
 Push to `main` → GitHub Actions → SSH → `deploy.sh` → pull, pip install, restart gunicorn.
@@ -79,13 +90,16 @@ Several functions spawn background threads for Twilio API calls (ringing agents,
 
 ## Common Gotchas
 
-1. **Tenant context in threads** — always capture base_url and call capture_for_thread() before spawning
-2. **PSTN caller ID** — outbound calls to mobiles must use a number owned by the tenant's subaccount
-3. **Static audio files** — not in git (gitignored), must be copied to server manually
-4. **Recordings directory** — `rinq/data/recordings/`, shared across tenants (SIDs are globally unique)
-5. **config.webhook_base_url** — checks tenant record → env var → request host → None
-6. **TwilioService is a singleton** — but caches per-account-SID clients for multi-tenant
-7. **Service .db properties** — all return get_db() per-call, NOT cached at init (multi-tenant)
+1. **Never use `config.twilio_*` directly** — use `get_twilio_config()` from `tenant.context`. Global config belongs to the master account and will leak watson's values into other tenants
+2. **Tenant context in threads** — always capture base_url and call capture_for_thread() before spawning
+3. **PSTN caller ID** — outbound calls to mobiles must use a number owned by the tenant's subaccount
+4. **Static audio files** — not in git (gitignored), must be copied to server manually
+5. **Recordings directory** — `rinq/data/recordings/`, shared across tenants (SIDs are globally unique)
+6. **config.webhook_base_url** — checks tenant record → env var → request host → None
+7. **TwilioService is a singleton** — but caches per-account-SID clients for multi-tenant
+8. **Service .db properties** — all return get_db() per-call, NOT cached at init (multi-tenant)
+9. **Twilio SDK `.list()` pagination** — throws `TwilioException` (base class), NOT `TwilioRestException`. Always catch both
+10. **SIP domain names** — globally unique across all Twilio accounts. Use account SID suffix to avoid collisions
 
 ## Cron Jobs (derek user on server)
 
