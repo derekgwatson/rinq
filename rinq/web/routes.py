@@ -2023,30 +2023,28 @@ def admin_regenerate_password(sid):
 # User Desk Phone (Self-Service)
 # =============================================================================
 
-def _generate_sip_password() -> str:
-    """Generate a memorable password for SIP credentials.
+_SIP_WORDS = [
+    'alpha', 'beach', 'brave', 'cedar', 'chase', 'cloud', 'coral', 'crane',
+    'delta', 'drift', 'eagle', 'ember', 'fable', 'flame', 'frost', 'grace',
+    'grove', 'haven', 'ivory', 'jewel', 'knack', 'lemon', 'light', 'lunar',
+    'maple', 'melon', 'noble', 'ocean', 'olive', 'pearl', 'piano', 'plaza',
+    'pulse', 'quail', 'rapid', 'raven', 'ridge', 'river', 'robin', 'royal',
+    'sage', 'solar', 'spark', 'stone', 'storm', 'sugar', 'swift', 'tango',
+    'thorn', 'tiger', 'trail', 'trend', 'tulip', 'ultra', 'valor', 'velvet',
+    'vivid', 'waltz', 'wheat', 'world', 'zephyr',
+]
 
-    Uses shared password generator for human-friendly passwords like:
-    purple-tiger-sunset-42
+
+def _generate_sip_password() -> str:
+    """Generate a memorable passphrase for SIP credentials.
+
+    Produces passwords like: Coral-Storm-Maple-47
+    Meets Twilio requirements: 12+ chars, uppercase, lowercase, digit.
     """
-    try:
-        from shared.password_generator import generate_memorable_password
-        return generate_memorable_password()
-    except ImportError:
-        import secrets
-        import string
-        # Twilio requires min 12 chars with uppercase, lowercase, and digit
-        # Guarantee at least one of each required type, fill the rest randomly
-        required = [
-            secrets.choice(string.ascii_uppercase),
-            secrets.choice(string.ascii_lowercase),
-            secrets.choice(string.digits),
-        ]
-        chars = string.ascii_letters + string.digits
-        rest = [secrets.choice(chars) for _ in range(17)]
-        pool = required + rest
-        secrets.SystemRandom().shuffle(pool)
-        return '-'.join(''.join(pool[i:i+5]) for i in range(0, 20, 5))
+    import secrets
+    words = [secrets.choice(_SIP_WORDS).capitalize() for _ in range(3)]
+    number = secrets.randbelow(90) + 10  # 10-99
+    return f"{words[0]}-{words[1]}-{words[2]}-{number}"
 
 
 def _email_to_sip_username(email: str) -> str:
