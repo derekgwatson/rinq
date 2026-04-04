@@ -164,12 +164,10 @@ class RecordingService:
             audio_url = recording_url if recording_url.endswith('.mp3') else f"{recording_url}.mp3"
 
             # Twilio requires authentication for recording downloads
-            # Use tenant's Twilio creds (recording webhooks run in tenant context)
-            from rinq.services.twilio_service import get_twilio_service
-            twilio_creds = get_twilio_service()._get_tenant_twilio_creds()
+            from rinq.tenant.context import get_twilio_config
             response = requests.get(
                 audio_url,
-                auth=(twilio_creds[0], twilio_creds[1] or config.twilio_auth_token),
+                auth=(get_twilio_config('twilio_account_sid'), get_twilio_config('twilio_auth_token')),
                 timeout=60
             )
             response.raise_for_status()

@@ -28,6 +28,7 @@ from rinq.services.twilio_service import get_twilio_service
 from rinq.services.auth import login_required, get_current_user
 from rinq.database.db import get_db
 from rinq.config import config
+from rinq.tenant.context import get_twilio_config
 
 logger = logging.getLogger(__name__)
 
@@ -714,7 +715,7 @@ def _ring_targets_into_conference(dial_targets: list, conference_name: str,
                     call_from = caller_id
                     if to_addr.startswith('+') or to_addr[0].isdigit():
                         # PSTN call — use tenant's default or first owned number
-                        call_from = config.twilio_default_caller_id
+                        call_from = get_twilio_config('twilio_default_caller_id')
                         if not call_from:
                             try:
                                 owned = service.client.incoming_phone_numbers.list(limit=1)
@@ -4002,8 +4003,7 @@ def voicemail_handler():
 
                 # Twilio requires auth to download recordings
                 # Recording might not be immediately available - retry with backoff
-                twilio_creds = get_twilio_service()._get_tenant_twilio_creds()
-                auth = (twilio_creds[0], twilio_creds[1] or config.twilio_auth_token)
+                auth = (get_twilio_config('twilio_account_sid'), get_twilio_config('twilio_auth_token'))
                 audio_content = None
                 max_retries = 5
                 for attempt in range(max_retries):
@@ -4238,12 +4238,10 @@ def get_voice_token():
         return jsonify({"error": "Twilio not configured"}), 500
 
     # Get tenant-specific Twilio creds
-    from flask import g
-    tenant = getattr(g, 'tenant', None)
-    account_sid = (tenant.get('twilio_account_sid') if tenant else None) or config.twilio_account_sid
-    api_key = (tenant.get('twilio_api_key') if tenant else None) or config.twilio_api_key
-    api_secret = (tenant.get('twilio_api_secret') if tenant else None) or config.twilio_api_secret
-    twiml_app_sid = (tenant.get('twilio_twiml_app_sid') if tenant else None) or config.twilio_twiml_app_sid
+    account_sid = get_twilio_config('twilio_account_sid')
+    api_key = get_twilio_config('twilio_api_key')
+    api_secret = get_twilio_config('twilio_api_secret')
+    twiml_app_sid = get_twilio_config('twilio_twiml_app_sid')
 
     if not api_key or not api_secret:
         return jsonify({"error": "Twilio API Key not configured."}), 500
@@ -4462,7 +4460,7 @@ def _handle_internal_extension_call(extension: str, from_identity: str, staff_em
         if caller_ext and caller_ext.get('default_caller_id'):
             dial_caller_id = caller_ext['default_caller_id']
     if not dial_caller_id:
-        dial_caller_id = config.twilio_default_caller_id or ''
+        dial_caller_id = get_twilio_config('twilio_default_caller_id') or ''
 
     # Log the internal call
     conference_name = f"call_{call_sid}"
@@ -4663,7 +4661,7 @@ def voice_outbound():
     try:
         customer_call = service.client.calls.create(
             to=to_e164,
-            from_=caller_id or config.twilio_default_caller_id or '',
+            from_=caller_id or get_twilio_config('twilio_default_caller_id') or '',
             url=customer_join_url,
             status_callback=customer_status_url,
             status_callback_event=['initiated', 'ringing', 'answered', 'completed'],
@@ -5459,7 +5457,7 @@ def answer_queued_caller(call_sid):
         return jsonify({"error": "No SIP credentials found for agent"}), 400
 
     # Get caller ID for the outbound call
-    caller_id = config.twilio_default_caller_id
+    caller_id = get_twilio_config('twilio_default_caller_id')
     if not caller_id:
         phones = db.get_all_phones()
         if phones:

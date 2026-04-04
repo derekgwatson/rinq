@@ -19,6 +19,7 @@ from rinq.services.auth import login_required, admin_required, manager_required,
 from rinq.services.twilio_service import get_twilio_service
 from rinq.database.db import get_db
 from rinq.config import config
+from rinq.tenant.context import get_twilio_config
 try:
     from shared.config.ports import get_shared_css_context
 except ImportError:
@@ -97,7 +98,7 @@ def utility_processor():
 
     ctx['time_ago'] = time_ago
     ctx['softphone_enabled'] = bool(
-        config.twilio_api_key and config.twilio_api_secret and config.twilio_twiml_app_sid
+        get_twilio_config('twilio_api_key') and get_twilio_config('twilio_api_secret') and get_twilio_config('twilio_twiml_app_sid')
     )
 
     return ctx
@@ -801,8 +802,9 @@ def admin_caller_id_overview():
 
         # Priority 4: System default / first available number
         if not caller_id:
-            if config.twilio_default_caller_id:
-                caller_id = config.twilio_default_caller_id
+            tenant_default = get_twilio_config('twilio_default_caller_id')
+            if tenant_default:
+                caller_id = tenant_default
             elif phone_numbers:
                 caller_id = phone_numbers[0]['phone_number']
             if caller_id:
@@ -1793,7 +1795,7 @@ def link_credential_list():
     """Link the configured credential list to the SIP domain."""
     service = get_twilio_service()
 
-    if not config.sip_credential_list_sid:
+    if not get_twilio_config('twilio_sip_credential_list_sid'):
         flash('No credential list configured in .env', 'error')
         return redirect(url_for('web.setup'))
 
@@ -1803,7 +1805,7 @@ def link_credential_list():
         return redirect(url_for('web.setup'))
 
     domain_sid = domains[0]['sid']
-    result = service.associate_credential_list_with_domain(domain_sid, config.sip_credential_list_sid)
+    result = service.associate_credential_list_with_domain(domain_sid, get_twilio_config('twilio_sip_credential_list_sid'))
 
     if result.get('success'):
         calls_status = result.get('calls', 'unknown')
@@ -1838,7 +1840,7 @@ def desk_phones():
     service = get_twilio_service()
     db = get_db()
 
-    configured = bool(config.sip_credential_list_sid)
+    configured = bool(get_twilio_config('twilio_sip_credential_list_sid'))
 
     # Get SIP domain for display
     sip_domain = None
@@ -1876,12 +1878,12 @@ def add_desk_phone():
         flash('Password must be at least 12 characters', 'error')
         return redirect(url_for('web.desk_phones'))
 
-    if not config.sip_credential_list_sid:
+    if not get_twilio_config('twilio_sip_credential_list_sid'):
         flash('Credential list not configured', 'error')
         return redirect(url_for('web.desk_phones'))
 
     result = service.create_user_credential(
-        credential_list_sid=config.sip_credential_list_sid,
+        credential_list_sid=get_twilio_config('twilio_sip_credential_list_sid'),
         username=username,
         password=password,
         friendly_name=friendly_name
@@ -1916,13 +1918,13 @@ def delete_desk_phone(sid):
         flash('User not found', 'error')
         return redirect(url_for('web.desk_phones'))
 
-    if not config.sip_credential_list_sid:
+    if not get_twilio_config('twilio_sip_credential_list_sid'):
         flash('Credential list not configured', 'error')
         return redirect(url_for('web.desk_phones'))
 
     # Delete from Twilio
     result = service.delete_user_credential(
-        credential_list_sid=config.sip_credential_list_sid,
+        credential_list_sid=get_twilio_config('twilio_sip_credential_list_sid'),
         credential_sid=sid
     )
 
@@ -1983,7 +1985,7 @@ def admin_regenerate_password(sid):
     db = get_db()
     user = get_current_user()
 
-    if not config.sip_credential_list_sid:
+    if not get_twilio_config('twilio_sip_credential_list_sid'):
         flash('Desk phone credentials not configured', 'error')
         return redirect(url_for('web.desk_phones'))
 
@@ -1998,7 +2000,7 @@ def admin_regenerate_password(sid):
 
     # Update in Twilio
     result = service.update_user_credential_password(
-        credential_list_sid=config.sip_credential_list_sid,
+        credential_list_sid=get_twilio_config('twilio_sip_credential_list_sid'),
         credential_sid=sid,
         new_password=new_password
     )
@@ -2102,9 +2104,7 @@ def regenerate_desk_phone_password():
     db = get_db()
     user = get_current_user()
 
-    from flask import g
-    tenant = getattr(g, 'tenant', None)
-    cred_list_sid = tenant.get('twilio_sip_credential_list_sid') if tenant else config.sip_credential_list_sid
+    cred_list_sid = get_twilio_config('twilio_sip_credential_list_sid')
     if not cred_list_sid:
         flash('Desk phone credentials not configured', 'error')
         return redirect(url_for('web.my_devices'))
@@ -2151,10 +2151,8 @@ def my_devices():
     db = get_db()
     user = get_current_user()
 
-    # Check if SIP is configured — use tenant's credential list SID in multi-tenant mode
-    from flask import g
-    tenant = getattr(g, 'tenant', None)
-    tenant_sip_cred_list_sid = tenant.get('twilio_sip_credential_list_sid') if tenant else config.sip_credential_list_sid
+    # Check if SIP is configured for this tenant
+    tenant_sip_cred_list_sid = get_twilio_config('twilio_sip_credential_list_sid')
     sip_configured = bool(tenant_sip_cred_list_sid)
     sip_domain = None
     credential = None
@@ -2266,7 +2264,7 @@ def vvx300_setup():
     credential = None
     sip_domain = None
     stored_password = None
-    if config.sip_credential_list_sid and service.is_configured:
+    if get_twilio_config('twilio_sip_credential_list_sid') and service.is_configured:
         domains = service.get_sip_domains()
         if domains:
             sip_domain = domains[0]['domain_name']
@@ -2363,7 +2361,7 @@ def phone():
 
     # If still no caller ID, use system default
     if not default_caller_id:
-        default_caller_id = config.twilio_default_caller_id
+        default_caller_id = get_twilio_config('twilio_default_caller_id')
 
     # Get friendly name for display
     caller_id_display = default_caller_id
@@ -2384,8 +2382,8 @@ def phone():
                     break
 
     # Check if API key is configured (required for browser phone)
-    api_key_configured = bool(config.twilio_api_key and config.twilio_api_secret)
-    twiml_app_configured = bool(config.twilio_twiml_app_sid)
+    api_key_configured = bool(get_twilio_config('twilio_api_key') and get_twilio_config('twilio_api_secret'))
+    twiml_app_configured = bool(get_twilio_config('twilio_twiml_app_sid'))
 
     # Get staff extension and dial-in number for display
     staff_ext = db.get_or_create_staff_extension(user.email, f'session:{user.email}')

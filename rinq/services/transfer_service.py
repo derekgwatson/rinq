@@ -21,6 +21,7 @@ from twilio.base.exceptions import TwilioRestException
 from rinq.config import config
 from rinq.database.db import get_db
 from rinq.services.twilio_service import get_twilio_service
+from rinq.tenant.context import get_twilio_config
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +163,7 @@ class TransferService:
         """
         try:
             # Use provided caller ID or default
-            from_number = caller_id or config.twilio_default_caller_id
+            from_number = caller_id or get_twilio_config('twilio_default_caller_id')
 
             # Handle extension vs phone number
             is_ext = _is_extension(target)
@@ -312,7 +313,7 @@ class TransferService:
 
             # Conference-first blind transfer: put customer in a new conference,
             # call the target into it via REST API
-            caller_id = (queued_call.get('called_number') if queued_call else None) or config.twilio_default_caller_id
+            caller_id = (queued_call.get('called_number') if queued_call else None) or get_twilio_config('twilio_default_caller_id')
             new_conference = f"call_{call_sid}_xfer"
             conference_join_url = f"{self.base_url}/api/voice/conference/join?room={new_conference}&role=agent"
 
@@ -333,7 +334,7 @@ class TransferService:
             call_log = self.db.get_call_log_field(call_sid, 'from_number')
             if call_log and call_log.startswith('+'):
                 customer_number = call_log
-            transfer_from = customer_number or caller_id or config.twilio_default_caller_id
+            transfer_from = customer_number or caller_id or get_twilio_config('twilio_default_caller_id')
 
             # Call the target into the new conference
             try:
@@ -486,7 +487,7 @@ class TransferService:
                 f"?conference={consult_conference}&original_call={call_sid}"
             )
 
-            caller_id = (queued_call.get('called_number') if queued_call else None) or config.twilio_default_caller_id
+            caller_id = (queued_call.get('called_number') if queued_call else None) or get_twilio_config('twilio_default_caller_id')
 
             consult_call = self.twilio.client.calls.create(
                 to=target_to,
@@ -873,7 +874,7 @@ class TransferService:
             except Exception:
                 pass
             if not caller_id:
-                caller_id = config.twilio_default_caller_id
+                caller_id = get_twilio_config('twilio_default_caller_id')
             if not caller_id:
                 # Last resort: grab any Twilio number we own
                 numbers = self.db.get_phone_numbers()
