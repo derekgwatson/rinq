@@ -2035,7 +2035,8 @@ def _generate_sip_password() -> str:
     except ImportError:
         import secrets
         import string
-        chars = string.ascii_lowercase + string.digits
+        # Twilio requires min 12 chars with uppercase, lowercase, and digit
+        chars = string.ascii_letters + string.digits
         return '-'.join(''.join(secrets.choice(chars) for _ in range(5)) for _ in range(4))
 
 
