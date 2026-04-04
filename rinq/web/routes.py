@@ -2104,7 +2104,7 @@ def regenerate_desk_phone_password():
 
     from flask import g
     tenant = getattr(g, 'tenant', None)
-    cred_list_sid = (tenant.get('twilio_sip_credential_list_sid') if tenant else None) or config.sip_credential_list_sid
+    cred_list_sid = tenant.get('twilio_sip_credential_list_sid') if tenant else config.sip_credential_list_sid
     if not cred_list_sid:
         flash('Desk phone credentials not configured', 'error')
         return redirect(url_for('web.my_devices'))
@@ -2151,10 +2151,10 @@ def my_devices():
     db = get_db()
     user = get_current_user()
 
-    # Check if SIP is configured — use tenant's credential list SID if available
+    # Check if SIP is configured — use tenant's credential list SID in multi-tenant mode
     from flask import g
     tenant = getattr(g, 'tenant', None)
-    tenant_sip_cred_list_sid = (tenant.get('twilio_sip_credential_list_sid') if tenant else None) or config.sip_credential_list_sid
+    tenant_sip_cred_list_sid = tenant.get('twilio_sip_credential_list_sid') if tenant else config.sip_credential_list_sid
     sip_configured = bool(tenant_sip_cred_list_sid)
     sip_domain = None
     credential = None
