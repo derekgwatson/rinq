@@ -162,53 +162,37 @@ def callback():
         flash("Could not get email from Google.", "error")
         return redirect(url_for('standalone_auth.login'))
 
-    # In multi-tenant mode, use master DB for user management
-    if config.multi_tenant:
-        from rinq.database.master import get_master_db
-        master_db = get_master_db()
-        user = master_db.get_or_create_user(
-            email=email, name=name, picture=picture, google_sub=google_sub
-        )
-        session['user_id'] = user['id']
-        session['user_email'] = user['email']
-        session['user_name'] = user['name']
-        session['user_picture'] = user.get('picture', '')
+    from rinq.database.master import get_master_db
+    master_db = get_master_db()
+    user = master_db.get_or_create_user(
+        email=email, name=name, picture=picture, google_sub=google_sub
+    )
+    session['user_id'] = user['id']
+    session['user_email'] = user['email']
+    session['user_name'] = user['name']
+    session['user_picture'] = user.get('picture', '')
 
-        # Auto-select first tenant
+    # Auto-select first tenant
+    tenants = master_db.get_user_tenants(user['id'])
+    if not tenants:
+        # Auto-provision: check if email domain matches any tenant's allowed_domains
+        email_domain = email.split('@')[-1]
+        matching_tenants = master_db.get_tenants_for_email_domain(email_domain)
+        for tenant in matching_tenants:
+            master_db.add_user_to_tenant(tenant['id'], user['id'], role='user')
+            logger.info(f"Auto-provisioned {email} into tenant {tenant['id']} (domain match: {email_domain})")
         tenants = master_db.get_user_tenants(user['id'])
-        if not tenants:
-            # Auto-provision: check if email domain matches any tenant's allowed_domains
-            email_domain = email.split('@')[-1]
-            matching_tenants = master_db.get_tenants_for_email_domain(email_domain)
-            for tenant in matching_tenants:
-                master_db.add_user_to_tenant(tenant['id'], user['id'], role='user')
-                logger.info(f"Auto-provisioned {email} into tenant {tenant['id']} (domain match: {email_domain})")
-            tenants = master_db.get_user_tenants(user['id'])
 
-        if tenants:
-            # Pick tenant: match by request domain first, then first available
-            host = request.host.split(':')[0]
-            domain_match = next((t for t in tenants if t.get('domain') == host), None)
-            selected = domain_match or tenants[0]
-            session['tenant_id'] = selected['id']
-        else:
-            flash("You don't have access to any tenants.", "error")
-            session.clear()
-            return redirect(url_for('standalone_auth.login'))
+    if tenants:
+        # Pick tenant: match by request domain first, then first available
+        host = request.host.split(':')[0]
+        domain_match = next((t for t in tenants if t.get('domain') == host), None)
+        selected = domain_match or tenants[0]
+        session['tenant_id'] = selected['id']
     else:
-        # Single-tenant standalone: just store session info
-        # Access control is by allowed_domains in config
-        allowed_domains = getattr(config, 'allowed_domains', [])
-        if allowed_domains:
-            domain = email.split('@')[-1]
-            if domain not in allowed_domains:
-                flash("Your domain is not authorized.", "error")
-                return redirect(url_for('standalone_auth.login'))
-
-        session['user_id'] = google_sub
-        session['user_email'] = email
-        session['user_name'] = name
-        session['user_picture'] = picture
+        flash("You don't have access to any tenants.", "error")
+        session.clear()
+        return redirect(url_for('standalone_auth.login'))
 
     logger.info(f"User logged in: {email}")
     return redirect('/')

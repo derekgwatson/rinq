@@ -4489,25 +4489,7 @@ class Database:
             }
 
 
-# Singleton instance (single-tenant mode)
-_db = None
-
-
 def get_db() -> Database:
-    """Get the database for the current context.
-
-    In multi-tenant mode: returns the tenant-scoped database from g.tenant.
-    In single-tenant mode: returns the singleton database.
-    """
-    from rinq.config import config
-    if config.multi_tenant:
-        from rinq.tenant.context import get_current_tenant, get_tenant_db
-        tenant = get_current_tenant()
-        if tenant:
-            return get_tenant_db()
-
-    # Single-tenant fallback
-    global _db
-    if _db is None:
-        _db = Database(db_path=config.database_path)
-    return _db
+    """Get the tenant-scoped database for the current request."""
+    from rinq.tenant.context import get_tenant_db
+    return get_tenant_db()

@@ -18,9 +18,6 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-# Must set multi-tenant before importing config
-os.environ.setdefault('RINQ_MULTI_TENANT', 'true')
-
 from rinq.config import config
 from rinq.database.master import get_master_db
 

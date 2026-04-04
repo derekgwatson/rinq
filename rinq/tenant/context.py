@@ -15,7 +15,7 @@ _tenant_dbs = {}
 def get_current_tenant():
     """Get the current tenant dict from request context.
 
-    Returns None in single-tenant mode or for tenant-exempt routes.
+    Returns None for tenant-exempt routes.
     """
     return getattr(g, 'tenant', None)
 

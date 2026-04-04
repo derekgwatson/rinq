@@ -1,10 +1,8 @@
 """
-Master database for multi-tenant mode.
+Master database.
 
 Stores tenants, users, and phone number -> tenant mappings.
 Tenant-specific data lives in per-tenant SQLite databases.
-
-Only used when RINQ_MULTI_TENANT=true.
 """
 
 import os

@@ -73,11 +73,9 @@ else:
 integration_provider = os.environ.get('RINQ_INTEGRATIONS', 'none')
 init_integrations(integration_provider)
 
-# Multi-tenant middleware (optional)
-if config.multi_tenant:
-    from rinq.tenant.middleware import resolve_tenant
-    app.before_request(resolve_tenant)
-    logger.info("Multi-tenant mode enabled")
+# Multi-tenant middleware
+from rinq.tenant.middleware import resolve_tenant
+app.before_request(resolve_tenant)
 
 # Context processor for shared CSS and staging banner
 @app.context_processor
@@ -135,12 +133,11 @@ def switch_tenant(tenant_id):
     user_id = session.get('user_id')
     if not user_id:
         return redirect('/login')
-    if config.multi_tenant:
-        from rinq.database.master import get_master_db
-        master_db = get_master_db()
-        role = master_db.get_user_role_in_tenant(user_id, tenant_id)
-        if role:
-            session['tenant_id'] = tenant_id
+    from rinq.database.master import get_master_db
+    master_db = get_master_db()
+    role = master_db.get_user_role_in_tenant(user_id, tenant_id)
+    if role:
+        session['tenant_id'] = tenant_id
     return redirect('/')
 
 

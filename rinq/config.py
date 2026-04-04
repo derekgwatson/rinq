@@ -33,16 +33,7 @@ class Config:
         self.version = config["version"]
         self.personality = config.get("personality", "")
 
-        # Multi-tenant mode
-        self.multi_tenant = os.environ.get("RINQ_MULTI_TENANT", "").lower() == "true"
-
-        # Database path (single-tenant mode)
-        self.database_path = os.environ.get(
-            "RINQ_DATABASE_PATH",
-            str(self.base_dir / "database" / "rinq.db")
-        )
-
-        # Multi-tenant paths
+        # Data paths
         data_dir = os.environ.get("RINQ_DATA_DIR", str(self.base_dir.parent / "data"))
         self.master_db_path = os.path.join(data_dir, "master.db")
         self.tenants_dir = os.path.join(data_dir, "tenants")

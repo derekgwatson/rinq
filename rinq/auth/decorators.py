@@ -43,21 +43,12 @@ def get_current_user():
         g._current_user = None
         return None
 
-    from rinq.config import config
-
     role = 'user'
-    if config.multi_tenant:
-        tenant = getattr(g, 'tenant', None)
-        if tenant:
-            from rinq.database.master import get_master_db
-            master_db = get_master_db()
-            role = master_db.get_user_role_in_tenant(user_id, tenant['id']) or 'user'
-    else:
-        # Single-tenant standalone: check admin_emails from config
-        email = session.get('user_email', '')
-        admin_emails = getattr(config, 'admin_emails', []) or []
-        if email.lower() in [e.lower() for e in admin_emails]:
-            role = 'admin'
+    tenant = getattr(g, 'tenant', None)
+    if tenant:
+        from rinq.database.master import get_master_db
+        master_db = get_master_db()
+        role = master_db.get_user_role_in_tenant(user_id, tenant['id']) or 'user'
 
     user = User(
         id=user_id,
