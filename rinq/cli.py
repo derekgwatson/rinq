@@ -137,9 +137,12 @@ def setup_sip(args):
         print(f"Using existing SIP domain: {domain.domain_name}")
     else:
         sip_slug = args.tenant.replace('_', '-')
+        # SIP domain names are globally unique across all Twilio accounts,
+        # so suffix with the subaccount SID fragment to avoid collisions
+        domain_prefix = f"{sip_slug}-{sid[-6:].lower()}"
         try:
             domain = client.sip.domains.create(
-                domain_name=f"{sip_slug}.sip.twilio.com",
+                domain_name=f"{domain_prefix}.sip.twilio.com",
                 friendly_name=f"{tenant['name']} SIP",
                 voice_url=f"{base_url}/api/sip/incoming",
                 voice_method='POST',

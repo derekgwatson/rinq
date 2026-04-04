@@ -75,9 +75,11 @@ def provision_tenant(tenant_id: str, tenant_name: str, admin_email: str,
         )
         logger.info(f"Created SIP credential list: {cred_list.sid}")
 
+        # SIP domain names are globally unique — suffix with account SID fragment
         sip_slug = tenant_id.replace('_', '-')
+        domain_prefix = f"{sip_slug}-{subaccount.sid[-6:].lower()}"
         sip_domain = sub_client.sip.domains.create(
-            domain_name=f"{sip_slug}.sip.twilio.com",
+            domain_name=f"{domain_prefix}.sip.twilio.com",
             friendly_name=f"{tenant_name} SIP",
             voice_url=f"{base_url}/api/sip/incoming",
             voice_method='POST',
