@@ -2036,13 +2036,17 @@ def _generate_sip_password() -> str:
         import secrets
         import string
         # Twilio requires min 12 chars with uppercase, lowercase, and digit
+        # Guarantee at least one of each required type, fill the rest randomly
+        required = [
+            secrets.choice(string.ascii_uppercase),
+            secrets.choice(string.ascii_lowercase),
+            secrets.choice(string.digits),
+        ]
         chars = string.ascii_letters + string.digits
-        while True:
-            password = '-'.join(''.join(secrets.choice(chars) for _ in range(5)) for _ in range(4))
-            if (any(c.isupper() for c in password)
-                    and any(c.islower() for c in password)
-                    and any(c.isdigit() for c in password)):
-                return password
+        rest = [secrets.choice(chars) for _ in range(17)]
+        pool = required + rest
+        secrets.SystemRandom().shuffle(pool)
+        return '-'.join(''.join(pool[i:i+5]) for i in range(0, 20, 5))
 
 
 def _email_to_sip_username(email: str) -> str:
