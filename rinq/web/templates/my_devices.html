@@ -214,15 +214,6 @@
     </div>
     {% else %}
 
-    {% if new_password %}
-    <div class="new-password-alert">
-        <h4>New Password Generated</h4>
-        <p style="margin: 0;">Save this now - <span class="password-value">{{ new_password }}</span>
-        <span class="copy-icon" onclick="copyText('{{ new_password }}', this)" title="Copy to clipboard"></span>
-        </p>
-    </div>
-    {% endif %}
-
     <div class="credentials-box">
         <div class="credential-row">
             <span class="credential-label">Server / Domain</span>
