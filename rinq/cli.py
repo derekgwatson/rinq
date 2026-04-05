@@ -127,19 +127,24 @@ def setup_sip(args):
         )
         print(f"Created credential list: {cred_list.sid}")
 
-    # Create or reuse SIP domain
+    # Fetch existing SIP domains (SDK .list() is unreliable, use raw REST)
+    import requests as req
+    domain_resp = req.get(
+        f"https://api.twilio.com/2010-04-01/Accounts/{sid}/SIP/Domains.json",
+        auth=(sid, token)
+    )
+    domain_resp.raise_for_status()
+    existing_domains = _find_list(domain_resp.json())
+
+    voice_url = f"{base_url}/api/voice/outbound"
     domain = None
     domain_name = None
-    try:
-        domains = client.sip.domains.list()
-    except (TwilioRestException, TwilioException):
-        domains = []
-    if domains:
-        domain = domains[0]
-        domain_name = domain.domain_name
-        # Ensure voice URL is correct on existing domains
-        voice_url = f"{base_url}/api/voice/outbound"
-        if domain.voice_url != voice_url:
+
+    if existing_domains:
+        domain_data = existing_domains[0]
+        domain = client.sip.domains(domain_data['sid'])
+        domain_name = domain_data['domain_name']
+        if domain_data.get('voice_url') != voice_url:
             domain.update(voice_url=voice_url, voice_method='POST')
             print(f"Updated voice URL on {domain_name}")
         print(f"Using existing SIP domain: {domain_name}")
@@ -148,36 +153,15 @@ def setup_sip(args):
         # SIP domain names are globally unique across all Twilio accounts,
         # so suffix with the subaccount SID fragment to avoid collisions
         domain_prefix = f"{sip_slug}-{sid[-6:].lower()}"
-        try:
-            domain = client.sip.domains.create(
-                domain_name=f"{domain_prefix}.sip.twilio.com",
-                friendly_name=f"{tenant['name']} SIP",
-                voice_url=f"{base_url}/api/voice/outbound",
-                voice_method='POST',
-                sip_registration=True,
-            )
-            domain_name = domain.domain_name
-            print(f"Created SIP domain: {domain_name}")
-        except (TwilioRestException, TwilioException) as e:
-            if 'already exists' in str(e):
-                # Domain exists but list() failed — fetch via raw REST
-                import requests as req
-                resp = req.get(
-                    f"https://api.twilio.com/2010-04-01/Accounts/{sid}/SIP/Domains.json",
-                    auth=(sid, token)
-                ).json()
-                domain_list = resp.get('domains', resp.get('sip_domains', []))
-                if not domain_list:
-                    print(f"ERROR: Domain exists but could not fetch it. Raw response: {resp}")
-                    sys.exit(1)
-                domain_data = domain_list[0]
-                domain = client.sip.domains(domain_data['sid'])
-                domain_name = domain_data['domain_name']
-                # Ensure voice URL is correct
-                domain.update(voice_url=f"{base_url}/api/voice/outbound", voice_method='POST')
-                print(f"Using existing SIP domain: {domain_name} (updated voice URL)")
-            else:
-                raise
+        domain = client.sip.domains.create(
+            domain_name=f"{domain_prefix}.sip.twilio.com",
+            friendly_name=f"{tenant['name']} SIP",
+            voice_url=voice_url,
+            voice_method='POST',
+            sip_registration=True,
+        )
+        domain_name = domain.domain_name
+        print(f"Created SIP domain: {domain_name}")
 
     # Link credential list for calls and registrations
     try:
