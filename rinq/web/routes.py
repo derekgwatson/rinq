@@ -2251,9 +2251,6 @@ def my_devices():
     ring_settings = db.get_user_ring_settings(user.email)
     staff_ext = db.get_staff_extension(user.email)
 
-    # DEBUG: remove after confirming QR works
-    flash(f'DEBUG: sip_domain={sip_domain}, credential={bool(credential)}, stored_password={bool(stored_password)}, new_password={bool(new_password)}', 'info')
-
     return render_template('my_devices.html',
                          sip_configured=sip_configured,
                          sip_domain=sip_domain,

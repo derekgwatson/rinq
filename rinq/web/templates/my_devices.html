@@ -269,7 +269,7 @@
     {% if credential and sip_domain and (stored_password or new_password) %}
     <div style="margin-top: 15px;">
         <button type="button" class="btn btn-small" onclick="toggleQR()" id="qrToggle">Show QR Code</button>
-        <span class="text-muted" style="margin-left: 8px; font-size: 0.9em;">Scan with your phone to copy credentials</span>
+        <span class="text-muted" style="margin-left: 8px; font-size: 0.9em;">Scan to copy password to your phone</span>
         <div id="qrSection" style="display: none; margin-top: 12px; text-align: center;">
             <canvas id="qrCanvas"></canvas>
         </div>
@@ -377,14 +377,9 @@ function toggleQR() {
     if (section.style.display === 'none') {
         section.style.display = 'block';
         btn.textContent = 'Hide QR Code';
-        // Generate QR on first show
+        // Generate QR on first show — password only, easy to scan and paste
         if (!section.dataset.generated) {
-            const text = [
-                'Server: {{ sip_domain }}',
-                'Username: {{ credential.username if credential else "" }}',
-                'Password: {{ stored_password or new_password or "" }}',
-            ].join('\n');
-            generateQR(document.getElementById('qrCanvas'), text);
+            generateQR(document.getElementById('qrCanvas'), '{{ stored_password or new_password or "" }}');
             section.dataset.generated = '1';
         }
     } else {
