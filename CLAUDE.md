@@ -101,6 +101,9 @@ Several functions spawn background threads for Twilio API calls (ringing agents,
 9. **Twilio SDK `.list()` pagination** — throws `TwilioException` (base class), NOT `TwilioRestException`. Always use `twilio_list()` from `twilio_service.py`, never call `.list()` directly
 10. **SIP domain names** — globally unique across all Twilio accounts. Use account SID suffix to avoid collisions
 11. **SIP registration** — must set `sip_registration=True` when creating domains, otherwise Twilio rejects all REGISTER with 403
+12. **SIP domain voice URL** — must point to `/api/voice/outbound` (handles both browser and SIP device calls). NOT `/api/sip/incoming` (doesn't exist)
+13. **SIP URI parameters** — Twilio appends `;transport=UDP` to SIP URIs. Always strip parameters after `@` before matching (e.g. `split(';')[0]`)
+14. **Tenant resolution for SIP** — SIP calls have SIP URIs in From/To, not phone numbers. Middleware resolves tenant from the SIP domain name via `twilio_sip_domain` in the tenant record
 
 ## Cron Jobs (derek user on server)
 
