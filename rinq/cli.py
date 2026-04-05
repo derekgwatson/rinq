@@ -191,6 +191,85 @@ def setup_sip(args):
     print(f"Done — SIP configured for tenant '{args.tenant}'")
 
 
+def check_sip(args):
+    """Diagnose SIP registration issues for a tenant."""
+    master_db = get_master_db()
+    tenant = master_db.get_tenant(args.tenant)
+    if not tenant:
+        print(f"Tenant '{args.tenant}' not found")
+        sys.exit(1)
+
+    sid = tenant.get('twilio_account_sid')
+    token = tenant.get('twilio_auth_token')
+    cred_list_sid = tenant.get('twilio_sip_credential_list_sid')
+    sip_domain = tenant.get('twilio_sip_domain')
+
+    print(f"Tenant: {args.tenant}")
+    print(f"Account SID: {sid}")
+    print(f"Credential List SID: {cred_list_sid or 'NOT SET'}")
+    print(f"SIP Domain (DB): {sip_domain or 'NOT SET'}")
+    print()
+
+    if not sid or not token:
+        print("ERROR: No Twilio credentials")
+        sys.exit(1)
+
+    from twilio.rest import Client
+    from twilio.base.exceptions import TwilioException, TwilioRestException
+    client = Client(sid, token)
+
+    # Check domains
+    print("--- SIP Domains ---")
+    import requests as req
+    resp = req.get(
+        f"https://api.twilio.com/2010-04-01/Accounts/{sid}/SIP/Domains.json",
+        auth=(sid, token)
+    ).json()
+    domains = resp.get('domains', [])
+    if not domains:
+        print("  NONE — no SIP domains found")
+    for d in domains:
+        print(f"  {d['domain_name']} (SID: {d['sid']})")
+
+        # Check credential list mappings for calls
+        calls_resp = req.get(
+            f"https://api.twilio.com/2010-04-01/Accounts/{sid}/SIP/Domains/{d['sid']}/Auth/Calls/CredentialListMappings.json",
+            auth=(sid, token)
+        ).json()
+        call_mappings = calls_resp.get('contents', [])
+        print(f"    Calls auth: {len(call_mappings)} credential list(s)")
+        for m in call_mappings:
+            match = ' ← MATCH' if m.get('sid') == cred_list_sid else ''
+            print(f"      {m.get('sid')} ({m.get('friendly_name')}){match}")
+
+        # Check credential list mappings for registrations
+        reg_resp = req.get(
+            f"https://api.twilio.com/2010-04-01/Accounts/{sid}/SIP/Domains/{d['sid']}/Auth/Registrations/CredentialListMappings.json",
+            auth=(sid, token)
+        ).json()
+        reg_mappings = reg_resp.get('contents', [])
+        print(f"    Registration auth: {len(reg_mappings)} credential list(s)")
+        for m in reg_mappings:
+            match = ' ← MATCH' if m.get('sid') == cred_list_sid else ''
+            print(f"      {m.get('sid')} ({m.get('friendly_name')}){match}")
+
+    # Check credentials in list
+    if cred_list_sid:
+        print(f"\n--- Credentials in {cred_list_sid} ---")
+        try:
+            creds_resp = req.get(
+                f"https://api.twilio.com/2010-04-01/Accounts/{sid}/SIP/CredentialLists/{cred_list_sid}/Credentials.json",
+                auth=(sid, token)
+            ).json()
+            creds = creds_resp.get('credentials', [])
+            if not creds:
+                print("  NONE — no credentials found")
+            for c in creds:
+                print(f"  {c.get('username')} (SID: {c.get('sid')})")
+        except Exception as e:
+            print(f"  ERROR fetching credentials: {e}")
+
+
 def register_number(args):
     """Register a phone number to a tenant."""
     master_db = get_master_db()
@@ -240,6 +319,11 @@ def main():
     sp.add_argument('--tenant', required=True, help='Tenant ID')
     sp.add_argument('--force', action='store_true', help='Recreate even if already configured')
     sp.set_defaults(func=setup_sip)
+
+    # check-sip
+    sp = subparsers.add_parser('check-sip', help='Diagnose SIP registration issues')
+    sp.add_argument('--tenant', required=True, help='Tenant ID')
+    sp.set_defaults(func=check_sip)
 
     # register-number
     sp = subparsers.add_parser('register-number', help='Register phone number to tenant')
