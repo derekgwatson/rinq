@@ -137,6 +137,11 @@ def setup_sip(args):
     if domains:
         domain = domains[0]
         domain_name = domain.domain_name
+        # Ensure voice URL is correct on existing domains
+        voice_url = f"{base_url}/api/voice/outbound"
+        if domain.voice_url != voice_url:
+            domain.update(voice_url=voice_url, voice_method='POST')
+            print(f"Updated voice URL on {domain_name}")
         print(f"Using existing SIP domain: {domain_name}")
     else:
         sip_slug = args.tenant.replace('_', '-')
@@ -147,7 +152,7 @@ def setup_sip(args):
             domain = client.sip.domains.create(
                 domain_name=f"{domain_prefix}.sip.twilio.com",
                 friendly_name=f"{tenant['name']} SIP",
-                voice_url=f"{base_url}/api/sip/incoming",
+                voice_url=f"{base_url}/api/voice/outbound",
                 voice_method='POST',
                 sip_registration=True,
             )
@@ -168,7 +173,9 @@ def setup_sip(args):
                 domain_data = domain_list[0]
                 domain = client.sip.domains(domain_data['sid'])
                 domain_name = domain_data['domain_name']
-                print(f"Using existing SIP domain: {domain_name}")
+                # Ensure voice URL is correct
+                domain.update(voice_url=f"{base_url}/api/voice/outbound", voice_method='POST')
+                print(f"Using existing SIP domain: {domain_name} (updated voice URL)")
             else:
                 raise
 
