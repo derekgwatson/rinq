@@ -100,6 +100,7 @@ Several functions spawn background threads for Twilio API calls (ringing agents,
 8. **Service .db properties** — all return get_db() per-call, NOT cached at init (multi-tenant)
 9. **Twilio SDK `.list()` pagination** — throws `TwilioException` (base class), NOT `TwilioRestException`. Always catch both
 10. **SIP domain names** — globally unique across all Twilio accounts. Use account SID suffix to avoid collisions
+11. **SIP registration** — must set `sip_registration=True` when creating domains, otherwise Twilio rejects all REGISTER with 403
 
 ## Cron Jobs (derek user on server)
 
