@@ -57,6 +57,18 @@ class MasterDatabase:
         finally:
             conn.close()
 
+    def get_tenant_by_sip_domain(self, sip_domain: str):
+        """Find a tenant by their Twilio SIP domain name."""
+        conn = self._get_conn()
+        try:
+            row = conn.execute(
+                "SELECT * FROM tenants WHERE twilio_sip_domain = ? AND is_active = 1",
+                (sip_domain,)
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
     def get_tenants_for_email_domain(self, email_domain: str):
         """Find all active tenants that allow this email domain."""
         conn = self._get_conn()

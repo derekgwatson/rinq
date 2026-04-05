@@ -61,18 +61,24 @@ def resolve_tenant():
     if path.startswith('/api/voice/') or path.startswith('/api/sip/'):
         # Try all number fields — To, Called, From — any might be a registered number
         for field in ('To', 'Called', 'From'):
-            number = request.form.get(field) or request.args.get(field.lower(), '')
-            if number:
-                number = number.strip()
-                # Skip SIP URIs for From field
-                if '@' in number:
-                    continue
-                if not number.startswith('+'):
-                    number = '+' + number
-                tenant = master_db.get_tenant_for_number(number)
+            value = request.form.get(field) or request.args.get(field.lower(), '')
+            if not value:
+                continue
+            value = value.strip()
+            # SIP URI (e.g. sip:derekgg@derek-c1012a.sip.twilio.com) — resolve by SIP domain
+            if '@' in value:
+                sip_domain = value.split('@', 1)[1]
+                tenant = master_db.get_tenant_by_sip_domain(sip_domain)
                 if tenant:
                     g.tenant = tenant
                     return
+                continue
+            if not value.startswith('+'):
+                value = '+' + value
+            tenant = master_db.get_tenant_for_number(value)
+            if tenant:
+                g.tenant = tenant
+                return
 
         # Fallback: tenant_id in URL args
         tid = request.args.get('tenant_id')
