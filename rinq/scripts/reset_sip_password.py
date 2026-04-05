@@ -1,7 +1,11 @@
 """Temporary script to reset SIP password directly via Twilio API.
 
-Usage: venv/bin/python rinq/scripts/reset_sip_password.py
+Usage: venv/bin/python -m rinq.scripts.reset_sip_password
 """
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 from rinq.database.master import get_master_db
 from twilio.rest import Client
 
