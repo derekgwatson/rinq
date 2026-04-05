@@ -21,6 +21,25 @@ from rinq.database.db import get_db
 logger = logging.getLogger(__name__)
 
 
+def twilio_list(resource, **kwargs):
+    """Safely call .list() on any Twilio resource.
+
+    The Twilio Python SDK has a bug where .list() throws TwilioException
+    (the base class) instead of TwilioRestException when pagination
+    encounters an HTTP error. This wrapper catches both and returns an
+    empty list on failure, with a warning log.
+
+    Usage:
+        twilio_list(client.sip.domains)
+        twilio_list(client.calls, status='in-progress', limit=20)
+    """
+    try:
+        return resource.list(**kwargs)
+    except (TwilioRestException, TwilioException) as e:
+        logger.warning(f"Twilio list failed on {resource}: {e}")
+        return []
+
+
 class TwilioService:
     """Service for Twilio PBX operations."""
 
@@ -108,7 +127,7 @@ class TwilioService:
         - Remove numbers that no longer exist in Twilio
         """
         try:
-            numbers = self.client.incoming_phone_numbers.list()
+            numbers = twilio_list(self.client.incoming_phone_numbers)
             synced_at = datetime.utcnow().isoformat()
             count = 0
 
@@ -160,7 +179,7 @@ class TwilioService:
 
         status_callback = f"{config.webhook_base_url}/api/voice/call-status"
         try:
-            numbers = self.client.incoming_phone_numbers.list()
+            numbers = twilio_list(self.client.incoming_phone_numbers)
             updated = 0
             for number in numbers:
                 number.update(
@@ -310,7 +329,7 @@ class TwilioService:
     def get_sip_domains(self) -> list[dict]:
         """Get all SIP domains."""
         try:
-            domains = self.client.sip.domains.list()
+            domains = twilio_list(self.client.sip.domains)
             return [
                 {
                     "sid": d.sid,
@@ -363,7 +382,7 @@ class TwilioService:
     def get_domain_credential_list_mappings(self, domain_sid: str) -> list[dict]:
         """Get credential lists mapped to a SIP domain for authentication."""
         try:
-            mappings = self.client.sip.domains(domain_sid).auth.calls.credential_list_mappings.list()
+            mappings = twilio_list(self.client.sip.domains(domain_sid).auth.calls.credential_list_mappings)
             result = []
             for m in mappings:
                 result.append({
@@ -382,7 +401,7 @@ class TwilioService:
     def get_domain_registration_credential_list_mappings(self, domain_sid: str) -> list[dict]:
         """Get credential lists mapped to a SIP domain for REGISTRATION authentication."""
         try:
-            mappings = self.client.sip.domains(domain_sid).auth.registrations.credential_list_mappings.list()
+            mappings = twilio_list(self.client.sip.domains(domain_sid).auth.registrations.credential_list_mappings)
             result = []
             for m in mappings:
                 result.append({
@@ -510,7 +529,7 @@ class TwilioService:
     def get_credential_lists(self) -> list[dict]:
         """Get all credential lists."""
         try:
-            cred_lists = self.client.sip.credential_lists.list()
+            cred_lists = twilio_list(self.client.sip.credential_lists)
             return [
                 {
                     "sid": cl.sid,
@@ -535,7 +554,7 @@ class TwilioService:
             return []
 
         try:
-            credentials = self.client.sip.credential_lists(cred_list_sid).credentials.list()
+            credentials = twilio_list(self.client.sip.credential_lists(cred_list_sid).credentials)
             return [
                 {
                     "sid": c.sid,
@@ -694,7 +713,7 @@ class TwilioService:
         as outbound caller ID even though they're not owned/ported.
         """
         try:
-            caller_ids = self.client.outgoing_caller_ids.list()
+            caller_ids = twilio_list(self.client.outgoing_caller_ids)
             return [
                 {
                     "sid": cid.sid,
@@ -811,7 +830,7 @@ class TwilioService:
         Returns the queue object or None if not found.
         """
         try:
-            queues = self.client.queues.list(friendly_name=queue_name)
+            queues = twilio_list(self.client.queues, friendly_name=queue_name)
             if queues:
                 return queues[0]
             return None
@@ -862,7 +881,7 @@ class TwilioService:
         start_time for each active call.
         """
         try:
-            calls = self.client.calls.list(status='in-progress', limit=100)
+            calls = twilio_list(self.client.calls, status='in-progress', limit=100)
             result = []
             for call in calls:
                 result.append({

@@ -114,10 +114,8 @@ def setup_sip(args):
     base_url = tenant.get('webhook_base_url') or config.webhook_base_url
 
     # Create credential list (or reuse existing)
-    try:
-        existing_lists = client.sip.credential_lists.list()
-    except (TwilioRestException, TwilioException):
-        existing_lists = []
+    from rinq.services.twilio_service import twilio_list
+    existing_lists = twilio_list(client.sip.credential_lists)
     if existing_lists:
         cred_list = existing_lists[0]
         print(f"Using existing credential list: {cred_list.sid}")

@@ -98,7 +98,7 @@ Several functions spawn background threads for Twilio API calls (ringing agents,
 6. **config.webhook_base_url** — checks tenant record → env var → request host → None
 7. **TwilioService is a singleton** — but caches per-account-SID clients for multi-tenant
 8. **Service .db properties** — all return get_db() per-call, NOT cached at init (multi-tenant)
-9. **Twilio SDK `.list()` pagination** — throws `TwilioException` (base class), NOT `TwilioRestException`. Always catch both
+9. **Twilio SDK `.list()` pagination** — throws `TwilioException` (base class), NOT `TwilioRestException`. Always use `twilio_list()` from `twilio_service.py`, never call `.list()` directly
 10. **SIP domain names** — globally unique across all Twilio accounts. Use account SID suffix to avoid collisions
 11. **SIP registration** — must set `sip_registration=True` when creating domains, otherwise Twilio rejects all REGISTER with 403
 

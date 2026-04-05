@@ -20,7 +20,7 @@ from twilio.base.exceptions import TwilioRestException
 
 from rinq.config import config
 from rinq.database.db import get_db
-from rinq.services.twilio_service import get_twilio_service
+from rinq.services.twilio_service import get_twilio_service, twilio_list
 from rinq.tenant.context import get_twilio_config
 
 logger = logging.getLogger(__name__)
@@ -177,7 +177,7 @@ class TransferService:
             # - Inbound: customer (parent) -> agent (child via <Dial>) — redirect parent
 
             # First try: find child calls (outbound scenario)
-            child_calls = self.twilio.client.calls.list(
+            child_calls = twilio_list(self.twilio.client.calls, 
                 parent_call_sid=call_sid,
                 status='in-progress',
                 limit=1
@@ -284,7 +284,7 @@ class TransferService:
                 target_e164 = self.twilio._format_phone_number(target)
 
             # Find the conference
-            conferences = self.twilio.client.conferences.list(
+            conferences = twilio_list(self.twilio.client.conferences, 
                 friendly_name=conference_name,
                 status='in-progress',
                 limit=1
@@ -297,7 +297,7 @@ class TransferService:
             conference = conferences[0]
 
             # Get the caller's participant in the conference
-            participants = self.twilio.client.conferences(conference.sid).participants.list()
+            participants = twilio_list(self.twilio.client.conferences(conference.sid).participants)
 
             caller_participant = None
             agent_participant = None
@@ -451,7 +451,7 @@ class TransferService:
             consult_conference = f"consult_{secrets.token_hex(8)}"
 
             # Find the original conference and put caller on hold
-            conferences = self.twilio.client.conferences.list(
+            conferences = twilio_list(self.twilio.client.conferences, 
                 friendly_name=conference_name,
                 status='in-progress',
                 limit=1
@@ -565,7 +565,7 @@ class TransferService:
             consult_call_sid = transfer_state['transfer_consult_call_sid']
 
             # Find the original conference
-            conferences = self.twilio.client.conferences.list(
+            conferences = twilio_list(self.twilio.client.conferences, 
                 friendly_name=original_conference,
                 status='in-progress',
                 limit=1
@@ -584,7 +584,7 @@ class TransferService:
 
             # Check if the caller is still in the conference
             try:
-                participants = self.twilio.client.conferences(conference.sid).participants.list()
+                participants = twilio_list(self.twilio.client.conferences(conference.sid).participants)
                 caller_in_conference = any(p.call_sid == call_sid for p in participants)
                 if not caller_in_conference:
                     self.db.fail_transfer(call_sid, 'Original caller disconnected')
@@ -612,7 +612,7 @@ class TransferService:
             self.twilio.client.calls(consult_call_sid).update(url=target_join_url)
 
             # End the consultation conference (agent will drop when it ends)
-            consult_conferences = self.twilio.client.conferences.list(
+            consult_conferences = twilio_list(self.twilio.client.conferences, 
                 friendly_name=consult_conference,
                 status='in-progress',
                 limit=1
@@ -672,7 +672,7 @@ class TransferService:
 
                 if consult_conference:
                     try:
-                        consult_conferences = self.twilio.client.conferences.list(
+                        consult_conferences = twilio_list(self.twilio.client.conferences, 
                             friendly_name=consult_conference,
                             status='in-progress',
                             limit=1
@@ -707,15 +707,15 @@ class TransferService:
             # ending the conference, otherwise the agent's call drops
             if consult_conference and original_conference:
                 try:
-                    consult_conferences = self.twilio.client.conferences.list(
+                    consult_conferences = twilio_list(self.twilio.client.conferences, 
                         friendly_name=consult_conference,
                         status='in-progress',
                         limit=1
                     )
                     if consult_conferences:
-                        consult_participants = self.twilio.client.conferences(
+                        consult_participants = twilio_list(self.twilio.client.conferences(
                             consult_conferences[0].sid
-                        ).participants.list()
+                        ).participants)
                         for p in consult_participants:
                             # Skip the consult call (agent 2) — only redirect agent 1
                             if consult_call_sid and p.call_sid == consult_call_sid:
@@ -732,7 +732,7 @@ class TransferService:
                     logger.warning(f"Could not redirect agent back: {e}")
 
             # Find the original conference and take caller off hold
-            conferences = self.twilio.client.conferences.list(
+            conferences = twilio_list(self.twilio.client.conferences, 
                 friendly_name=original_conference,
                 status='in-progress',
                 limit=1
@@ -775,7 +775,7 @@ class TransferService:
         """
         if call_type == 'outbound':
             # Agent is parent, customer is child
-            child_calls = self.twilio.client.calls.list(
+            child_calls = twilio_list(self.twilio.client.calls, 
                 parent_call_sid=agent_call_sid,
                 status='in-progress',
                 limit=1
@@ -804,14 +804,14 @@ class TransferService:
             if not conf_name:
                 continue
             try:
-                confs = self.twilio.client.conferences.list(
+                confs = twilio_list(self.twilio.client.conferences, 
                     friendly_name=conf_name, status='in-progress', limit=1
                 )
                 if not confs:
                     continue
-                participants = self.twilio.client.conferences(
+                participants = twilio_list(self.twilio.client.conferences(
                     confs[0].sid
-                ).participants.list()
+                ).participants)
                 if any(p.call_sid == agent_call_sid for p in participants):
                     return {
                         'customer_call_sid': qc['call_sid'],
@@ -914,11 +914,11 @@ class TransferService:
                 # Set ALL participants to endConferenceOnExit=false so anyone
                 # can leave without killing the conference for the others
                 try:
-                    confs = self.twilio.client.conferences.list(
+                    confs = twilio_list(self.twilio.client.conferences, 
                         friendly_name=existing_conf, status='in-progress', limit=1
                     )
                     if confs:
-                        for p in self.twilio.client.conferences(confs[0].sid).participants.list():
+                        for p in twilio_list(self.twilio.client.conferences(confs[0].sid).participants):
                             self.twilio.client.conferences(confs[0].sid).participants(p.call_sid).update(
                                 end_conference_on_exit=False
                             )
@@ -1065,7 +1065,7 @@ class TransferService:
             else:
                 # Warm: move target from consult conference to main conference
                 # Take customer off hold first
-                conferences = self.twilio.client.conferences.list(
+                conferences = twilio_list(self.twilio.client.conferences, 
                     friendly_name=conference_name,
                     status='in-progress',
                     limit=1
@@ -1081,7 +1081,7 @@ class TransferService:
 
                 # Take customer off hold
                 conference = conferences[0]
-                participants = self.twilio.client.conferences(conference.sid).participants.list()
+                participants = twilio_list(self.twilio.client.conferences(conference.sid).participants)
                 for p in participants:
                     if p.hold:
                         self.twilio.client.conferences(conference.sid).participants(p.call_sid).update(
@@ -1097,7 +1097,7 @@ class TransferService:
 
                 # End consultation conference
                 if consult_conference:
-                    consult_confs = self.twilio.client.conferences.list(
+                    consult_confs = twilio_list(self.twilio.client.conferences, 
                         friendly_name=consult_conference,
                         status='in-progress',
                         limit=1
@@ -1170,7 +1170,7 @@ class TransferService:
             # End consultation conference if it exists (warm transfer)
             if consult_conference and consult_conference != conference_name:
                 try:
-                    consult_confs = self.twilio.client.conferences.list(
+                    consult_confs = twilio_list(self.twilio.client.conferences, 
                         friendly_name=consult_conference,
                         status='in-progress',
                         limit=1
@@ -1182,13 +1182,13 @@ class TransferService:
 
             # Take customer off hold in main conference
             if state['transfer_type'] == 'warm':
-                conferences = self.twilio.client.conferences.list(
+                conferences = twilio_list(self.twilio.client.conferences, 
                     friendly_name=conference_name,
                     status='in-progress',
                     limit=1
                 )
                 if conferences:
-                    participants = self.twilio.client.conferences(conferences[0].sid).participants.list()
+                    participants = twilio_list(self.twilio.client.conferences(conferences[0].sid).participants)
                     for p in participants:
                         if p.hold:
                             self.twilio.client.conferences(conferences[0].sid).participants(p.call_sid).update(

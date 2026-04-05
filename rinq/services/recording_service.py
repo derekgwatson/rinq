@@ -16,7 +16,7 @@ from datetime import datetime
 
 from rinq.config import config
 from rinq.database.db import get_db
-from rinq.services.twilio_service import get_twilio_service
+from rinq.services.twilio_service import get_twilio_service, twilio_list
 
 logger = logging.getLogger(__name__)
 
@@ -346,7 +346,7 @@ Recording SID: {recording_sid}"""
         """
         try:
             client = get_twilio_service().client
-            recordings = [r for r in client.calls(call_sid).recordings.list() if r.status == 'in-progress']
+            recordings = [r for r in twilio_list(client.calls(call_sid).recordings) if r.status == 'in-progress']
 
             stopped = 0
             for recording in recordings:
@@ -373,7 +373,7 @@ Recording SID: {recording_sid}"""
         """
         try:
             client = get_twilio_service().client
-            recordings = [r for r in client.calls(call_sid).recordings.list() if r.status == 'in-progress']
+            recordings = [r for r in twilio_list(client.calls(call_sid).recordings) if r.status == 'in-progress']
 
             if recordings:
                 return {
