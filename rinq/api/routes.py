@@ -6559,6 +6559,41 @@ def transfer_target_join():
     return Response(twiml, mimetype='application/xml')
 
 
+@api_bp.route('/voice/transfer/failed-message', methods=['POST'])
+def transfer_failed_message():
+    """TwiML played to the customer when a blind transfer target doesn't answer.
+
+    Routes to voicemail if configured, otherwise plays a message and hangs up.
+    """
+    db = get_db()
+    call_sid = request.form.get('CallSid', '')
+    to_number = request.form.get('To', '')
+    from_number = request.form.get('From', '')
+
+    # Try to find the call flow for voicemail routing
+    call_log = db.get_call_log_by_sid(call_sid) if hasattr(db, 'get_call_log_by_sid') else None
+    called_number = to_number
+    if call_log:
+        called_number = call_log.get('to_number') or to_number
+
+    routing = db.get_call_routing(called_number) if called_number and called_number.startswith('+') else None
+    call_flow = routing.get('call_flow') if routing else None
+
+    if call_flow:
+        response_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>']
+        result = _go_to_voicemail(response_parts, call_flow, called_number, from_number, call_sid, db, routing,
+                                  reason='no_answer')
+        if result:
+            return result
+
+    twiml = '''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Nicole">Sorry, we were unable to connect your call. Please try again later. Goodbye.</Say>
+    <Hangup/>
+</Response>'''
+    return Response(twiml, mimetype='application/xml')
+
+
 @api_bp.route('/voice/transfer/context', methods=['GET'])
 @api_or_session_auth
 def transfer_context():
@@ -6615,14 +6650,35 @@ def transfer_consult_status():
             transfer_state = db.get_transfer_state(original_call)
 
         if transfer_state:
-            is_three_way = transfer_state.get('transfer_type') == 'three_way'
+            transfer_type = transfer_state.get('transfer_type')
+            is_three_way = transfer_type == 'three_way'
+            is_blind = transfer_type == 'blind'
             conference_name = transfer_state.get('conference_name')
             consult_conference = transfer_state.get('transfer_consult_conference')
+
+            if is_blind:
+                # Blind transfer failed — agent 1 is gone.
+                # Redirect customer to voicemail or play a message.
+                xfer_conf = f"call_{original_call}_xfer"
+                try:
+                    twilio_service = get_twilio_service()
+                    confs = twilio_list(twilio_service.client.conferences,
+                        friendly_name=xfer_conf, status='in-progress', limit=1
+                    )
+                    if confs:
+                        participants = twilio_list(twilio_service.client.conferences(confs[0].sid).participants)
+                        for p in participants:
+                            # Redirect customer to a "transfer failed" message
+                            fail_url = f"{config.webhook_base_url}/api/voice/transfer/failed-message"
+                            twilio_service.client.calls(p.call_sid).update(url=fail_url, method='POST')
+                            logger.info(f"Redirected customer {p.call_sid} to transfer-failed message")
+                except Exception as e:
+                    logger.warning(f"Could not redirect customer after failed blind transfer: {e}")
 
             # For warm transfers: take caller off hold and redirect agent
             # back to original conference. For 3-way: agent and customer are
             # already in the original conference, so skip both.
-            if not is_three_way and conference_name:
+            elif not is_three_way and conference_name:
                 try:
                     twilio_service = get_twilio_service()
                     conferences = twilio_list(twilio_service.client.conferences,

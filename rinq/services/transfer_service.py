@@ -348,12 +348,18 @@ class TransferService:
             transfer_from = customer_number or caller_id or get_twilio_config('twilio_default_caller_id')
 
             # Call the target into the new conference
+            status_callback_url = (
+                f"{self.base_url}/api/voice/transfer/consult-status"
+                f"?original_call={call_sid}&source=queued_calls"
+            )
             try:
                 target_call = self.twilio.client.calls.create(
                     to=target_to,
                     from_=transfer_from,
                     url=conference_join_url,
                     timeout=30,
+                    status_callback=status_callback_url,
+                    status_callback_event=['answered', 'completed', 'busy', 'no-answer', 'failed', 'canceled'],
                 )
                 logger.info(f"Blind transfer: called target {target_to} as {target_call.sid}")
                 # Create proper call_log record for the target call
