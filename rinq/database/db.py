@@ -1953,8 +1953,9 @@ class Database:
                 SELECT pn.*, cf.id as flow_id, cf.name as flow_name,
                        cf.greeting_audio_id, cf.schedule_id,
                        cf.open_action, cf.open_queue_id, cf.open_forward_number,
+                       cf.open_no_answer_action,
                        cf.closed_action, cf.closed_audio_id, cf.closed_forward_number,
-                       cf.voicemail_email,
+                       cf.voicemail_email, cf.voicemail_destination_id,
                        cf.extension_prompt_audio_id, cf.extension_no_answer_action,
                        ga.file_url as greeting_url
                 FROM phone_numbers pn
@@ -2018,10 +2019,12 @@ class Database:
                 'open_action': phone_row['open_action'],
                 'open_queue_id': phone_row['open_queue_id'],
                 'open_forward_number': phone_row['open_forward_number'],
+                'open_no_answer_action': phone_row['open_no_answer_action'],
                 'closed_action': phone_row['closed_action'],
                 'closed_audio_id': phone_row['closed_audio_id'],
                 'closed_forward_number': phone_row['closed_forward_number'],
                 'voicemail_email': phone_row['voicemail_email'],
+                'voicemail_destination_id': phone_row['voicemail_destination_id'],
                 'extension_prompt_audio_id': phone_row['extension_prompt_audio_id'],
                 'extension_no_answer_action': phone_row['extension_no_answer_action'],
             }
