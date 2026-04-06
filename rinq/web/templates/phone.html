@@ -4142,7 +4142,7 @@ function startTransferStatusPolling() {
                     showTransferError('Transfer target did not answer. You are reconnected with the caller.');
                 }
             }
-        } catch (e) { /* ignore polling errors */ }
+        } catch (e) { console.warn('Transfer status poll error:', e); }
     }, 3000);
 }
 
@@ -4888,7 +4888,7 @@ async function pollCallState() {
             closeTransferModal();
         }
     } catch (e) {
-        // Ignore polling errors
+        console.warn('Call state poll error:', e);
     }
 }
 
