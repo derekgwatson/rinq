@@ -389,6 +389,11 @@ class TransferService:
 
             self.db.complete_transfer(call_sid)
 
+            # Update agent_email so presence shows the new agent, not the old one
+            new_agent_email = ext_record.get('email') if is_ext else None
+            if new_agent_email:
+                self.db.update_call_log(call_sid, {'agent_email': new_agent_email})
+
             self.db.log_activity(
                 action="call_transfer_blind",
                 target=target_e164,
@@ -1120,6 +1125,13 @@ class TransferService:
                         self.twilio.client.conferences(consult_confs[0].sid).update(status='completed')
 
                 self.db.complete_transfer_log(transfer_key)
+
+                # Update agent_email so presence shows the new agent
+                target_ext = state.get('transfer_target', '')
+                if target_ext and target_ext.strip().isdigit():
+                    ext_rec = self.db.get_staff_extension_by_ext(target_ext.strip())
+                    if ext_rec and ext_rec.get('email'):
+                        self.db.update_call_log(transfer_key, {'agent_email': ext_rec['email']})
 
                 self.db.log_activity(
                     action="call_transfer_warm_complete",
