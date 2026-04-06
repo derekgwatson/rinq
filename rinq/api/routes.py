@@ -6706,7 +6706,7 @@ def transfer_consult_status():
                                 to=agent_identity,
                                 from_=caller_id,
                                 url=rejoin_url,
-                                timeout=30,
+                                timeout=15,
                                 status_callback=callback_status_url,
                                 status_callback_event=['completed', 'busy', 'no-answer', 'failed', 'canceled'],
                             )
