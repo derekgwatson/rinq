@@ -6758,7 +6758,9 @@ def transfer_consult_status():
                         from rinq.api.routes import _email_to_browser_identity
                         agent_identity = f"client:{_email_to_browser_identity(agent_email)}"
                         rejoin_url = f"{config.webhook_base_url}/api/voice/conference/join?room={xfer_conf}&role=agent"
-                        caller_id = get_twilio_config('twilio_default_caller_id')
+                        # Use customer's number as caller ID so agent sees who they're reconnecting with
+                        customer_number = db.get_call_log_field(original_call, 'from_number')
+                        caller_id = customer_number or get_twilio_config('twilio_default_caller_id')
                         callback_status_url = (
                             f"{config.webhook_base_url}/api/voice/transfer/callback-status"
                             f"?conference={xfer_conf}&customer_call={original_call}"
