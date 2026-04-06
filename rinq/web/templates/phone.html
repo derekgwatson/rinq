@@ -4925,9 +4925,9 @@ async function pollCallState() {
         }
 
         // Last one in conference — everyone else left, auto-hangup
-        // Only trigger if we've previously seen 2+ participants (so we don't
-        // hang up while the conference is still being set up)
-        if (state.conference && state.participants) {
+        // Skip during transfers (agent moves between conferences) and
+        // only trigger after we've seen 2+ participants
+        if (state.conference && state.participants && !isConsulting && !state.transfer) {
             if (state.participants.length >= 2) {
                 window._sawMultipleParticipants = true;
             }
