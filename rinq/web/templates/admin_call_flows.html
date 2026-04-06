@@ -200,6 +200,16 @@
                             <option value="ai_receptionist" {% if flow.open_no_answer_action == 'ai_receptionist' %}selected{% endif %}>🤖 AI Receptionist (Stuart)</option>
                             <option value="voicemail" {% if flow.open_no_answer_action == 'voicemail' %}selected{% endif %}>📧 Voicemail</option>
                         </select>
+                        <div id="edit_no_answer_audio_{{ flow.id }}" style="margin-top: 10px; {% if flow.open_no_answer_action != 'voicemail' %}display: none;{% endif %}">
+                            <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em;">Voicemail Greeting</label>
+                            <select name="no_answer_audio_id" style="width: 100%; max-width: 400px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
+                                <option value="">-- Default TTS --</option>
+                                {% for audio in audio_files if audio.file_type in ('voicemail', 'greeting') %}
+                                <option value="{{ audio.id }}" {% if flow.no_answer_audio_id == audio.id %}selected{% endif %}>{{ audio.name }}</option>
+                                {% endfor %}
+                            </select>
+                            <p style="margin: 5px 0 0 0; font-size: 0.8em; color: #6c757d;">Played before the voicemail beep during business hours.</p>
+                        </div>
                     </div>
                 </div>
 
@@ -764,9 +774,11 @@ function updateVoicemailVisibility(flowId) {
     const closedAction = document.getElementById('edit_closed_action_' + flowId);
     const noAnswerAction = document.getElementById('edit_no_answer_action_' + flowId);
     const voicemailDiv = document.getElementById('edit_voicemail_' + flowId);
-    const needsVoicemail = (closedAction && closedAction.value === 'voicemail')
-                        || (noAnswerAction && noAnswerAction.value === 'voicemail');
+    const noAnswerAudioDiv = document.getElementById('edit_no_answer_audio_' + flowId);
+    const isNoAnswerVoicemail = noAnswerAction && noAnswerAction.value === 'voicemail';
+    const needsVoicemail = (closedAction && closedAction.value === 'voicemail') || isNoAnswerVoicemail;
     voicemailDiv.style.display = needsVoicemail ? 'block' : 'none';
+    if (noAnswerAudioDiv) noAnswerAudioDiv.style.display = isNoAnswerVoicemail ? 'block' : 'none';
 }
 
 function updateEditClosedFields(flowId) {

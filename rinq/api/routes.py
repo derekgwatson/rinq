@@ -1688,7 +1688,8 @@ def _handle_incoming_call_internal(called_number: str, from_number: str, call_si
                     )
                 else:
                     return _go_to_voicemail(
-                        response_parts, call_flow, called_number, from_number, call_sid, db, routing
+                        response_parts, call_flow, called_number, from_number, call_sid, db, routing,
+                        reason='no_answer'
                     )
         else:
             response_parts.append('    <Say>Sorry, no one is available to take your call right now.</Say>')
@@ -1720,8 +1721,13 @@ def _handle_incoming_call_internal(called_number: str, from_number: str, call_si
     return Response(twiml, mimetype='application/xml')
 
 
-def _go_to_voicemail(response_parts, call_flow, called_number, from_number, call_sid, db, routing):
-    """Helper to route a call to voicemail."""
+def _go_to_voicemail(response_parts, call_flow, called_number, from_number, call_sid, db, routing,
+                     reason='closed'):
+    """Helper to route a call to voicemail.
+
+    Args:
+        reason: 'closed' (after hours) or 'no_answer' (open hours, no one available)
+    """
     vm_dest = None
     if call_flow:
         if call_flow.get('voicemail_destination_id'):
@@ -1730,12 +1736,26 @@ def _go_to_voicemail(response_parts, call_flow, called_number, from_number, call
             vm_dest = db.get_voicemail_destination_by_email(call_flow['voicemail_email'])
 
     if vm_dest:
-            # Play voicemail prompt if configured
-            if call_flow and call_flow.get('closed_audio_id'):
+            # Play appropriate prompt based on reason
+            if reason == 'closed' and call_flow and call_flow.get('closed_audio_id'):
                 audio = db.get_audio_file(call_flow['closed_audio_id'])
                 if audio and audio.get('file_url'):
                     audio_url = _get_full_audio_url(audio['file_url'])
                     response_parts.append(f'    <Play>{xml_escape(audio_url)}</Play>')
+            elif reason == 'no_answer':
+                if call_flow and call_flow.get('no_answer_audio_id'):
+                    audio = db.get_audio_file(call_flow['no_answer_audio_id'])
+                    if audio and audio.get('file_url'):
+                        audio_url = _get_full_audio_url(audio['file_url'])
+                        response_parts.append(f'    <Play>{xml_escape(audio_url)}</Play>')
+                    else:
+                        response_parts.append(_say_or_play('voicemail_no_answer',
+                            'Sorry, no one is available to take your call right now. '
+                            'Please leave a message after the tone.'))
+                else:
+                    response_parts.append(_say_or_play('voicemail_no_answer',
+                        'Sorry, no one is available to take your call right now. '
+                        'Please leave a message after the tone.'))
 
             record_url = f"{config.webhook_base_url}/api/voice/voicemail"
             transcription_url = f"{config.webhook_base_url}/api/voice/transcription"
