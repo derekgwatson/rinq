@@ -2485,7 +2485,10 @@ async function initPhone() {
             // as internal (avoids unnecessary API calls on normal inbound)
             if (callSid && !internalName) {
                 fetch(`/api/voice/transfer/context?call_sid=${callSid}`, {credentials: 'same-origin'})
-                    .then(r => r.json())
+                    .then(r => {
+                        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                        return r.json();
+                    })
                     .then(data => {
                         if (data.is_transfer && currentCall === call) {
                             displayFrom = `Transfer: ${data.transferred_by}`;
@@ -2502,7 +2505,10 @@ async function initPhone() {
                             }
                         }
                     })
-                    .catch(err => console.warn('Transfer context check failed:', err));
+                    .catch(err => {
+                        console.warn('Transfer context check failed:', err);
+                        // Non-fatal: call still works, just won't show "Transfer: name"
+                    });
             }
 
             // Fetch customer context for incoming call (skip for internal calls)
