@@ -533,6 +533,10 @@ class TransferService:
                 status_callback_event=['initiated', 'ringing', 'answered', 'completed', 'busy', 'no-answer', 'failed', 'canceled']
             )
 
+            # Store consult SID immediately — before the redirect, so the
+            # transfer context lookup works when agent 2's browser checks it
+            self.db.update_transfer_consultation(call_sid, consult_call.sid, consult_conference)
+
             # Move the agent to the consultation conference
             agent_consult_url = (
                 f"{self.base_url}/api/voice/transfer/agent-consult"
@@ -540,9 +544,6 @@ class TransferService:
             )
 
             self.twilio.client.calls(agent_call_sid).update(url=agent_consult_url)
-
-            # Update the transfer state with consultation details
-            self.db.update_transfer_consultation(call_sid, consult_call.sid, consult_conference)
 
             self.db.log_activity(
                 action="call_transfer_warm_start",
