@@ -2501,7 +2501,9 @@ async function initPhone() {
                     if (r.ok) {
                         const data = await r.json();
                         if (data.is_transfer && currentCall === call) {
-                            displayFrom = `Transfer: ${data.transferred_by}`;
+                            displayFrom = data.customer
+                                ? `Transfer: ${data.transferred_by} (${data.customer})`
+                                : `Transfer: ${data.transferred_by}`;
                             incomingNumber.textContent = displayFrom;
                         }
                     }

@@ -6641,11 +6641,17 @@ def transfer_context():
     if transfer:
         transferred_by = transfer['transferred_by'] or ''
         friendly_name = transferred_by.split('@')[0].replace('.', ' ').replace('_', ' ').title()
-        return jsonify({
+        result = {
             "is_transfer": True,
             "transferred_by": friendly_name,
             "transfer_type": transfer.get('transfer_type', 'warm'),
-        })
+        }
+        # Include customer info so the receiving agent knows who's on the line
+        customer_name = transfer.get('customer_name')
+        customer_number = transfer.get('from_number')
+        if customer_name or customer_number:
+            result['customer'] = customer_name or customer_number
+        return jsonify(result)
 
     return jsonify({"is_transfer": False})
 
@@ -6667,7 +6673,10 @@ def transfer_consult_status():
         return '', 200
 
     # If the consultation call failed, cancel the transfer
-    if call_status in ('busy', 'no-answer', 'failed', 'canceled'):
+    # Include 'completed' — browser clients report rejection as 'completed'
+    # with zero duration. Safe because completed transfers have their
+    # transfer_status changed, so get_transfer_state won't find them.
+    if call_status in ('completed', 'busy', 'no-answer', 'failed', 'canceled'):
         logger.info(f"Consultation call failed ({call_status}) for transfer {original_call} (source={source})")
 
         # Get transfer state from appropriate source
