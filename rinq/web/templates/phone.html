@@ -2960,6 +2960,7 @@ function endCall() {
     currentOutboundCallSid = null;
     currentCallerId = null;
     stopCallStatePolling();
+    window._sawMultipleParticipants = false;
     currentTransferKey = null;
     currentTransferCallType = null;
     currentTransferAgentSid = null;
@@ -4924,9 +4925,17 @@ async function pollCallState() {
         }
 
         // Last one in conference — everyone else left, auto-hangup
-        if (state.conference && state.participants && state.participants.length <= 1) {
-            console.log('Last participant in conference — hanging up');
-            hangupCall();
+        // Only trigger if we've previously seen 2+ participants (so we don't
+        // hang up while the conference is still being set up)
+        if (state.conference && state.participants) {
+            if (state.participants.length >= 2) {
+                window._sawMultipleParticipants = true;
+            }
+            if (window._sawMultipleParticipants && state.participants.length <= 1) {
+                console.log('Last participant in conference — hanging up');
+                window._sawMultipleParticipants = false;
+                hangupCall();
+            }
         }
     } catch (e) {
         console.warn('Call state poll error:', e);
