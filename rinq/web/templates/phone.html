@@ -4413,9 +4413,8 @@ async function answerQueueCall(callSid) {
         return;
     }
 
-    // Fetch customer context including call history
-    // The caller object has basic enrichment, but we want fresh data + history
-    await fetchCustomerContext(caller.caller_number);
+    // Fetch customer context in the background — don't block the call
+    fetchCustomerContext(caller.caller_number);
 
     answeringCallSid = callSid;
     renderQueueCallers(window._lastCallers || []);
