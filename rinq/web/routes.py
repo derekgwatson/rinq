@@ -144,9 +144,8 @@ def index():
     # Not logged in?
     if not flask_session.get('user_id'):
         # Show landing page only on the SaaS domain
-        from rinq.auth.oauth import SAAS_DOMAINS
         host = request.host.split(':')[0].lower()
-        if host in SAAS_DOMAINS:
+        if host in ('rinq.cc', 'localhost', '127.0.0.1'):
             return render_template('landing.html', now=datetime.now())
         # Other domains (e.g. tina.watsonblinds.com.au) go straight to login
         return redirect(url_for('standalone_auth.login'))
