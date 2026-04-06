@@ -2974,7 +2974,7 @@ def outbound_customer_status():
         conference_name = f"call_{agent_call_sid}"
         twilio_service = get_twilio_service()
         try:
-            confs = twilio_twilio_list(service.client.conferences,
+            confs = twilio_list(twilio_service.client.conferences,
                 friendly_name=conference_name, status='in-progress', limit=1
             )
             if confs:
@@ -3032,7 +3032,7 @@ def call_hold():
         # _hold_outbound_call creates conferences named hold_{agent_call_sid}
         for pattern in [f"hold_{call_sid}", f"hold_room_{call_sid}"]:
             try:
-                confs = twilio_twilio_list(service.client.conferences,
+                confs = twilio_list(twilio_service.client.conferences,
                     friendly_name=pattern, status='in-progress', limit=1
                 )
                 if confs:
@@ -3047,7 +3047,7 @@ def call_hold():
 
     try:
         # Find the conference by name
-        conferences = twilio_twilio_list(service.client.conferences,
+        conferences = twilio_list(twilio_service.client.conferences,
             friendly_name=conference_name,
             status='in-progress',
             limit=1
@@ -5792,7 +5792,7 @@ def _get_call_state_inner(agent_call_sid, caller_email=None):
     def get_conference_state(conference_name):
         """Get participants for a conference."""
         try:
-            confs = twilio_twilio_list(service.client.conferences,
+            confs = twilio_list(twilio_service.client.conferences,
                 friendly_name=conference_name, status='in-progress', limit=1
             )
             if not confs:
@@ -5841,7 +5841,7 @@ def _get_call_state_inner(agent_call_sid, caller_email=None):
 
         # Check if agent is in this conference
         try:
-            confs = twilio_twilio_list(service.client.conferences,
+            confs = twilio_list(twilio_service.client.conferences,
                 friendly_name=conf_name, status='in-progress', limit=1
             )
             if not confs:
@@ -5896,7 +5896,7 @@ def _get_call_state_inner(agent_call_sid, caller_email=None):
                 continue
 
             try:
-                confs = twilio_twilio_list(service.client.conferences,
+                confs = twilio_list(twilio_service.client.conferences,
                     friendly_name=consult_conf, status='in-progress', limit=1
                 )
                 if not confs:
@@ -5972,7 +5972,7 @@ def get_conference_participants():
                 user_map[f"sip:{username}"] = friendly
 
     try:
-        confs = twilio_twilio_list(service.client.conferences,
+        confs = twilio_list(twilio_service.client.conferences,
             friendly_name=conference_name,
             status='in-progress',
             limit=1
@@ -6479,7 +6479,7 @@ def transfer_consult_status():
             if conference_name:
                 try:
                     twilio_service = get_twilio_service()
-                    conferences = twilio_twilio_list(service.client.conferences,
+                    conferences = twilio_list(twilio_service.client.conferences,
                         friendly_name=conference_name,
                         status='in-progress',
                         limit=1
@@ -6502,7 +6502,7 @@ def transfer_consult_status():
                 try:
                     twilio_service = get_twilio_service()
                     # Find the agent in the consult conference
-                    consult_confs = twilio_twilio_list(service.client.conferences,
+                    consult_confs = twilio_list(twilio_service.client.conferences,
                         friendly_name=consult_conference,
                         status='in-progress',
                         limit=1
