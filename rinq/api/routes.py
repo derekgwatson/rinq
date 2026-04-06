@@ -4517,12 +4517,12 @@ def _handle_internal_extension_call(extension: str, from_identity: str, staff_em
 
     # Caller joins conference — hears ringback until recipient answers
     ringback_url = f"{config.webhook_base_url}/api/voice/ringback"
+    dial_action_url = f"{config.webhook_base_url}/api/voice/extension-dial-status"
     twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Dial>
+    <Dial action="{xml_escape(dial_action_url)}">
         <Conference startConferenceOnEnter="false" endConferenceOnExit="true" beep="false" waitUrl="{xml_escape(ringback_url)}" waitMethod="POST">{xml_escape(conference_name)}</Conference>
     </Dial>
-    <Say voice="Polly.Nicole">The call was not answered.</Say>
 </Response>'''
 
     db.log_activity(
@@ -4532,6 +4532,27 @@ def _handle_internal_extension_call(extension: str, from_identity: str, staff_em
         performed_by=f"session:{staff_email}" if staff_email else "twilio"
     )
 
+    return Response(twiml, mimetype='application/xml')
+
+
+@api_bp.route('/voice/extension-dial-status', methods=['POST'])
+def extension_dial_status():
+    """Handle the end of an internal extension call's <Dial>.
+
+    Only plays "not answered" if the call was never connected.
+    If it was answered and then hung up, just hangs up cleanly.
+    """
+    dial_status = request.form.get('DialCallStatus', '')
+
+    if dial_status in ('completed', 'answered'):
+        # Call was connected and ended normally
+        return Response('<?xml version="1.0" encoding="UTF-8"?><Response/>', mimetype='application/xml')
+
+    # Not answered (busy, no-answer, failed, canceled)
+    twiml = '''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Nicole">The call was not answered.</Say>
+</Response>'''
     return Response(twiml, mimetype='application/xml')
 
 
