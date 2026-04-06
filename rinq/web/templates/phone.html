@@ -2481,8 +2481,9 @@ async function initPhone() {
                 };
             }
 
-            // Check if this is a transfer from a colleague (async update)
-            if (callSid) {
+            // Check if this is a transfer — only when caller wasn't resolved
+            // as internal (avoids unnecessary API calls on normal inbound)
+            if (callSid && !internalName) {
                 fetch(`/api/voice/transfer/context?call_sid=${callSid}`, {credentials: 'same-origin'})
                     .then(r => r.json())
                     .then(data => {
