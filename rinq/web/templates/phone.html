@@ -4965,8 +4965,8 @@ function renderCallStatePanel(state) {
     const allParticipants = [...(state.participants || [])];
     if (state.transfer) {
         for (const p of (state.transfer.consult_participants || [])) {
-            // Don't duplicate the agent (already in main participants)
-            if (!allParticipants.some(existing => existing.call_sid === p.call_sid)) {
+            // Don't duplicate — same person can have different SIDs across conferences
+            if (!allParticipants.some(existing => existing.name === p.name)) {
                 allParticipants.push(p);
             }
         }
