@@ -4914,7 +4914,9 @@ async function pollCallState() {
             }
         }
 
-        // 3-way: stop ringback when target joins (3+ participants)
+        // Stop ringback when target joins
+        // 3-way: 3+ participants in main conference
+        // Warm: 2+ participants in consult conference (agent + target)
         if (isConsulting && transferType === 'three_way'
             && state.participants && state.participants.length >= 3) {
             stopTransferStatusPolling();
@@ -4922,6 +4924,11 @@ async function pollCallState() {
             isConsulting = false;
             consultCallSid = null;
             startCallStatePolling();  // Revert to normal 3s interval
+        }
+        if (isConsulting && transferType === 'warm'
+            && state.transfer && state.transfer.consult_participants
+            && state.transfer.consult_participants.length >= 2) {
+            stopRingback();
         }
 
         // Last one in conference — everyone else left, auto-hangup
