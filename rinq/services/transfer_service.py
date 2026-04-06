@@ -53,7 +53,8 @@ class TransferService:
         """Capture the base URL from request context for use in background threads."""
         self._base_url = config.webhook_base_url
 
-    def _build_extension_dial_twiml(self, extension: str, caller_id: str) -> str | None:
+    def _build_extension_dial_twiml(self, extension: str, caller_id: str,
+                                     transferred_by: str = None) -> str | None:
         """Build TwiML to dial a staff member by extension.
 
         Returns TwiML string or None if extension not found.
@@ -65,9 +66,19 @@ class TransferService:
         email = ext_record['email']
         targets = []
 
-        # Browser softphone
+        # Browser softphone — include callerName param so the receiving
+        # agent sees who is transferring the call
         identity = email.replace('@', '_at_').replace('.', '_')
-        targets.append(f'<Client>{identity}</Client>')
+        if transferred_by:
+            caller_name = transferred_by.split('@')[0].replace('.', ' ').replace('_', ' ').title()
+            targets.append(
+                f'<Client>'
+                f'<Identity>{identity}</Identity>'
+                f'<Parameter name="callerName" value="Transfer: {caller_name}" />'
+                f'</Client>'
+            )
+        else:
+            targets.append(f'<Client>{identity}</Client>')
 
         # SIP device (if they have one)
         from rinq.api.routes import _get_sip_domain, _get_sip_uri_for_user
@@ -205,7 +216,7 @@ class TransferService:
 
             # Build TwiML to dial the transfer target
             if is_ext:
-                twiml = self._build_extension_dial_twiml(target, from_number)
+                twiml = self._build_extension_dial_twiml(target, from_number, transferred_by)
                 if not twiml:
                     return {'success': False, 'error': f'Extension {target} not found'}
             else:
@@ -896,6 +907,11 @@ class TransferService:
                 target_email = ext_record['email']
                 target_identity = f"client:{target_email.replace('@', '_at_').replace('.', '_')}"
                 target_e164 = target  # Keep for logging
+                # Use transferring agent's identity so receiving agent sees
+                # a colleague's name, not a phone number
+                if transferred_by:
+                    from rinq.api.routes import _email_to_browser_identity
+                    caller_id = f"client:{_email_to_browser_identity(transferred_by)}"
             else:
                 target_e164 = self.twilio._format_phone_number(target)
                 target_identity = target_e164
