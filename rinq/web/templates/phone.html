@@ -2453,6 +2453,7 @@ async function initPhone() {
 
             currentCall = call;
             const from = call.parameters.From || 'Unknown';
+            const callSid = call.parameters.CallSid;
 
             // Check for internal call custom parameters first (extension-to-extension)
             const callerName = call.customParameters ? call.customParameters.get('callerName') : null;
@@ -2460,7 +2461,7 @@ async function initPhone() {
 
             // Resolve display name: custom param > internal identity > phone lookup
             const internalName = callerName || resolveInternalCaller(callerIdentity || from);
-            const displayFrom = internalName || from;
+            let displayFrom = internalName || from;
             incomingNumber.textContent = displayFrom;
             incomingCall.classList.add('active');
             playRingtone();
@@ -2478,6 +2479,29 @@ async function initPhone() {
                     window.focus();
                     callNotification.close();
                 };
+            }
+
+            // Check if this is a transfer from a colleague (async update)
+            if (callSid) {
+                fetch(`/api/voice/transfer/context?call_sid=${callSid}`, {credentials: 'same-origin'})
+                    .then(r => r.json())
+                    .then(data => {
+                        if (data.is_transfer && currentCall === call) {
+                            displayFrom = `Transfer: ${data.transferred_by}`;
+                            incomingNumber.textContent = displayFrom;
+                            if (callNotification) {
+                                callNotification.close();
+                                callNotification = new Notification('Incoming Transfer', {
+                                    body: displayFrom,
+                                    icon: '/static/phone-icon-192.png',
+                                    tag: 'incoming-call',
+                                    requireInteraction: true
+                                });
+                                callNotification.onclick = () => { window.focus(); callNotification.close(); };
+                            }
+                        }
+                    })
+                    .catch(() => {});
             }
 
             // Fetch customer context for incoming call (skip for internal calls)

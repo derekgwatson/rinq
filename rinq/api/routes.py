@@ -6472,6 +6472,35 @@ def transfer_target_join():
     return Response(twiml, mimetype='application/xml')
 
 
+@api_bp.route('/voice/transfer/context', methods=['GET'])
+@api_or_session_auth
+def transfer_context():
+    """Check if an incoming call is a transfer and return context.
+
+    Query params:
+        call_sid: The incoming call SID to check
+
+    Returns:
+        {"is_transfer": true, "transferred_by": "Derek", ...} or {"is_transfer": false}
+    """
+    call_sid = request.args.get('call_sid')
+    if not call_sid:
+        return jsonify({"is_transfer": False})
+
+    db = get_db()
+    transfer = db.get_transfer_by_consult_sid(call_sid)
+    if transfer:
+        transferred_by = transfer['transferred_by'] or ''
+        friendly_name = transferred_by.split('@')[0].replace('.', ' ').replace('_', ' ').title()
+        return jsonify({
+            "is_transfer": True,
+            "transferred_by": friendly_name,
+            "transfer_type": transfer.get('transfer_type', 'warm'),
+        })
+
+    return jsonify({"is_transfer": False})
+
+
 @api_bp.route('/voice/transfer/consult-status', methods=['POST'])
 def transfer_consult_status():
     """Status callback for consultation call during warm transfer.

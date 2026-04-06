@@ -3222,6 +3222,16 @@ class Database:
                 return dict(row)
             return None
 
+    def get_transfer_by_consult_sid(self, consult_call_sid: str) -> dict | None:
+        """Look up a transfer by the consultation call SID (the target agent's call)."""
+        with self._get_conn() as conn:
+            row = conn.execute("""
+                SELECT transferred_by, transfer_target_name, transfer_type
+                FROM call_log WHERE transfer_consult_call_sid = ?
+                AND transfer_status IN ('pending', 'consulting')
+            """, (consult_call_sid,)).fetchone()
+            return dict(row) if row else None
+
     # =========================================================================
     # Bot Settings (general configuration)
     # =========================================================================
