@@ -195,7 +195,8 @@
                     <div style="margin-bottom: 15px; padding: 15px; background: #eef7ee; border: 1px solid #c3e6cb; border-radius: 8px;">
                         <h4 style="margin: 0 0 10px 0; font-size: 1em; color: #155724;">📞 When No Answer (open hours)</h4>
                         <p style="margin: 0 0 10px 0; font-size: 0.85em; color: #6c757d;">What happens if staff don't pick up during business hours.</p>
-                        <select name="open_no_answer_action" style="width: 100%; max-width: 300px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
+                        <select name="open_no_answer_action" id="edit_no_answer_action_{{ flow.id }}" onchange="updateVoicemailVisibility({{ flow.id }})"
+                                style="width: 100%; max-width: 300px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
                             <option value="ai_receptionist" {% if flow.open_no_answer_action == 'ai_receptionist' %}selected{% endif %}>🤖 AI Receptionist (Stuart)</option>
                             <option value="voicemail" {% if flow.open_no_answer_action == 'voicemail' %}selected{% endif %}>📧 Voicemail</option>
                         </select>
@@ -290,23 +291,24 @@
                         </div>
                     </div>
 
-                    <!-- Voicemail destination -->
-                    <div id="edit_voicemail_{{ flow.id }}" {% if flow.closed_action != 'voicemail' %}style="display: none;"{% endif %}>
-                        <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em;">📧 Send voicemail to</label>
-                        <select name="voicemail_destination_id" style="width: 100%; max-width: 400px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
-                            <option value="">-- Select destination --</option>
-                            {% for dest in voicemail_destinations %}
-                            <option value="{{ dest.id }}" {% if flow.voicemail_destination_id == dest.id %}selected{% endif %}>{{ dest.name }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
-
                     <!-- Forward number -->
                     <div id="edit_forward_{{ flow.id }}" {% if flow.closed_action != 'forward' %}style="display: none;"{% endif %}>
                         <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em;">📲 Forward to number</label>
                         <input type="tel" name="closed_forward_number" value="{{ flow.closed_forward_number or '' }}" placeholder="+61400000000"
                                style="width: 100%; max-width: 300px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
                     </div>
+                </div>
+
+                <!-- Voicemail destination (shared between open no-answer and closed) -->
+                <div id="edit_voicemail_{{ flow.id }}" style="margin-bottom: 15px; padding: 15px; background: #f3f0fe; border: 1px solid #d1c4e9; border-radius: 8px; {% if flow.open_no_answer_action != 'voicemail' and flow.closed_action != 'voicemail' %}display: none;{% endif %}">
+                    <h4 style="margin: 0 0 10px 0; font-size: 1em; color: #4a148c;">📧 Voicemail Destination</h4>
+                    <p style="margin: 0 0 10px 0; font-size: 0.85em; color: #6c757d;">Where voicemails are sent for both open and closed hours.</p>
+                    <select name="voicemail_destination_id" style="width: 100%; max-width: 400px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
+                        <option value="">-- Select destination --</option>
+                        {% for dest in voicemail_destinations %}
+                        <option value="{{ dest.id }}" {% if flow.voicemail_destination_id == dest.id %}selected{% endif %}>{{ dest.name }}</option>
+                        {% endfor %}
+                    </select>
                 </div>
 
                 <div style="display: flex; gap: 10px;">
@@ -758,15 +760,21 @@ function toggleRoutingFields(mode, destId) {
     }
 }
 
+function updateVoicemailVisibility(flowId) {
+    const closedAction = document.getElementById('edit_closed_action_' + flowId);
+    const noAnswerAction = document.getElementById('edit_no_answer_action_' + flowId);
+    const voicemailDiv = document.getElementById('edit_voicemail_' + flowId);
+    const needsVoicemail = (closedAction && closedAction.value === 'voicemail')
+                        || (noAnswerAction && noAnswerAction.value === 'voicemail');
+    voicemailDiv.style.display = needsVoicemail ? 'block' : 'none';
+}
+
 function updateEditClosedFields(flowId) {
     const action = document.getElementById('edit_closed_action_' + flowId).value;
     const audioDiv = document.getElementById('edit_closed_audio_' + flowId);
-    const voicemailDiv = document.getElementById('edit_voicemail_' + flowId);
     const forwardDiv = document.getElementById('edit_forward_' + flowId);
     const partsDiv = document.getElementById('edit_message_parts_' + flowId);
 
-    // Hide all optional fields (including audio for ai_receptionist)
-    voicemailDiv.style.display = 'none';
     forwardDiv.style.display = 'none';
 
     // Show/hide fields based on action
@@ -781,10 +789,8 @@ function updateEditClosedFields(flowId) {
         audioDiv.style.display = 'block';
         if (partsDiv) partsDiv.style.display = 'block';
         filterAudioOptions('edit_audio_select_' + flowId, action);
-        if (action === 'voicemail') {
-            voicemailDiv.style.display = 'block';
-        }
     }
+    updateVoicemailVisibility(flowId);
 }
 
 function updateCreateOpenFields() {
