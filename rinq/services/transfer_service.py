@@ -109,18 +109,17 @@ class TransferService:
 </Response>'''
 
     def get_transfer_targets(self) -> list[dict]:
-        """Get list of available transfer targets (all active staff).
+        """Get list of available transfer targets (all staff with extensions).
 
-        Pulls from Peter for the full staff list, falls back to queue members.
+        Uses local staff extensions as the primary source, supplemented by
+        queue members who may not have extensions yet.
         """
         targets = []
         seen_emails = set()
 
-        # Use local staff extensions as the primary source
+        # All staff with extensions are valid transfer targets
         extensions = self.db.get_all_staff_extensions()
         for ext in extensions:
-            if not ext.get('is_active'):
-                continue
             email = ext.get('email', '').lower().strip()
             if email and email not in seen_emails:
                 seen_emails.add(email)
@@ -135,10 +134,7 @@ class TransferService:
                     'extension': ext.get('extension'),
                 })
 
-        if targets:
-            return sorted(targets, key=lambda x: x['name'].lower())
-
-        # Fallback: queue members only
+        # Also include queue members who don't have extensions yet
         members = self.db.get_all_queue_members()
         for member in members:
             email = member.get('user_email')
