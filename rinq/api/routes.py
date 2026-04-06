@@ -5936,6 +5936,34 @@ def _get_call_state_inner(agent_call_sid, caller_email=None):
             except Exception:
                 continue
 
+    # Fallback: check if the agent's own call SID has a conference stored in
+    # call_log (e.g. after a blind transfer where the target agent's call was
+    # placed directly into a conference)
+    if not result['conference']:
+        conf_name = db.get_call_conference(agent_call_sid)
+        if conf_name:
+            try:
+                confs = twilio_list(twilio_service.client.conferences,
+                    friendly_name=conf_name, status='in-progress', limit=1
+                )
+                if confs:
+                    participants = twilio_list(twilio_service.client.conferences(confs[0].sid).participants)
+                    agent_in_conf = any(p.call_sid == agent_call_sid for p in participants)
+                    if agent_in_conf:
+                        result['conference'] = conf_name
+                        # Find the customer call SID (child_sid points to customer)
+                        child_sid = db.get_call_child_sid(agent_call_sid)
+                        if child_sid:
+                            result['customer_call_sid'] = child_sid
+                        result['participants'] = []
+                        for p in participants:
+                            info = resolve_participant(p.call_sid)
+                            info['hold'] = p.hold
+                            info['muted'] = p.muted
+                            result['participants'].append(info)
+            except Exception:
+                pass
+
     return jsonify(result)
 
 

@@ -328,13 +328,18 @@ class TransferService:
             else:
                 target_to = target_e164
 
-            # Use the customer's number as caller ID so the receiving agent
-            # sees who the customer is
-            customer_number = None
-            call_log = self.db.get_call_log_field(call_sid, 'from_number')
-            if call_log and call_log.startswith('+'):
-                customer_number = call_log
-            transfer_from = customer_number or caller_id or get_twilio_config('twilio_default_caller_id')
+            # For internal transfers, show the transferring agent's identity
+            # so the receiving agent knows it's a colleague, not a customer.
+            # For external transfers, use the customer's number as caller ID.
+            if is_ext and transferred_by:
+                from rinq.api.routes import _email_to_browser_identity
+                transfer_from = f"client:{_email_to_browser_identity(transferred_by)}"
+            else:
+                customer_number = None
+                call_log = self.db.get_call_log_field(call_sid, 'from_number')
+                if call_log and call_log.startswith('+'):
+                    customer_number = call_log
+                transfer_from = customer_number or caller_id or get_twilio_config('twilio_default_caller_id')
 
             # Call the target into the new conference
             try:
