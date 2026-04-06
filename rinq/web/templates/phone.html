@@ -4923,6 +4923,12 @@ async function pollCallState() {
             consultCallSid = null;
             startCallStatePolling();  // Revert to normal 3s interval
         }
+
+        // Last one in conference — everyone else left, auto-hangup
+        if (state.conference && state.participants && state.participants.length <= 1) {
+            console.log('Last participant in conference — hanging up');
+            hangupCall();
+        }
     } catch (e) {
         console.warn('Call state poll error:', e);
     }
