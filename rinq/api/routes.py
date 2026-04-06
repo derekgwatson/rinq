@@ -6753,8 +6753,10 @@ def transfer_consult_status():
 
                     # Call agent 1 back
                     if transferred_by:
+                        # Strip session: prefix from get_api_caller()
+                        agent_email = transferred_by.replace('session:', '').replace('api:', '')
                         from rinq.api.routes import _email_to_browser_identity
-                        agent_identity = f"client:{_email_to_browser_identity(transferred_by)}"
+                        agent_identity = f"client:{_email_to_browser_identity(agent_email)}"
                         rejoin_url = f"{config.webhook_base_url}/api/voice/conference/join?room={xfer_conf}&role=agent"
                         caller_id = get_twilio_config('twilio_default_caller_id')
                         callback_status_url = (
