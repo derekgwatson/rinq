@@ -5634,11 +5634,11 @@ def get_contacts():
     search = request.args.get('q', '').strip().lower()
     db = get_db()
 
-    # Fetch staff from directory
+    # Fetch staff from external directory (Peter) if available
     staff_dir = get_staff_directory()
     peter_staff = staff_dir.get_active_staff() if staff_dir else []
 
-    # Get Tina's extensions and ring settings
+    # Get local extensions and ring settings
     extensions = {ext['email']: ext for ext in db.get_all_staff_extensions()}
     assignments = {}
     for assignment in db.get_assignments():
@@ -5651,41 +5651,77 @@ def get_contacts():
 
     # Build contacts list
     contacts = []
-    for staff in peter_staff:
-        name = staff.get('name', '')
-        # Peter uses google_primary_email as the main identifier, fall back to work_email
-        email = (staff.get('google_primary_email') or staff.get('work_email') or '').lower()
 
-        if not email:
-            continue
+    if peter_staff:
+        # External staff directory available — merge with local data
+        for staff in peter_staff:
+            name = staff.get('name', '')
+            # Peter uses google_primary_email as the main identifier, fall back to work_email
+            email = (staff.get('google_primary_email') or staff.get('work_email') or '').lower()
 
-        # Apply search filter
-        if search:
-            searchable = f"{name} {email} {staff.get('section', '')} {staff.get('position', '')}".lower()
-            if search not in searchable:
+            if not email:
                 continue
 
-        ext = extensions.get(email, {})
-        ring_settings = db.get_user_ring_settings(email) if ext else {}
+            # Apply search filter
+            if search:
+                searchable = f"{name} {email} {staff.get('section', '')} {staff.get('position', '')}".lower()
+                if search not in searchable:
+                    continue
 
-        # Phone: Tina assignment > mobile > fixed line > extension
-        phone = (assignments.get(email, '')
-                 or staff.get('phone_mobile', '')
-                 or staff.get('phone_fixed', '')
-                 or ext.get('extension', ''))
+            ext = extensions.get(email, {})
+            ring_settings = db.get_user_ring_settings(email) if ext else {}
 
-        contacts.append({
-            'name': name,
-            'email': email,
-            'position': staff.get('position', ''),
-            'section': staff.get('section', ''),
-            'extension': ext.get('extension', ''),
-            'phone': phone,
-            'has_browser': ring_settings.get('ring_browser', False),
-            'has_sip': ring_settings.get('ring_sip', False),
-            'is_active_in_tina': ext.get('is_active', False),
-            'dnd': bool(ext.get('dnd_enabled')),
-        })
+            # Phone: assignment > mobile > fixed line > extension
+            phone = (assignments.get(email, '')
+                     or staff.get('phone_mobile', '')
+                     or staff.get('phone_fixed', '')
+                     or ext.get('extension', ''))
+
+            contacts.append({
+                'name': name,
+                'email': email,
+                'position': staff.get('position', ''),
+                'section': staff.get('section', ''),
+                'extension': ext.get('extension', ''),
+                'phone': phone,
+                'has_browser': ring_settings.get('ring_browser', False),
+                'has_sip': ring_settings.get('ring_sip', False),
+                'is_active_in_tina': ext.get('is_active', False),
+                'dnd': bool(ext.get('dnd_enabled')),
+            })
+    else:
+        # No external directory — build contacts from local staff extensions + users
+        users_by_email = {}
+        for user in db.get_users():
+            email = (user.get('staff_email') or '').lower()
+            if email:
+                users_by_email[email] = user
+
+        for email, ext in extensions.items():
+            user = users_by_email.get(email, {})
+            name = user.get('friendly_name') or email.split('@')[0].replace('.', ' ').title()
+
+            # Apply search filter
+            if search:
+                searchable = f"{name} {email} {ext.get('extension', '')}".lower()
+                if search not in searchable:
+                    continue
+
+            ring_settings = db.get_user_ring_settings(email)
+            phone = assignments.get(email, '') or ext.get('forward_to', '') or ext.get('extension', '')
+
+            contacts.append({
+                'name': name,
+                'email': email,
+                'position': '',
+                'section': '',
+                'extension': ext.get('extension', ''),
+                'phone': phone,
+                'has_browser': ring_settings.get('ring_browser', False),
+                'has_sip': ring_settings.get('ring_sip', False),
+                'is_active_in_tina': ext.get('is_active', False),
+                'dnd': bool(ext.get('dnd_enabled')),
+            })
 
     contacts.sort(key=lambda c: c['name'].lower())
 
