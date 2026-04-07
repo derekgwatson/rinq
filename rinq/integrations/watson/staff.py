@@ -60,14 +60,7 @@ class WatsonStaffDirectory(StaffDirectory):
         return []
 
     def get_reportees(self, manager_email: str, recursive: bool = True) -> list[dict]:
-        try:
-            params = {'email': manager_email}
-            if recursive:
-                params['recursive'] = 'true'
-            response = self.client.get('/api/staff/reportees', params=params)
-            if response.status_code == 200:
-                return response.json().get('staff', [])
-            logger.warning(f"Peter reportees lookup failed: {response.status_code}")
-        except Exception as e:
-            logger.warning(f"Could not fetch reportees from Peter: {e}")
-        return []
+        # Use local staff_extensions (reports_to) — the hierarchy lives in Rinq,
+        # not in Peter (whose manager_id field is unpopulated).
+        from rinq.integrations.local.staff import LocalStaffDirectory
+        return LocalStaffDirectory().get_reportees(manager_email, recursive=recursive)
