@@ -378,22 +378,39 @@ def get_call_state(agent_call_sid: str, caller_email: str = None) -> dict:
 
 
 def _deduplicate_participants(participants: list[dict]) -> list[dict]:
-    """Remove duplicate customer entries from participant list.
+    """Remove duplicate participants from the list.
 
-    After transfers, the same customer can appear twice with different
-    call SIDs (original leg + redirected leg). If there are multiple
-    customers, keep the one with a real name over a phone number.
+    After transfers or extension calls, the same person can appear
+    multiple times with different call SIDs (e.g., browser + SIP legs,
+    or original + redirected call leg). Deduplicate by name, preferring
+    a real name over a phone number.
     """
-    agents = [p for p in participants if p.get('role') != 'customer']
-    customers = [p for p in participants if p.get('role') == 'customer']
+    seen = {}  # lowercase name -> index in result
+    result = []
 
-    if len(customers) <= 1:
-        return participants
+    for p in participants:
+        name = (p.get('name') or 'Unknown').lower()
 
-    # Multiple customers — keep the one with a name (not a phone number)
-    named = [c for c in customers if not c.get('name', '').startswith('+')]
-    best = named[0] if named else customers[0]
-    return agents + [best]
+        if name in seen:
+            # Duplicate — keep the one that's not on hold if possible
+            prev = result[seen[name]]
+            if prev.get('hold') and not p.get('hold'):
+                result[seen[name]] = p
+            continue
+
+        # For phone numbers, check if we already have a named version of this customer
+        if name.startswith('+') and p.get('role') == 'customer':
+            has_named = any(
+                r.get('role') == 'customer' and not r.get('name', '').startswith('+')
+                for r in result
+            )
+            if has_named:
+                continue
+
+        seen[name] = len(result)
+        result.append(p)
+
+    return result
 
 
 def _find_agent_in_conference(conf_name, agent_call_sid, twilio_service) -> list[dict] | None:
