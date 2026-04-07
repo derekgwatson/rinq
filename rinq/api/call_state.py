@@ -369,7 +369,31 @@ def get_call_state(agent_call_sid: str, caller_email: str = None) -> dict:
             except Exception as e:
                 logger.warning(f"Failed to fetch conference state for {conf_name}: {e}")
 
+    # Deduplicate participants — after transfers, the customer can appear
+    # twice (original leg + redirected leg) with different call SIDs
+    if result.get('participants'):
+        result['participants'] = _deduplicate_participants(result['participants'])
+
     return result
+
+
+def _deduplicate_participants(participants: list[dict]) -> list[dict]:
+    """Remove duplicate customer entries from participant list.
+
+    After transfers, the same customer can appear twice with different
+    call SIDs (original leg + redirected leg). If there are multiple
+    customers, keep the one with a real name over a phone number.
+    """
+    agents = [p for p in participants if p.get('role') != 'customer']
+    customers = [p for p in participants if p.get('role') == 'customer']
+
+    if len(customers) <= 1:
+        return participants
+
+    # Multiple customers — keep the one with a name (not a phone number)
+    named = [c for c in customers if not c.get('name', '').startswith('+')]
+    best = named[0] if named else customers[0]
+    return agents + [best]
 
 
 def _find_agent_in_conference(conf_name, agent_call_sid, twilio_service) -> list[dict] | None:
