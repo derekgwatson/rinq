@@ -577,6 +577,10 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
     """
     import threading
 
+    # Capture SIP domain while we still have Flask request context —
+    # the background thread won't have access to flask.g
+    sip_domain = _get_sip_domain()
+
     def ring_agents():
         try:
             db = get_db()
@@ -589,9 +593,6 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
             if not active_members:
                 logger.warning(f"No active members in queue {queue_name} to ring")
                 return
-
-            # Get SIP domain for SIP devices
-            sip_domain = _get_sip_domain()
 
             # URL that agent calls will hit when answered
             answer_url = f"{base_url}/api/voice/queue/{queue_id}/agent-answer?customer_call_sid={customer_call_sid}"
