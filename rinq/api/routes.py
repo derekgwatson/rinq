@@ -13,6 +13,7 @@ Provides endpoints for:
 
 import json
 import logging
+import threading
 import time
 from datetime import datetime, timedelta
 from urllib.parse import urlencode, quote
@@ -263,6 +264,9 @@ def update_forwarding(sid):
 
 
 
+# Lock for all in-memory call tracking dicts (webhook threads are concurrent)
+_call_tracking_lock = threading.Lock()
+
 # Cache for SIP domain to avoid repeated API calls (per-tenant)
 _sip_domain_cache = {}  # {tenant_id: {'domain': str, 'fetched_at': datetime}}
 
@@ -282,8 +286,9 @@ def _cancel_agent_calls(customer_call_sid: str, except_call_sid: str = None):
         customer_call_sid: The customer's call SID
         except_call_sid: Optional agent call SID to NOT cancel (the one that answered)
     """
-    logger.info(f"_cancel_agent_calls called for {customer_call_sid}, tracking has {len(_agent_calls_by_customer)} entries")
-    agent_sids = _agent_calls_by_customer.pop(customer_call_sid, [])
+    with _call_tracking_lock:
+        logger.info(f"_cancel_agent_calls called for {customer_call_sid}, tracking has {len(_agent_calls_by_customer)} entries")
+        agent_sids = _agent_calls_by_customer.pop(customer_call_sid, [])
     if not agent_sids:
         logger.info(f"No agent calls found to cancel for {customer_call_sid}")
         return
@@ -430,19 +435,21 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
                             logger.info(f"Initiated SIP call to {sip_uri} for queue {queue_name}: {call.sid}")
                             agent_call_sids.append(call.sid)
                             # Store reverse mapping for status callback lookup
-                            _customer_by_agent_call[call.sid] = {
-                                'customer_call_sid': customer_call_sid,
-                                'queue_id': queue_id,
-                                'user_email': user_email,
-                                'device_type': 'sip'
-                            }
+                            with _call_tracking_lock:
+                                _customer_by_agent_call[call.sid] = {
+                                    'customer_call_sid': customer_call_sid,
+                                    'queue_id': queue_id,
+                                    'user_email': user_email,
+                                    'device_type': 'sip'
+                                }
                             calls_initiated += 1
                         except Exception as e:
                             logger.error(f"Failed to call SIP device for {user_email}: {e}")
 
             # Store agent call SIDs for later cancellation
             if agent_call_sids:
-                _agent_calls_by_customer[customer_call_sid] = agent_call_sids
+                with _call_tracking_lock:
+                    _agent_calls_by_customer[customer_call_sid] = agent_call_sids
                 logger.info(f"Stored {len(agent_call_sids)} agent calls for customer {customer_call_sid}")
 
             db.log_activity(
@@ -544,7 +551,8 @@ def _ring_targets_into_conference(dial_targets: list, conference_name: str,
                     logger.error(f"Failed to ring {to_addr}: {e}")
 
             if call_sids:
-                _conference_ring_calls[conference_name] = call_sids
+                with _call_tracking_lock:
+                    _conference_ring_calls[conference_name] = call_sids
                 logger.info(f"Stored {len(call_sids)} ring calls for conference {conference_name}")
             else:
                 # No targets could be rung — end the conference so caller falls through
@@ -1927,7 +1935,8 @@ def call_status_callback():
         # ring calls (SIP/browser) keep ringing because they're separate
         # calls not yet joined to the conference.
         conference_name = f"call_{call_sid}"
-        ring_sids = _conference_ring_calls.pop(conference_name, [])
+        with _call_tracking_lock:
+            ring_sids = _conference_ring_calls.pop(conference_name, [])
         if ring_sids:
             service = get_twilio_service()
             for sid in ring_sids:
@@ -2147,7 +2156,8 @@ def queue_agent_ring_status(queue_id):
     logger.info(f"Agent ring status: {agent_call_sid} -> {call_status} (customer: {customer_call_sid})")
 
     # Clean up the reverse mapping
-    call_info = _customer_by_agent_call.pop(agent_call_sid, None)
+    with _call_tracking_lock:
+        call_info = _customer_by_agent_call.pop(agent_call_sid, None)
     if not call_info:
         logger.debug(f"No tracking info for agent call {agent_call_sid}")
         return Response('OK', status=200)
@@ -2387,7 +2397,8 @@ def inbound_ring_status():
 
     logger.info(f"Inbound ring status: {agent_call_sid} -> {call_status}, conference={conference_name}")
 
-    ring_sids = _conference_ring_calls.get(conference_name, [])
+    with _call_tracking_lock:
+        ring_sids = list(_conference_ring_calls.get(conference_name, []))
 
     if call_status == 'in-progress':
         # Agent answered — cancel all other ringing legs
@@ -2413,17 +2424,21 @@ def inbound_ring_status():
                 except Exception as e:
                     logger.debug(f"Could not cancel ring leg {sid}: {e}")
 
-        _conference_ring_calls.pop(conference_name, None)
+        with _call_tracking_lock:
+            _conference_ring_calls.pop(conference_name, None)
         logger.info(f"Agent {agent_call_sid} answered, cancelled {len(ring_sids) - 1} other legs")
 
     elif call_status in ('completed', 'busy', 'no-answer', 'failed', 'canceled'):
         # This leg failed — check if all legs have failed
-        if agent_call_sid in ring_sids:
-            ring_sids.remove(agent_call_sid)
+        with _call_tracking_lock:
+            live_sids = _conference_ring_calls.get(conference_name, [])
+            if agent_call_sid in live_sids:
+                live_sids.remove(agent_call_sid)
+            all_failed = not live_sids
+            if all_failed:
+                _conference_ring_calls.pop(conference_name, None)
 
-        if not ring_sids:
-            # All agents failed — end the conference so caller falls through
-            _conference_ring_calls.pop(conference_name, None)
+        if all_failed:
             service = get_twilio_service()
             try:
                 confs = twilio_list(service.client.conferences,
@@ -5429,7 +5444,8 @@ def _get_active_calls_from_twilio() -> list[dict]:
     now = time.time()
 
     # Return cached result if fresh (per-tenant)
-    tenant_cache = _active_calls_cache.get(tenant_id, {'calls': [], 'fetched_at': 0})
+    with _call_tracking_lock:
+        tenant_cache = _active_calls_cache.get(tenant_id, {'calls': [], 'fetched_at': 0})
     if now - tenant_cache['fetched_at'] < _ACTIVE_CALLS_TTL:
         return tenant_cache['calls']
 
@@ -5471,7 +5487,8 @@ def _get_active_calls_from_twilio() -> list[dict]:
                 'queue_name': log.get('queue_name'),
             })
 
-    _active_calls_cache[tenant_id] = {'calls': result, 'fetched_at': now}
+    with _call_tracking_lock:
+        _active_calls_cache[tenant_id] = {'calls': result, 'fetched_at': now}
     return result
 
 

@@ -7,10 +7,28 @@ helpers testable and reusable.
 import logging
 from xml.sax.saxutils import escape as xml_escape
 
+from flask import Response
+
 from rinq.config import config
 from rinq.database.db import get_db
 
 logger = logging.getLogger(__name__)
+
+
+def twiml_response(*parts) -> Response:
+    """Build a TwiML Response from XML parts.
+
+    Usage:
+        return twiml_response('<Say>Hello</Say>')
+        return twiml_response(say_or_play('greeting', 'Hello'), '<Hangup/>')
+    """
+    body = '\n'.join([
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<Response>',
+        *parts,
+        '</Response>',
+    ])
+    return Response(body, mimetype='application/xml')
 
 
 def get_full_audio_url(file_url: str) -> str:

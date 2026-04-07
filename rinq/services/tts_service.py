@@ -363,7 +363,7 @@ def get_tts_service() -> TTSService:
     """Get TTS service singleton."""
     global _tts_service
     if _tts_service is None:
-        from config import config
+        from rinq.config import config
         _tts_service = TTSService(config)
     return _tts_service
 

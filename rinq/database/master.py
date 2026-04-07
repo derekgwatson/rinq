@@ -120,12 +120,25 @@ class MasterDatabase:
         finally:
             conn.close()
 
+    _TENANT_COLUMNS = {
+        'name', 'domain', 'twilio_account_sid', 'twilio_auth_token',
+        'twilio_api_key', 'twilio_api_secret', 'twilio_twiml_app_sid',
+        'twilio_sip_credential_list_sid', 'twilio_sip_domain',
+        'webhook_base_url', 'integration_provider',
+        'logo_url', 'primary_color', 'product_name',
+        'email_from_name', 'email_from_address', 'email_reply_to',
+        'street', 'locality', 'region', 'postal_code', 'iso_country',
+        'twilio_address_sid',
+    }
+
     def update_tenant(self, tenant_id: str, **kwargs):
         conn = self._get_conn()
         try:
             sets = []
             vals = []
             for key, val in kwargs.items():
+                if key not in self._TENANT_COLUMNS:
+                    raise ValueError(f"Invalid tenant column: {key}")
                 sets.append(f"{key} = ?")
                 vals.append(val)
             vals.append(tenant_id)

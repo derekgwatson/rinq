@@ -29,12 +29,11 @@ class RecordingService:
 
     def __init__(self):
         self._drive_service = None
+        os.makedirs(self.RECORDINGS_DIR, exist_ok=True)
 
     @property
     def db(self):
         return get_db()
-        # Ensure recordings directory exists
-        os.makedirs(self.RECORDINGS_DIR, exist_ok=True)
 
     @property
     def drive_service(self):
