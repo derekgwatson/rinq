@@ -308,61 +308,84 @@ def get_call_state(agent_call_sid: str, caller_email: str = None) -> dict:
         conf_name = db.get_call_conference(agent_call_sid)
         if conf_name:
             try:
-                confs = twilio_list(twilio_service.client.conferences,
-                    friendly_name=conf_name, status='in-progress', limit=1
+                child_sid = db.get_call_child_sid(agent_call_sid)
+                transfer_key = child_sid or agent_call_sid
+                transfer_state = db.get_transfer_state_log(transfer_key)
+
+                # For blind transfers: conference is "call_{original_sid}_xfer"
+                original_call_sid = None
+                if conf_name.startswith('call_') and conf_name.endswith('_xfer'):
+                    original_call_sid = conf_name[5:-5]
+                    if not transfer_state:
+                        transfer_state = db.get_transfer_state_log(original_call_sid)
+
+                # Check if agent is in the stored conference
+                agent_conf = _find_agent_in_conference(
+                    conf_name, agent_call_sid, twilio_service
                 )
-                if confs:
-                    participants = twilio_list(twilio_service.client.conferences(confs[0].sid).participants)
-                    if any(p.call_sid == agent_call_sid for p in participants):
-                        result['conference'] = conf_name
-                        child_sid = db.get_call_child_sid(agent_call_sid)
-                        if child_sid:
-                            result['customer_call_sid'] = child_sid
 
-                        # Check transfer state — try child_sid, agent_call_sid,
-                        # and original call SID extracted from conference name
-                        transfer_key = child_sid or agent_call_sid
-                        transfer_state = db.get_transfer_state_log(transfer_key)
+                # If not found, agent may have been redirected to the
+                # consultation conference during a warm transfer
+                if not agent_conf and transfer_state:
+                    consult_conf = transfer_state.get('transfer_consult_conference')
+                    if consult_conf:
+                        agent_conf = _find_agent_in_conference(
+                            consult_conf, agent_call_sid, twilio_service
+                        )
 
-                        # For blind transfers: conference is "call_{original_sid}_xfer"
-                        # Extract original SID and look up customer info
-                        original_call_sid = None
-                        if conf_name.startswith('call_') and conf_name.endswith('_xfer'):
-                            original_call_sid = conf_name[5:-5]  # strip "call_" and "_xfer"
-                            if not transfer_state:
-                                transfer_state = db.get_transfer_state_log(original_call_sid)
+                if agent_conf:
+                    result['conference'] = conf_name  # report the main conference
+                    if child_sid:
+                        result['customer_call_sid'] = child_sid
 
-                        if transfer_state and transfer_state.get('transfer_status') in ('pending', 'consulting'):
-                            consult_sid = transfer_state.get('transfer_consult_call_sid')
-                            t_name = transfer_state.get('transfer_target_name')
-                            if consult_sid and t_name:
-                                transfer_names[consult_sid] = t_name
+                    # Build transfer info if transfer is active
+                    if transfer_state and transfer_state.get('transfer_status') in ('pending', 'consulting'):
+                        consult_sid = transfer_state.get('transfer_consult_call_sid')
+                        t_name = transfer_state.get('transfer_target_name')
+                        if consult_sid and t_name:
+                            transfer_names[consult_sid] = t_name
+                        result['transfer'] = _build_transfer_info(
+                            transfer_state, transfer_names, resolve_kwargs
+                        )
 
-                            result['transfer'] = _build_transfer_info(
-                                transfer_state, transfer_names, resolve_kwargs
-                            )
+                    # For completed blind transfers, look up customer from
+                    # the original call so we don't show the wrong name
+                    customer_info = None
+                    if original_call_sid:
+                        customer_info = _get_customer_from_call_log(original_call_sid, db)
 
-                        # For completed blind transfers, look up customer from
-                        # the original call so we don't show the wrong name
-                        customer_info = None
-                        if original_call_sid:
-                            customer_info = _get_customer_from_call_log(original_call_sid, db)
-
-                        result['participants'] = []
-                        for p in participants:
-                            if p.call_sid == agent_call_sid:
-                                info = resolve_participant(p.call_sid, **resolve_kwargs)
-                            elif customer_info:
-                                info = {'call_sid': p.call_sid, **customer_info}
-                            else:
-                                info = resolve_participant(p.call_sid, **resolve_kwargs)
-                            info['hold'] = p.hold
-                            info['muted'] = p.muted
-                            result['participants'].append(info)
+                    # Resolve participants from the conference the agent is in
+                    result['participants'] = []
+                    for p in agent_conf:
+                        if p['call_sid'] == agent_call_sid:
+                            info = resolve_participant(p['call_sid'], **resolve_kwargs)
+                        elif customer_info:
+                            info = {'call_sid': p['call_sid'], **customer_info}
+                        else:
+                            info = resolve_participant(p['call_sid'], **resolve_kwargs)
+                        info['hold'] = p['hold']
+                        info['muted'] = p['muted']
+                        result['participants'].append(info)
             except Exception as e:
                 logger.warning(f"Failed to fetch conference state for {conf_name}: {e}")
 
     return result
+
+
+def _find_agent_in_conference(conf_name, agent_call_sid, twilio_service) -> list[dict] | None:
+    """Check if an agent is in a conference. Returns participant list or None."""
+    try:
+        confs = twilio_list(twilio_service.client.conferences,
+            friendly_name=conf_name, status='in-progress', limit=1
+        )
+        if not confs:
+            return None
+        participants = twilio_list(twilio_service.client.conferences(confs[0].sid).participants)
+        if any(p.call_sid == agent_call_sid for p in participants):
+            return [{'call_sid': p.call_sid, 'hold': p.hold, 'muted': p.muted} for p in participants]
+    except Exception as e:
+        logger.debug(f"Conference check for {conf_name} failed: {e}")
+    return None
 
 
 def _get_customer_from_call_log(call_sid, db) -> dict | None:
