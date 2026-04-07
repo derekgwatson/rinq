@@ -2368,6 +2368,18 @@ class Database:
             ))
             conn.commit()
 
+    def update_staff_reports_to(self, email: str, reports_to: str | None, updated_by: str) -> bool:
+        """Set who a staff member reports to (manager email)."""
+        now = datetime.utcnow().isoformat()
+        with self._get_conn() as conn:
+            cursor = conn.execute("""
+                UPDATE staff_extensions
+                SET reports_to = ?, updated_at = ?, updated_by = ?
+                WHERE email = ?
+            """, (reports_to.lower().strip() if reports_to else None, now, updated_by, email.lower()))
+            conn.commit()
+            return cursor.rowcount > 0
+
     def update_staff_name_audio(self, email: str, name_audio_path: str,
                                 name_audio_text: str, updated_by: str) -> None:
         """Update the name audio path and text for a staff extension."""

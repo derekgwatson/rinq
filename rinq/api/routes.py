@@ -5177,6 +5177,74 @@ def sync_staff_extensions():
     })
 
 
+@api_bp.route('/staff/import-hierarchy', methods=['POST'])
+@api_or_session_auth
+def import_staff_hierarchy():
+    """One-off import of reporting hierarchy from Peter (Watson bot-team).
+
+    POST /api/staff/import-hierarchy
+
+    Fetches each active staff member's reportees from Peter and populates
+    the reports_to field in staff_extensions. Only updates staff who don't
+    already have a reports_to set (unless ?force=true).
+
+    Returns:
+        {"updated": 5, "skipped": 3, "details": [...]}
+    """
+    from rinq.integrations.watson.staff import WatsonStaffDirectory
+
+    caller = get_api_caller()
+    db = get_db()
+    force = request.args.get('force', '').lower() == 'true'
+
+    peter = WatsonStaffDirectory()
+    peter_staff = peter.get_active_staff()
+    if not peter_staff:
+        return jsonify({'error': 'Could not fetch staff from Peter'}), 502
+
+    # Build manager→reportees mapping from Peter
+    # For each staff member, ask Peter for their direct reports
+    reports_to_map = {}  # email -> manager_email
+    for staff in peter_staff:
+        email = (staff.get('google_primary_email') or staff.get('work_email') or '').lower().strip()
+        if not email:
+            continue
+        direct_reports = peter.get_reportees(email, recursive=False)
+        for report in direct_reports:
+            report_email = (report.get('google_primary_email') or report.get('work_email') or report.get('email', '')).lower().strip()
+            if report_email:
+                reports_to_map[report_email] = email
+
+    updated = 0
+    skipped = 0
+    details = []
+
+    for email, manager_email in reports_to_map.items():
+        ext = db.get_staff_extension(email)
+        if not ext:
+            skipped += 1
+            continue
+        if ext.get('reports_to') and not force:
+            skipped += 1
+            continue
+        db.update_staff_reports_to(email, manager_email, caller or 'system:peter-import')
+        updated += 1
+        details.append({'email': email, 'reports_to': manager_email})
+
+    db.log_activity(
+        action="hierarchy_import",
+        target="staff_extensions",
+        details=f"Imported from Peter: {updated} updated, {skipped} skipped",
+        performed_by=caller or 'system:peter-import'
+    )
+
+    return jsonify({
+        'updated': updated,
+        'skipped': skipped,
+        'details': details,
+    })
+
+
 # =============================================================================
 # Staff Phones (for PAM integration)
 # =============================================================================

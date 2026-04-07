@@ -533,6 +533,23 @@ def update_staff_extension(email):
     return redirect(url_for('web.admin_staff'))
 
 
+@web_bp.route('/admin/staff/<email>/reports-to', methods=['POST'])
+@admin_required
+def update_staff_reports_to(email):
+    """Set who a staff member reports to."""
+    user = get_current_user()
+    db = get_db()
+    reports_to = request.form.get('reports_to', '').strip() or None
+    db.update_staff_reports_to(email, reports_to, f'session:{user.email}')
+    name = email.split('@')[0].replace('.', ' ').title()
+    if reports_to:
+        mgr_name = reports_to.split('@')[0].replace('.', ' ').title()
+        flash(f'{name} now reports to {mgr_name}.', 'success')
+    else:
+        flash(f'{name} reports-to cleared.', 'success')
+    return redirect(url_for('web.admin_staff'))
+
+
 @web_bp.route('/admin/address')
 @admin_required
 def setup_address():
