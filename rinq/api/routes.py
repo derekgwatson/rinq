@@ -2346,6 +2346,21 @@ def call_status_callback():
             talk_seconds=duration if call_status == 'completed' else 0,
         )
 
+        # Cancel any pending ring calls for conference-first inbound calls.
+        # When the caller hangs up before an agent answers, the outbound
+        # ring calls (SIP/browser) keep ringing because they're separate
+        # calls not yet joined to the conference.
+        conference_name = f"call_{call_sid}"
+        ring_sids = _conference_ring_calls.pop(conference_name, [])
+        if ring_sids:
+            service = get_twilio_service()
+            for sid in ring_sids:
+                try:
+                    service.client.calls(sid).update(status='completed')
+                except Exception:
+                    pass  # Already completed
+            logger.info(f"Caller {call_sid} disconnected — cancelled {len(ring_sids)} ringing agent calls")
+
         # If this was an AI receptionist call, notify Rosie so it can
         # run post-call processing (summary, Zendesk ticket, email)
         call_type = db.get_call_log_field(call_sid, 'call_type')
