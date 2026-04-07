@@ -319,18 +319,39 @@ def get_call_state(agent_call_sid: str, caller_email: str = None) -> dict:
                         if child_sid:
                             result['customer_call_sid'] = child_sid
 
-                        # Check transfer state
+                        # Check transfer state — try child_sid, agent_call_sid,
+                        # and original call SID extracted from conference name
                         transfer_key = child_sid or agent_call_sid
                         transfer_state = db.get_transfer_state_log(transfer_key)
+
+                        # For blind transfers: conference is "call_{original_sid}_xfer"
+                        # Extract original SID and look up customer info
+                        original_call_sid = None
+                        if conf_name.startswith('call_') and conf_name.endswith('_xfer'):
+                            original_call_sid = conf_name[5:-5]  # strip "call_" and "_xfer"
+                            if not transfer_state:
+                                transfer_state = db.get_transfer_state_log(original_call_sid)
+
                         if transfer_state and transfer_state.get('transfer_status') in ('pending', 'consulting'):
                             consult_sid = transfer_state.get('transfer_consult_call_sid')
                             t_name = transfer_state.get('transfer_target_name')
                             if consult_sid and t_name:
                                 transfer_names[consult_sid] = t_name
 
+                        # For completed blind transfers, look up customer from
+                        # the original call so we don't show the wrong name
+                        customer_info = None
+                        if original_call_sid:
+                            customer_info = _get_customer_from_call_log(original_call_sid, db)
+
                         result['participants'] = []
                         for p in participants:
-                            info = resolve_participant(p.call_sid, **resolve_kwargs)
+                            if p.call_sid == agent_call_sid:
+                                info = resolve_participant(p.call_sid, **resolve_kwargs)
+                            elif customer_info:
+                                info = {'call_sid': p.call_sid, **customer_info}
+                            else:
+                                info = resolve_participant(p.call_sid, **resolve_kwargs)
                             info['hold'] = p.hold
                             info['muted'] = p.muted
                             result['participants'].append(info)
@@ -338,6 +359,25 @@ def get_call_state(agent_call_sid: str, caller_email: str = None) -> dict:
                 logger.warning(f"Failed to fetch conference state for {conf_name}: {e}")
 
     return result
+
+
+def _get_customer_from_call_log(call_sid, db) -> dict | None:
+    """Look up customer name/number from a call_log entry.
+
+    Returns {'name': ..., 'role': 'customer'} or None.
+    """
+    try:
+        direction = db.get_call_log_field(call_sid, 'direction')
+        from_num = db.get_call_log_field(call_sid, 'from_number')
+        to_num = db.get_call_log_field(call_sid, 'to_number')
+        customer_name = db.get_call_log_field(call_sid, 'customer_name')
+
+        customer_number = to_num if direction == 'outbound' else from_num
+        if customer_number:
+            return {'name': customer_name or customer_number, 'role': 'customer'}
+    except Exception as e:
+        logger.debug(f"Could not get customer from call_log {call_sid}: {e}")
+    return None
 
 
 def _build_transfer_info(transfer_state, transfer_names, resolve_kwargs) -> dict:
