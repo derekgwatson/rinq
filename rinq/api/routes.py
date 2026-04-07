@@ -2703,6 +2703,8 @@ def conference_join():
     """
     room = request.args.get('room', '')
     role = request.args.get('role', 'caller')
+    call_sid = request.form.get('CallSid', '?')
+    logger.info(f"Conference join: {call_sid} -> room={room}, role={role}")
 
     if not room:
         twiml = '''<?xml version="1.0" encoding="UTF-8"?>
@@ -4642,12 +4644,14 @@ def voice_outbound():
         conference_url = f"{config.webhook_base_url}/api/voice/conference/join?room={conference_name}&role=caller"
 
         try:
+            logger.info(f"Queue answer: redirecting caller {answer_call_sid} to {conference_name}, agent={staff_email}")
             twilio_service.client.calls(answer_call_sid).update(
                 url=conference_url,
                 method='POST'
             )
+            logger.info(f"Queue answer: redirect succeeded for {answer_call_sid}")
         except Exception as e:
-            logger.error(f"Failed to redirect caller to conference: {e}")
+            logger.error(f"Queue answer: redirect FAILED for {answer_call_sid}: {e}")
             twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say>Sorry, we could not connect to the caller. They may have hung up.</Say>
