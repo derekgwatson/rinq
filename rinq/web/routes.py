@@ -1489,6 +1489,8 @@ def reports():
     team_label = None
     staff_dir = get_staff_directory()
 
+    logger.info(f"[reports] user={user.email} role={user_role} is_admin={user.is_admin} staff_dir={type(staff_dir).__name__ if staff_dir else None}")
+
     if user.is_admin:
         # Admins see all staff
         if staff_dir:
@@ -1505,8 +1507,9 @@ def reports():
         if staff_dir:
             try:
                 reportees = staff_dir.get_reportees(user.email, recursive=True)
+                logger.info(f"[reports] get_reportees({user.email}) returned {len(reportees)} results: {reportees}")
             except Exception as e:
-                logger.warning(f"Failed to get reportees: {e}")
+                logger.warning(f"Failed to get reportees: {e}", exc_info=True)
 
         if reportees:
             # User has people reporting to them — show team view
@@ -1518,6 +1521,8 @@ def reports():
             # Regular users see just their own stats
             team_emails = [user.email]
             team_label = 'My Calls'
+
+    logger.info(f"[reports] team_label={team_label} team_emails={team_emails}")
 
     service = get_reporting_service()
     report_data = service.get_report_data(period, team_emails=team_emails)
