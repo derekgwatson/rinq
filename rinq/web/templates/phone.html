@@ -2266,6 +2266,7 @@ function checkForNewQueueCallers(callers) {
 
 <script>
 let device = null;
+// --- Call state: all variables reset together via resetCallState() ---
 let currentCall = null;
 let phoneNumber = '';
 let callTimer = null;
@@ -2274,17 +2275,48 @@ let isMuted = false;
 let isOnHold = false;
 let isDndEnabled = false;
 let contactName = '';
-let currentQueueCallerSid = null;  // The original caller's call SID for queue calls
-let currentOutboundCallSid = null;  // The call SID for outbound calls
-let currentCallerId = null;  // The caller ID used for the current call
-
-// Recording state
+let currentQueueCallerSid = null;
+let currentOutboundCallSid = null;
+let currentCallerId = null;
 let isRecording = false;
-let recordingEnabled = true;  // User's default preference
+let recordingEnabled = true;  // User preference — NOT reset between calls
 let currentRecordingSid = null;
-
-// Customer context state
 let customerContext = null;
+
+/**
+ * Reset all per-call state in one shot.
+ * Every variable that should be cleared between calls lives here.
+ * If you add new per-call state, add its reset here too.
+ */
+function resetCallState() {
+    if (callTimer) { clearInterval(callTimer); callTimer = null; }
+    callSeconds = 0;
+    currentCall = null;
+    currentQueueCallerSid = null;
+    currentOutboundCallSid = null;
+    currentCallerId = null;
+    phoneNumber = '';
+    contactName = '';
+    isMuted = false;
+    isOnHold = false;
+    isRecording = false;
+    currentRecordingSid = null;
+    customerContext = null;
+    // Transfer state (declared later but reset here for completeness)
+    if (typeof currentTransferKey !== 'undefined') {
+        currentTransferKey = null;
+        currentTransferCallType = null;
+        currentTransferAgentSid = null;
+    }
+    // Conference tracking
+    window._sawMultipleParticipants = false;
+    // Call state polling
+    if (typeof callStateInterval !== 'undefined' && callStateInterval) {
+        clearInterval(callStateInterval);
+        callStateInterval = null;
+    }
+    if (typeof lastCallState !== 'undefined') lastCallState = null;
+}
 
 const phoneDisplay = document.getElementById('phoneDisplay');
 const phoneStatus = document.getElementById('phoneStatus');
@@ -2955,39 +2987,22 @@ function endCall() {
         }).catch(() => {});
     }
 
-    stopCallTimer();
+    // Reset all per-call state in one shot
+    resetCallState();
+
+    // Update UI
     setStatus('Ready', 'ready');
     btnCall.style.display = 'inline-block';
     btnHangup.style.display = 'none';
     callInfo.classList.remove('active');
     incomingCall.classList.remove('active');
     contextPane.classList.remove('has-call');
+    document.getElementById('conferencePanel').style.display = 'none';
     closeTransferModal();
-    currentCall = null;
-    currentQueueCallerSid = null;
-    currentOutboundCallSid = null;
-    currentCallerId = null;
-    stopCallStatePolling();
-    window._sawMultipleParticipants = false;
-    currentTransferKey = null;
-    currentTransferCallType = null;
-    currentTransferAgentSid = null;
-
-    // Clear the dialpad
-    phoneNumber = '';
-    contactName = '';
     updateDisplay();
-
-    // Reset mute/hold state
-    isMuted = false;
-    isOnHold = false;
     updateMuteButton();
     updateHoldButton();
-
-    // Reset recording state
-    resetRecordingState();
-
-    // Clear customer context pane
+    updateRecordButton();
     clearCustomerContext();
 
     // Show call outcome for outbound calls (busy, no answer, etc.)
