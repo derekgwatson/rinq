@@ -177,117 +177,36 @@ class RecordingService:
             # 2. Save recording locally as hot cache for instant playback
             local_file_path = self._save_recording_locally(recording_sid, audio_content)
 
-            # Format duration as M:SS for display
-            minutes = duration // 60
-            seconds = duration % 60
-            duration_str = f"{minutes}:{seconds:02d}"
             staff_display = staff_name or (staff_email.split('@')[0] if staff_email else 'Staff')
 
             # 3. Upload to Google Drive (12-month warm storage)
             drive_file_id = self._upload_to_drive(recording_sid, audio_content, {
-                'call_type': call_type,
-                'from_number': from_number,
-                'to_number': to_number,
-                'duration': duration,
-                'staff_name': staff_display,
-                'call_sid': call_sid,
+                'call_type': call_type, 'from_number': from_number,
+                'to_number': to_number, 'duration': duration,
+                'staff_name': staff_display, 'call_sid': call_sid,
             })
             if drive_file_id:
                 logger.info(f"Recording uploaded to Drive: {drive_file_id}")
             else:
                 logger.warning(f"Failed to upload recording to Drive - will only be in local + Groups")
 
-            # 4. Email to Google Group via Mabel (permanent archive)
-            # Build email subject
-            if call_type == 'inbound':
-                subject = f"📞 Inbound Call Recording - {from_number} → {staff_display} ({duration_str})"
-            elif call_type == 'outbound':
-                subject = f"📤 Outbound Call Recording - {staff_display} → {to_number} ({duration_str})"
-            else:
-                subject = f"📞 Call Recording - {from_number} ↔ {to_number} ({duration_str})"
-
-            # Build email body
-            body = f"""Call Recording
-
-Type: {call_type.title() if call_type else 'Unknown'}
-From: {from_number or 'Unknown'}
-To: {to_number or 'Unknown'}
-Duration: {duration_str}
-Staff: {staff_display}
-
-Call SID: {call_sid}
-Recording SID: {recording_sid}"""
-
-            filename = f"recording_{recording_sid}.mp3"
-
-            # Send via email service
-            google_message_id = None
-            from rinq.integrations import get_email_service
-            email_svc = get_email_service()
-            # Use tenant's recordings email if set, fall back to config
-            try:
-                from flask import g
-                tenant = getattr(g, 'tenant', None)
-                recordings_email = (tenant.get('recordings_group_email') if tenant else None) or config.recordings_group_email
-            except RuntimeError:
-                recordings_email = config.recordings_group_email
-            if email_svc and recordings_email:
-                google_message_id = email_svc.send_email(
-                    to=recordings_email,
-                    subject=subject,
-                    text_body=body,
-                    attachments=[{
-                        'filename': filename,
-                        'content_type': 'audio/mpeg',
-                        'content_base64': base64.b64encode(audio_content).decode('utf-8'),
-                    }],
-                    metadata={
-                        'caller': 'tina',
-                        'recording_sid': recording_sid,
-                        'call_sid': call_sid,
-                    },
-                )
+            # 4. Email to Google Group (permanent archive)
+            google_message_id, recordings_email = self._archive_via_email(
+                recording_sid, call_sid, audio_content,
+                call_type, from_number, to_number, duration, staff_display,
+            )
 
             # 5. Log in database
-            now = datetime.utcnow().isoformat()
-            log_data = {
-                'recording_sid': recording_sid,
-                'call_sid': call_sid,
-                'from_number': from_number,
-                'to_number': to_number,
-                'duration_seconds': duration,
-                'recording_url': recording_url,
-                'emailed_to': recordings_email if google_message_id else None,
-                'emailed_at': now if google_message_id else None,
-                'deleted_from_twilio': 0,
-                'created_at': now,
-                'google_message_id': google_message_id,
-                'call_type': call_type,
-                'staff_email': staff_email,
-                'staff_name': staff_name,
-                'local_file_path': local_file_path,
-                'caller_name': caller_name,
-            }
-            recording_id = self.db.log_recording(log_data)
-            logger.info(f"Recording logged in database, id={recording_id}")
+            recording_id = self._log_recording(
+                recording_sid, call_sid, recording_url, from_number, to_number,
+                duration, call_type, staff_email, staff_name, caller_name,
+                local_file_path, google_message_id, recordings_email, drive_file_id,
+            )
 
-            # Update drive_file_id separately (column added in migration 021)
-            if drive_file_id:
-                self.db.update_recording_drive_file(recording_sid, drive_file_id)
-
-            # 6. Delete from Twilio to save storage (only if we have at least one backup)
-            deleted_from_twilio = False
-            if google_message_id or drive_file_id:
-                delete_result = get_twilio_service().delete_recording(recording_sid)
-                if delete_result.get('success'):
-                    self.db.mark_recording_deleted(recording_sid)
-                    deleted_from_twilio = True
-                    logger.info(f"Recording deleted from Twilio")
-                else:
-                    logger.warning(
-                        f"Failed to delete recording from Twilio: "
-                        f"{delete_result.get('error')}"
-                    )
+            # 6. Delete from Twilio (only if we have at least one backup)
+            deleted_from_twilio = self._delete_from_twilio(
+                recording_sid, google_message_id, drive_file_id,
+            )
 
             return {
                 'success': True,
@@ -305,6 +224,109 @@ Recording SID: {recording_sid}"""
         except Exception as e:
             logger.exception(f"Error processing recording: {e}")
             return {'success': False, 'error': str(e)}
+
+    def _archive_via_email(self, recording_sid, call_sid, audio_content,
+                           call_type, from_number, to_number, duration, staff_display):
+        """Email recording to Google Group for permanent archive.
+
+        Returns (google_message_id, recordings_email) tuple.
+        """
+        minutes, seconds = divmod(duration, 60)
+        duration_str = f"{minutes}:{seconds:02d}"
+
+        if call_type == 'inbound':
+            subject = f"📞 Inbound Call Recording - {from_number} → {staff_display} ({duration_str})"
+        elif call_type == 'outbound':
+            subject = f"📤 Outbound Call Recording - {staff_display} → {to_number} ({duration_str})"
+        else:
+            subject = f"📞 Call Recording - {from_number} ↔ {to_number} ({duration_str})"
+
+        body = (
+            f"Call Recording\n\n"
+            f"Type: {call_type.title() if call_type else 'Unknown'}\n"
+            f"From: {from_number or 'Unknown'}\n"
+            f"To: {to_number or 'Unknown'}\n"
+            f"Duration: {duration_str}\n"
+            f"Staff: {staff_display}\n\n"
+            f"Call SID: {call_sid}\n"
+            f"Recording SID: {recording_sid}"
+        )
+
+        try:
+            from flask import g
+            tenant = getattr(g, 'tenant', None)
+            recordings_email = (tenant.get('recordings_group_email') if tenant else None) or config.recordings_group_email
+        except RuntimeError:
+            recordings_email = config.recordings_group_email
+
+        google_message_id = None
+        from rinq.integrations import get_email_service
+        email_svc = get_email_service()
+        if email_svc and recordings_email:
+            google_message_id = email_svc.send_email(
+                to=recordings_email,
+                subject=subject,
+                text_body=body,
+                attachments=[{
+                    'filename': f"recording_{recording_sid}.mp3",
+                    'content_type': 'audio/mpeg',
+                    'content_base64': base64.b64encode(audio_content).decode('utf-8'),
+                }],
+                metadata={
+                    'caller': 'tina',
+                    'recording_sid': recording_sid,
+                    'call_sid': call_sid,
+                },
+            )
+
+        return google_message_id, recordings_email
+
+    def _log_recording(self, recording_sid, call_sid, recording_url,
+                       from_number, to_number, duration, call_type,
+                       staff_email, staff_name, caller_name,
+                       local_file_path, google_message_id, recordings_email,
+                       drive_file_id):
+        """Log recording to database and update Drive file ID. Returns recording_id."""
+        now = datetime.utcnow().isoformat()
+        log_data = {
+            'recording_sid': recording_sid,
+            'call_sid': call_sid,
+            'from_number': from_number,
+            'to_number': to_number,
+            'duration_seconds': duration,
+            'recording_url': recording_url,
+            'emailed_to': recordings_email if google_message_id else None,
+            'emailed_at': now if google_message_id else None,
+            'deleted_from_twilio': 0,
+            'created_at': now,
+            'google_message_id': google_message_id,
+            'call_type': call_type,
+            'staff_email': staff_email,
+            'staff_name': staff_name,
+            'local_file_path': local_file_path,
+            'caller_name': caller_name,
+        }
+        recording_id = self.db.log_recording(log_data)
+        logger.info(f"Recording logged in database, id={recording_id}")
+
+        if drive_file_id:
+            self.db.update_recording_drive_file(recording_sid, drive_file_id)
+
+        return recording_id
+
+    def _delete_from_twilio(self, recording_sid, google_message_id, drive_file_id):
+        """Delete recording from Twilio if we have at least one backup. Returns bool."""
+        if not (google_message_id or drive_file_id):
+            return False
+
+        delete_result = get_twilio_service().delete_recording(recording_sid)
+        if delete_result.get('success'):
+            self.db.mark_recording_deleted(recording_sid)
+            logger.info(f"Recording {recording_sid} deleted from Twilio")
+            return True
+
+        logger.warning(f"Failed to delete recording from Twilio: {delete_result.get('error')}")
+        return False
 
     def start_recording(self, call_sid: str) -> dict:
         """Start recording an active call.

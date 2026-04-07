@@ -267,8 +267,8 @@ def update_forwarding(sid):
 # Lock for all in-memory call tracking dicts (webhook threads are concurrent)
 _call_tracking_lock = threading.Lock()
 
-# Cache for SIP domain to avoid repeated API calls (per-tenant)
-_sip_domain_cache = {}  # {tenant_id: {'domain': str, 'fetched_at': datetime}}
+# SIP helpers — delegated to services/sip.py
+from rinq.services.sip import get_sip_domain as _get_sip_domain_impl, get_sip_uri_for_user as _get_sip_uri_for_user
 
 # Track agent calls initiated for each customer call (for cancellation)
 # Format: {customer_call_sid: [agent_call_sid, agent_call_sid, ...]}
@@ -320,50 +320,8 @@ def _cancel_agent_calls(customer_call_sid: str, except_call_sid: str = None):
 
 
 def _get_sip_domain() -> str | None:
-    """Get the SIP domain from Twilio (cached for 5 minutes, per-tenant).
-
-    Returns the domain name like 'watson.sip.twilio.com' or None if not configured.
-    """
-    from datetime import timedelta
-    from flask import g
-    tenant_id = getattr(g, 'tenant', {}).get('id', '_none') if hasattr(g, 'tenant') and g.tenant else '_none'
-
-    # Check cache (5 minute TTL, per-tenant)
-    cached = _sip_domain_cache.get(tenant_id)
-    if cached and cached['fetched_at']:
-        age = datetime.utcnow() - cached['fetched_at']
-        if age < timedelta(minutes=5):
-            return cached['domain']
-
-    # Fetch from Twilio
-    try:
-        service = get_twilio_service()
-        domains = service.get_sip_domains()
-        if domains:
-            domain_name = domains[0]['domain_name']
-            _sip_domain_cache[tenant_id] = {'domain': domain_name, 'fetched_at': datetime.utcnow()}
-            return domain_name
-    except Exception as e:
-        logger.warning(f"Failed to get SIP domain: {e}")
-
-    return None
-
-
-def _get_sip_uri_for_user(user_email: str, sip_domain: str) -> str | None:
-    """Build a SIP URI for a user from their SIP credentials.
-
-    Args:
-        user_email: The user's email address
-        sip_domain: The Twilio SIP domain name
-
-    Returns:
-        SIP URI like 'sip:username@domain.sip.twilio.com' or None if user has no SIP credentials
-    """
-    db = get_db()
-    user = db.get_user_by_email(user_email)
-    if user and user.get('username'):
-        return f"sip:{user['username']}@{sip_domain}"
-    return None
+    """Get the SIP domain. Delegates to services/sip.py."""
+    return _get_sip_domain_impl()
 
 
 def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: str, our_caller_id: str, customer_call_sid: str, base_url: str = None):

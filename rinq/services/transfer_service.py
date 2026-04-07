@@ -84,8 +84,8 @@ class TransferService:
             targets.append(f'<Client>{identity}</Client>')
 
         # SIP device (if they have one)
-        from rinq.api.routes import _get_sip_domain, _get_sip_uri_for_user
-        sip_domain = _get_sip_domain()
+        from rinq.services.sip import get_sip_domain, get_sip_uri_for_user as _get_sip_uri_for_user
+        sip_domain = get_sip_domain()
         if sip_domain:
             sip_uri = _get_sip_uri_for_user(email, sip_domain)
             if sip_uri:
