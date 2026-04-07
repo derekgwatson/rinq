@@ -125,7 +125,7 @@ Several functions spawn background threads for Twilio API calls (ringing agents,
 ## Common Gotchas
 
 1. **Never use `config.twilio_*` directly** — use `get_twilio_config()` from `tenant.context`. Global config belongs to the master account and will leak watson's values into other tenants
-2. **Tenant context in threads** — always capture base_url and call capture_for_thread() before spawning
+2. **Tenant context in threads** — always capture `db = get_db()`, `sip_domain = _get_sip_domain()`, and `base_url` BEFORE spawning. Call `capture_for_thread()` on TwilioService too. `flask.g` does not exist in background threads — any function that touches `get_db()`, `get_current_tenant()`, or `_get_sip_domain()` will silently fail or raise RuntimeError
 3. **PSTN caller ID** — outbound calls to mobiles must use a number owned by the tenant's subaccount
 4. **Static audio files** — not in git (gitignored), must be copied to server manually
 5. **Recordings directory** — `rinq/data/recordings/`, shared across tenants (SIDs are globally unique)

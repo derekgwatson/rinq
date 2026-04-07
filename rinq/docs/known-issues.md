@@ -1,4 +1,4 @@
-# Tina Known Issues
+# Rinq Known Issues
 
 Issues found during testing, noted for follow-up. Not blocking production.
 
@@ -26,3 +26,9 @@ Issues found during testing, noted for follow-up. Not blocking production.
 **Reproduce:** Make an outbound call or receive a direct inbound call. The "In this call" participant panel doesn't appear (but works for queue calls).
 **Cause:** `my-call-state` polling only searches `queued_calls` for conference info. Conference-first calls store conference names in `call_log` which isn't checked by the polling endpoint.
 **Fix:** Update `my-call-state` to also search `call_log` for conference info.
+
+## 6. Queue answer race condition — agent hears brief hold music
+**Reproduce:** Answer a queue call from the browser softphone. Agent may hear 1-2 seconds of hold music before the caller connects.
+**Cause:** The caller redirect from queue to conference is async. Agent can join the conference before the redirect completes, sitting alone briefly.
+**Mitigation:** Added "Connecting." Say message to delay agent join (2026-04-07). Full fix requires restructuring to wait for redirect confirmation.
+**Impact:** Minor UX annoyance. Call connects after a brief delay.
