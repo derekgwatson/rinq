@@ -4097,7 +4097,7 @@ async function startTransfer() {
                 } else {
                     const subtitle = document.getElementById('consultingSubtitle');
                     const completeBtn = document.getElementById('btnCompleteTransfer');
-                    subtitle.textContent = `Customer is on hold while we call ${targetName}. Speak to them first, then complete or cancel.`;
+                    subtitle.textContent = `Ringing ${targetName}...`;
                     completeBtn.textContent = 'Complete Transfer';
 
                     transferTargetSelection.style.display = 'none';
@@ -4970,8 +4970,13 @@ async function pollCallState() {
         }
         if (isConsulting && transferType === 'warm'
             && state.transfer && state.transfer.consult_participants
-            && state.transfer.consult_participants.length >= 2) {
+            && state.transfer.consult_participants.length >= 2
+            && !consultTargetAnswered) {
+            consultTargetAnswered = true;
             stopRingback();
+            const targetName = consultingTargetName.textContent || 'the target';
+            document.getElementById('consultingSubtitle').textContent =
+                `Connected with ${targetName}. Complete the transfer or cancel to return to the caller.`;
             startCallStatePolling();  // Revert to normal 3s interval
         }
 
