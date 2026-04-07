@@ -12,7 +12,7 @@ class LocalStaffDirectory(StaffDirectory):
     """Staff directory backed by tenant's staff_extensions table."""
 
     def _get_db(self):
-        from rinq.tenant.context import get_db
+        from rinq.database.db import get_db
         return get_db()
 
     def _ext_to_staff(self, ext: dict) -> dict:
