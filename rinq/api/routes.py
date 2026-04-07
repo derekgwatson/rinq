@@ -577,13 +577,13 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
     """
     import threading
 
-    # Capture SIP domain while we still have Flask request context —
+    # Capture tenant-scoped resources while we still have Flask request context —
     # the background thread won't have access to flask.g
     sip_domain = _get_sip_domain()
+    db = get_db()
 
     def ring_agents():
         try:
-            db = get_db()
             service = get_twilio_service()
 
             # Get queue members
@@ -612,7 +612,8 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
                 # SIP devices (desk phone, Zoiper, etc.)
                 # Browser is handled via Twilio Client push notifications, not here
                 if ring_settings.get('ring_sip', True) and sip_domain:
-                    sip_uri = _get_sip_uri_for_user(user_email, sip_domain)
+                    user = db.get_user_by_email(user_email)
+                    sip_uri = f"sip:{user['username']}@{sip_domain}" if user and user.get('username') else None
 
                     if sip_uri:
                         try:
