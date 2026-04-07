@@ -1484,7 +1484,7 @@ def reports():
     user = get_current_user()
     user_role = getattr(user, '_role', 'user')
 
-    # Build team_emails based on role
+    # Build team_emails based on role / reportees
     team_emails = None
     team_label = None
     staff_dir = get_staff_directory()
@@ -1499,22 +1499,25 @@ def reports():
                 logger.warning(f"Failed to get staff list: {e}")
         team_label = 'All Staff'
 
-    elif user_role == 'manager':
-        # Managers see their reportees
+    else:
+        # Check if user has reportees (manager by hierarchy, not just role)
+        reportees = []
         if staff_dir:
             try:
                 reportees = staff_dir.get_reportees(user.email, recursive=True)
-                team_emails = [r.get('email') for r in reportees if r.get('email')]
-                if user.email not in team_emails:
-                    team_emails.append(user.email)
             except Exception as e:
                 logger.warning(f"Failed to get reportees: {e}")
-        team_label = 'My Team'
 
-    else:
-        # Regular users see just their own stats
-        team_emails = [user.email]
-        team_label = 'My Calls'
+        if reportees:
+            # User has people reporting to them — show team view
+            team_emails = [r.get('email') for r in reportees if r.get('email')]
+            if user.email not in team_emails:
+                team_emails.append(user.email)
+            team_label = 'My Team'
+        else:
+            # Regular users see just their own stats
+            team_emails = [user.email]
+            team_label = 'My Calls'
 
     service = get_reporting_service()
     report_data = service.get_report_data(period, team_emails=team_emails)
