@@ -4981,9 +4981,10 @@ async function pollCallState() {
         }
 
         // Last one in conference — everyone else left, auto-hangup
-        // Skip during transfers (agent moves between conferences) and
+        // Skip during active transfers (agent moves between conferences) and
         // only trigger after we've seen 2+ participants
-        if (state.conference && state.participants && !isConsulting && !state.transfer) {
+        const transferActive = state.transfer && ['pending', 'consulting'].includes(state.transfer.status);
+        if (state.conference && state.participants && !isConsulting && !transferActive) {
             if (state.participants.length >= 2) {
                 window._sawMultipleParticipants = true;
             }
