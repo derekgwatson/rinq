@@ -846,9 +846,10 @@ class TwilioService:
         Returns the queue object or None if not found.
         """
         try:
-            queues = twilio_list(self.client.queues, friendly_name=queue_name)
-            if queues:
-                return queues[0]
+            queues = twilio_list(self.client.queues)
+            for q in queues:
+                if q.friendly_name == queue_name:
+                    return q
             return None
         except (TwilioRestException, TwilioException) as e:
             logger.error(f"Failed to get queue {queue_name}: {e}")
