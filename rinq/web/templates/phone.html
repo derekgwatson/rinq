@@ -2963,8 +2963,7 @@ function answerCall() {
         btnHangup.style.display = 'inline-block';
         // Start unified call state polling — server will figure out which conference we're in
         startCallStatePolling();
-        // Auto-start recording if enabled
-        autoStartRecordingIfEnabled();
+        // Recording auto-starts via poll when 2+ participants seen
     }
 }
 
@@ -4504,8 +4503,7 @@ async function answerQueueCall(callSid) {
             currentQueueCallerSid = callSid;  // Track for hold/unhold API
             startCallStatePolling();
             fetchQueueCallers();  // Refresh to remove from list
-            // Auto-start recording if enabled
-            autoStartRecordingIfEnabled();
+            // Recording auto-starts via poll when 2+ participants seen
         });
 
         currentCall.on('disconnect', () => {

@@ -291,12 +291,6 @@ def _handle_participant_left(call_sid: str, db=None):
                 logger.debug(f"Could not end lone call {lone_sid}: {e}")
 
 
-def _conference_record_attrs() -> str:
-    """TwiML attributes for conference recording."""
-    cb = f"{config.webhook_base_url}/api/voice/recording-status"
-    return f'record="record-from-start" recordingStatusCallback="{xml_escape(cb)}" recordingStatusCallbackEvent="completed absent"'
-
-
 # SIP helpers — delegated to services/sip.py
 from rinq.services.sip import get_sip_domain as _get_sip_domain_impl, get_sip_uri_for_user as _get_sip_uri_for_user
 
@@ -709,7 +703,7 @@ def voice_incoming():
                     f"?call_sid={call_sid}&called={quote(called_number, safe='')}&from={quote(from_number, safe='')}"
                 )
                 response_parts.append('    <Dial>')
-                response_parts.append(f'        <Conference startConferenceOnEnter="true" endConferenceOnExit="true" beep="false" {_conference_record_attrs()}>{xml_escape(conference_name)}</Conference>')
+                response_parts.append(f'        <Conference startConferenceOnEnter="true" endConferenceOnExit="true" beep="false">{xml_escape(conference_name)}</Conference>')
                 response_parts.append('    </Dial>')
                 response_parts.append(f'    <Redirect>{xml_escape(no_answer_url)}</Redirect>')
 
@@ -789,7 +783,7 @@ def voice_incoming():
                     f"&from={quote(from_number, safe='')}&flow_id={flow_id}"
                 )
                 response_parts.append('    <Dial>')
-                response_parts.append(f'        <Conference startConferenceOnEnter="true" endConferenceOnExit="true" beep="false" {_conference_record_attrs()}>{xml_escape(conference_name)}</Conference>')
+                response_parts.append(f'        <Conference startConferenceOnEnter="true" endConferenceOnExit="true" beep="false">{xml_escape(conference_name)}</Conference>')
                 response_parts.append('    </Dial>')
                 response_parts.append(f'    <Redirect>{xml_escape(no_answer_url)}</Redirect>')
 
@@ -1960,7 +1954,7 @@ def dial_status_callback():
         twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Dial>
-        <Conference startConferenceOnEnter="true" endConferenceOnExit="true" beep="false" {_conference_record_attrs()}>{xml_escape(conference_name)}</Conference>
+        <Conference startConferenceOnEnter="true" endConferenceOnExit="true" beep="false">{xml_escape(conference_name)}</Conference>
     </Dial>
 </Response>'''
         return Response(twiml, mimetype='application/xml')
@@ -2137,7 +2131,7 @@ def queue_agent_answer(queue_id):
 <Response>
     <Say>Connecting.</Say>
     <Dial>
-        <Conference endConferenceOnExit="true" startConferenceOnEnter="true" {_conference_record_attrs()}>{xml_escape(conference_name)}</Conference>
+        <Conference endConferenceOnExit="true" startConferenceOnEnter="true">{xml_escape(conference_name)}</Conference>
     </Dial>
 </Response>'''
 
@@ -2628,7 +2622,7 @@ def outbound_customer_join():
     twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Dial>
-        <Conference startConferenceOnEnter="true" endConferenceOnExit="true" beep="false" {_conference_record_attrs()}>{xml_escape(conference_name)}</Conference>
+        <Conference startConferenceOnEnter="true" endConferenceOnExit="true" beep="false">{xml_escape(conference_name)}</Conference>
     </Dial>
 </Response>'''
     return Response(twiml, mimetype='application/xml')
@@ -4339,7 +4333,7 @@ def voice_outbound():
 <Response>
     <Say>Connecting.</Say>
     <Dial>
-        <Conference endConferenceOnExit="true" startConferenceOnEnter="true" {_conference_record_attrs()}>{xml_escape(conference_name)}</Conference>
+        <Conference endConferenceOnExit="true" startConferenceOnEnter="true">{xml_escape(conference_name)}</Conference>
     </Dial>
 </Response>'''
         return Response(twiml, mimetype='application/xml')
