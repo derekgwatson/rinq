@@ -112,13 +112,20 @@ def manager_required(f):
 
 
 def api_or_session_auth(view_func):
-    """Allow either API key or session auth.
+    """Allow either API key, session auth, or direct unix socket access.
 
     Standalone version — checks BOT_API_KEY env var for API access,
-    or falls back to session auth for web UI.
+    falls back to session auth for web UI, and allows unauthenticated
+    requests that arrive directly on the unix socket (no X-Forwarded-For
+    header means no nginx proxy, so it must be a local process).
     """
     @wraps(view_func)
     def wrapper(*args, **kwargs):
+        # Direct unix socket access (no proxy) — trusted local request
+        if not request.headers.get('X-Forwarded-For'):
+            g.api_caller = 'local'
+            return view_func(*args, **kwargs)
+
         header_key = request.headers.get("X-API-Key")
 
         if header_key:
