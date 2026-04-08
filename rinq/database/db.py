@@ -2421,6 +2421,20 @@ class Database:
             conn.commit()
             return {'success': True}
 
+    def stamp_sip_activity(self, email: str) -> None:
+        """Record that a SIP device was used by this staff member.
+
+        Called when we see a SIP call (inbound ring or outbound dial).
+        Used to distinguish real desk phone users from people who just have credentials.
+        """
+        now = datetime.utcnow().isoformat()
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE staff_extensions SET sip_registered_at = ? WHERE email = ?",
+                (now, email.lower())
+            )
+            conn.commit()
+
     def get_or_create_staff_extension(self, email: str, created_by: str) -> dict:
         """Get a staff member's extension, creating one if it doesn't exist."""
         ext = self.get_staff_extension(email)

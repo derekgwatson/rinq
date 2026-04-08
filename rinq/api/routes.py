@@ -395,6 +395,7 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
                                 status_callback_event=['initiated', 'ringing', 'answered', 'completed']
                             )
                             logger.info(f"Initiated SIP call to {sip_uri} for queue {queue_name}: {call.sid}")
+                            db.stamp_sip_activity(user_email)
                             agent_call_sids.append(call.sid)
                             # Store reverse mapping for status callback lookup
                             with _call_tracking_lock:
@@ -588,6 +589,7 @@ def _build_dial_targets(routing: dict) -> list[str]:
                 if sip_uri:
                     targets.append(f'<Sip>{sip_uri}</Sip>')
                     logger.info(f"Added SIP target for {user_email}: {sip_uri}")
+                    db.stamp_sip_activity(user_email)
                 else:
                     logger.warning(f"Could not build SIP URI for {user_email} - no SIP credentials found")
 
@@ -4264,6 +4266,9 @@ def voice_outbound():
                 sip_user = db.get_user_by_username(sip_username)
                 if sip_user:
                     lookup_email = sip_user.get('staff_email')
+                    # Record SIP device activity for presence tracking
+                    if lookup_email:
+                        db.stamp_sip_activity(lookup_email)
 
         if lookup_email:
             staff_ext = db.get_staff_extension(lookup_email)
@@ -4562,14 +4567,6 @@ def get_presence():
     active_calls = _get_active_calls_from_twilio()
     on_call_emails = {c['agent_email'].lower() for c in active_calls if c.get('agent_email')}
 
-    # Build set of emails that have SIP credentials (desk phone configured)
-    users = db.get_users()
-    sip_emails = {
-        u['staff_email'].lower()
-        for u in users
-        if u.get('username') and u.get('staff_email')
-    }
-
     presence = {}
     for ext in extensions:
         email = ext.get('email', '')
@@ -4582,11 +4579,21 @@ def get_presence():
             except (ValueError, TypeError):
                 pass
 
+        # SIP device recently used (stamped when we ring or see a SIP call)
+        sip_active = False
+        sip_ts = ext.get('sip_registered_at')
+        if sip_ts:
+            try:
+                sip_time = datetime.fromisoformat(sip_ts)
+                sip_active = (now - sip_time).total_seconds() < 86400  # 24 hours
+            except (ValueError, TypeError):
+                pass
+
         presence[email] = {
             'online': is_online,
             'dnd': bool(ext.get('dnd_enabled')),
             'on_call': email.lower() in on_call_emails,
-            'has_sip_device': email.lower() in sip_emails,
+            'has_sip_device': sip_active,
         }
 
     return jsonify({"presence": presence})
