@@ -239,7 +239,7 @@ input:checked + .toggle-slider:before {
         </select>
         {% if can_filter_staff %}
         <label for="staffFilter">Staff:</label>
-        <select id="staffFilter" onchange="filterRecordings()">
+        <select id="staffFilter" onchange="window.location.href='{{ url_for('web.recordings') }}?staff=' + this.value">
             <option value="">All staff</option>
             <option value="mine" {% if filter_staff == 'mine' %}selected{% endif %}>My recordings</option>
         </select>
