@@ -452,6 +452,17 @@ def register(bp):
             from rinq.api.routes import _handle_participant_left
             _handle_participant_left(consult_call_sid, db)
 
+        # "completed" with duration > 0 means the target answered and the call
+        # ended normally — this is a successful transfer, not a failure.
+        call_duration = int(request.form.get('CallDuration', '0') or '0')
+        if call_status == 'completed' and call_duration > 0:
+            logger.info(f"Transfer consult call ended normally for {original_call} (duration={call_duration}s)")
+            if source == 'call_log':
+                db.complete_transfer_log(original_call)
+            else:
+                db.complete_transfer(original_call)
+            return '', 200
+
         if call_status in ('completed', 'busy', 'no-answer', 'failed', 'canceled'):
             logger.info(f"Consultation call failed ({call_status}) for transfer {original_call} (source={source})")
 
