@@ -4035,11 +4035,10 @@ def voice_hangup():
         except Exception as e:
             logger.warning(f"Could not end conference {conference_name}: {e}")
 
-    # Hang up the other party if they're still in the same conference
-    # (don't kill calls that have been transferred to a different conference)
+    # Hang up the other party (child call) — they may still be ringing
+    # or in a different state than the conference
     child_sid = db.get_call_child_sid(call_sid)
-    if child_sid and not conference_name:
-        # No conference — safe to terminate the other party
+    if child_sid:
         try:
             service.client.calls(child_sid).update(status='completed')
             logger.info(f"Hung up other party {child_sid}")
