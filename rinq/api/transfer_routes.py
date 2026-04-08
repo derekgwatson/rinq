@@ -74,6 +74,14 @@ def register(bp):
         transfer_service._capture_base_url()
 
         result = transfer_service.blind_transfer(call_sid, target, target_name, transferred_by)
+
+        # Agent is done with the call after a blind transfer — mark them as left
+        if result.get('success'):
+            db = get_db()
+            agent_call_sid = data.get('agent_call_sid')
+            if agent_call_sid:
+                db.remove_participant(agent_call_sid)
+
         return jsonify(result) if result.get('success') else (jsonify(result), 400)
 
     @bp.route('/voice/transfer/blind-direct', methods=['POST'])
@@ -110,6 +118,10 @@ def register(bp):
             result = transfer_service.blind_transfer_direct(
                 call_sid, target, target_name, transferred_by, caller_id
             )
+
+        # Agent is done with the call after a blind transfer — mark them as left
+        if result.get('success'):
+            db.remove_participant(call_sid)
 
         return jsonify(result) if result.get('success') else (jsonify(result), 400)
 
