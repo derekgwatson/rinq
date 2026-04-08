@@ -1624,10 +1624,12 @@ def team_add():
         return redirect(url_for('web.team'))
 
     perms = get_permission_service()
-    if perms and perms.add_permission(email, 'tina', role, user.email):
+    if not perms:
+        flash('No permission service configured.', 'danger')
+    elif perms.add_permission(email, 'tina', role, user.email):
         flash(f'Added {email} as {role}.', 'success')
     else:
-        flash('Failed to add user.', 'danger')
+        flash(f'Failed to add {email} — check server logs for details.', 'danger')
 
     return redirect(url_for('web.team'))
 

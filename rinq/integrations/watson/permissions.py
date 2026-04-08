@@ -47,6 +47,8 @@ class WatsonPermissionService(PermissionService):
                 'role': role,
                 'granted_by': granted_by,
             })
+            if response.status_code != 200:
+                logger.error(f"Grant API add_permission returned {response.status_code}: {response.text}")
             return response.status_code == 200
         except Exception as e:
             logger.error(f"Failed to add permission via Grant: {e}")
@@ -60,6 +62,8 @@ class WatsonPermissionService(PermissionService):
                 'bot': bot,
                 'revoked_by': revoked_by,
             })
+            if response.status_code != 200:
+                logger.error(f"Grant API remove_permission returned {response.status_code}: {response.text}")
             return response.status_code == 200
         except Exception as e:
             logger.error(f"Failed to remove permission via Grant: {e}")
