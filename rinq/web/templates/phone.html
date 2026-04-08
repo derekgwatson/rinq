@@ -4953,13 +4953,10 @@ async function pollCallState() {
             currentQueueCallerSid = state.customer_call_sid;
         }
 
-        // Customer answered — update status and start recording
+        // Customer answered — update status
         if (state.participants && state.participants.length >= 2) {
             if (phoneStatus.textContent === 'Ringing...') {
                 setStatus('Connected', 'busy');
-            }
-            if (recordingEnabled && !isRecording) {
-                autoStartRecordingIfEnabled();
             }
         }
 

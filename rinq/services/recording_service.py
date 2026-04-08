@@ -348,40 +348,9 @@ class RecordingService:
             client = get_twilio_service().client
             status_callback = f"{config.webhook_base_url}/api/voice/recording-status"
 
-            # Try conference recording first (SDK doesn't have create on
-            # conference recordings, so use the REST API directly)
-            conference_name = self.db.get_call_conference(call_sid)
-            if conference_name:
-                confs = twilio_list(client.conferences,
-                    friendly_name=conference_name, status='in-progress', limit=1
-                )
-                if confs:
-                    conf_sid = confs[0].sid
-                    account_sid = confs[0].account_sid
-                    response = client.request(
-                        'POST',
-                        f'https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Conferences/{conf_sid}/Recordings.json',
-                        data={
-                            'RecordingStatusCallback': status_callback,
-                            'RecordingStatusCallbackEvent': 'completed absent',
-                        }
-                    )
-                    recording_sid = response.text.get('sid') if hasattr(response.text, 'get') else None
-                    if not recording_sid:
-                        import json
-                        try:
-                            recording_sid = json.loads(response.text).get('sid')
-                        except (json.JSONDecodeError, AttributeError):
-                            pass
-                    if recording_sid:
-                        logger.info(f"Started conference recording for {conference_name}: {recording_sid}")
-                        return {
-                            'success': True,
-                            'recording_sid': recording_sid,
-                            'conference': conference_name,
-                        }
-
-            # Fallback to call-level recording
+            # Conference recording is handled via TwiML record="record-from-start"
+            # attribute on the Conference noun. The browser's start_recording
+            # button uses call-level recording as a supplement.
             recording = client.calls(call_sid).recordings.create(
                 recording_status_callback=status_callback,
                 recording_status_callback_event=['completed', 'absent'],
