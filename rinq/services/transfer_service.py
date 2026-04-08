@@ -722,7 +722,7 @@ class TransferService:
                     'message': 'Transfer cancelled. The original caller had already disconnected.'
                 }
 
-            if transfer_state['transfer_status'] not in ('pending', 'consulting'):
+            if transfer_state['transfer_status'] not in ('pending', 'consulting', 'completed'):
                 return {'success': False, 'error': f"Cannot cancel transfer in state: {transfer_state['transfer_status']}"}
 
             original_conference = transfer_state['conference_name']

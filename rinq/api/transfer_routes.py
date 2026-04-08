@@ -275,6 +275,16 @@ def register(bp):
         if not conference:
             return Response('<?xml version="1.0" encoding="UTF-8"?><Response><Say>Sorry, an error occurred.</Say><Hangup/></Response>', mimetype='application/xml')
 
+        # Record agent in the consult conference
+        agent_call_sid = request.form.get('CallSid', '')
+        if agent_call_sid:
+            db = get_db()
+            agent_participant = db.get_participant_by_sid(agent_call_sid)
+            agent_name = agent_participant['name'] if agent_participant else None
+            agent_email = agent_participant['email'] if agent_participant else None
+            db.add_participant(conference, agent_call_sid, 'agent',
+                               name=agent_name, email=agent_email)
+
         ringback_url = f"{config.webhook_base_url}/api/voice/ringback"
         twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -434,15 +444,6 @@ def register(bp):
         db = get_db()
 
         if not original_call:
-            return '', 200
-
-        call_duration = int(request.form.get('CallDuration', '0') or '0')
-        if call_status == 'completed' and call_duration > 0:
-            logger.info(f"Transfer target call ended normally for {original_call} (duration={call_duration}s)")
-            if source == 'call_log':
-                db.complete_transfer_log(original_call)
-            else:
-                db.complete_transfer(original_call)
             return '', 200
 
         if call_status in ('completed', 'busy', 'no-answer', 'failed', 'canceled'):
