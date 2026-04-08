@@ -2739,7 +2739,7 @@ def call_hold():
             return jsonify({"error": "No conference found for this call"}), 404
 
     try:
-        # Find the conference by name
+        # Find the conference SID — need it for the Twilio API
         conferences = twilio_list(twilio_service.client.conferences,
             friendly_name=conference_name,
             status='in-progress',
@@ -2752,31 +2752,19 @@ def call_hold():
         conference = conferences[0]
 
         if action == 'hold':
-            participants = twilio_list(twilio_service.client.conferences(conference.sid).participants)
+            # Find the customer to hold from DB (fast) instead of listing
+            # all Twilio participants (slow API call)
+            customer_participants = db.get_participants(conference_name)
+            customer_entry = next((p for p in customer_participants if p['role'] == 'customer'), None)
 
-            # Find the customer to hold. For conference-first calls, call_sid
-            # is the agent — use child_sid to find the customer. For queue
-            # calls, call_sid is already the customer.
-            child_sid = db.get_call_child_sid(call_sid)
-            target_sid = child_sid or call_sid
+            if customer_entry:
+                target_sid = customer_entry['call_sid']
+            else:
+                # Fallback: use child_sid or the call_sid itself
+                child_sid = db.get_call_child_sid(call_sid)
+                target_sid = child_sid or call_sid
 
-            customer_participant = None
-            for p in participants:
-                if p.call_sid == target_sid:
-                    customer_participant = p
-                    break
-
-            # Fallback: hold whoever isn't the requesting agent
-            if not customer_participant:
-                for p in participants:
-                    if p.call_sid != call_sid:
-                        customer_participant = p
-                        break
-
-            if not customer_participant:
-                return jsonify({"error": "Caller not found in conference"}), 404
-
-            twilio_service.client.conferences(conference.sid).participants(customer_participant.call_sid).update(
+            twilio_service.client.conferences(conference.sid).participants(target_sid).update(
                 hold=True,
                 hold_url=hold_url
             )
