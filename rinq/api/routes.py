@@ -2293,6 +2293,7 @@ def conference_join():
             if not existing:
                 # Try to resolve name from Twilio call details
                 name, email = None, None
+                resolved_role = participant_role
                 try:
                     twilio_service = get_twilio_service()
                     call = twilio_service.client.calls(call_sid).fetch()
@@ -2303,17 +2304,19 @@ def conference_join():
                         user = db.get_user_by_email(email)
                         if user:
                             name = user.get('friendly_name')
+                        resolved_role = 'agent'  # Staff member, not customer
                     elif to.startswith('sip:'):
                         sip_user = to[4:].split('@')[0]
                         user = db.get_user_by_username(sip_user)
                         if user:
                             email = user.get('staff_email')
                             name = user.get('friendly_name')
+                        resolved_role = 'agent'  # Staff member, not customer
                     elif to.startswith('+'):
                         name = to
                 except Exception:
                     pass
-                db.add_participant(room, call_sid, participant_role,
+                db.add_participant(room, call_sid, resolved_role,
                                    name=name, email=email)
         except Exception as e:
             logger.debug(f"Could not track participant {call_sid} in {room}: {e}")
