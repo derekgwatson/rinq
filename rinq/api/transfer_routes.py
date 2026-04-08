@@ -22,6 +22,26 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _resolve_transfer_target_email(call_sid: str) -> str | None:
+    """Try to resolve a transfer target's email from their call SID."""
+    try:
+        service = get_twilio_service()
+        call = service.client.calls(call_sid).fetch()
+        to = call.to or ''
+        if to.startswith('client:'):
+            identity = to[7:]
+            return identity.replace('_at_', '@').replace('_', '.')
+        if to.startswith('sip:'):
+            sip_user = to[4:].split('@')[0]
+            db = get_db()
+            user = db.get_user_by_username(sip_user)
+            if user:
+                return user.get('staff_email')
+    except Exception as e:
+        logger.debug(f"Could not resolve transfer target email from call {call_sid}: {e}")
+    return None
+
+
 def register(bp):
     """Register all transfer routes on the given blueprint."""
 
@@ -163,6 +183,13 @@ def register(bp):
         if not result.get('success') and result.get('error') == 'No transfer in progress':
             result = transfer_service.warm_transfer_complete_universal(call_sid, transferred_by)
 
+        # Mark original agent as left (they've handed off the call)
+        if result.get('success'):
+            db = get_db()
+            agent_call_sid = result.get('agent_call_sid')
+            if agent_call_sid:
+                db.remove_participant(agent_call_sid)
+
         return jsonify(result) if result.get('success') else (jsonify(result), 400)
 
     @bp.route('/voice/transfer/cancel', methods=['POST'])
@@ -216,6 +243,16 @@ def register(bp):
         if not conference:
             return Response('<?xml version="1.0" encoding="UTF-8"?><Response><Say>Sorry, an error occurred.</Say><Hangup/></Response>', mimetype='application/xml')
 
+        # Record transfer target as participant
+        target_call_sid = request.form.get('CallSid', '')
+        if target_call_sid:
+            db = get_db()
+            target_email = _resolve_transfer_target_email(target_call_sid)
+            target_user = db.get_user_by_email(target_email) if target_email else None
+            target_name = (target_user.get('friendly_name') if target_user else None) or target_email
+            db.add_participant(conference, target_call_sid, 'transfer_target',
+                               name=target_name, email=target_email)
+
         twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say>Connecting you with the caller's agent.</Say>
@@ -250,6 +287,12 @@ def register(bp):
         conference = request.args.get('conference')
         if not conference:
             return Response('<?xml version="1.0" encoding="UTF-8"?><Response><Say>Sorry, an error occurred.</Say><Hangup/></Response>', mimetype='application/xml')
+
+        # Update participant: target now joins main conference as agent
+        target_call_sid = request.form.get('CallSid', '')
+        if target_call_sid:
+            db = get_db()
+            db.add_participant(conference, target_call_sid, 'agent')
 
         twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>

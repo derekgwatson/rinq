@@ -167,21 +167,13 @@ def get_conference_participants(conference_name, *, user_map=None, transfer_name
 def get_call_state(agent_call_sid: str, caller_email: str = None) -> dict:
     """Get the current call state for an agent.
 
-    This is the main polling function called by the phone UI. It finds
-    which conference the agent is in and resolves all participants.
-
-    Strategies (tried in order):
-    1. Check answered queued calls for a conference containing this agent
-    2. Check transfer consult conferences
-    3. Check the agent's own call_log for a stored conference name
+    Reads from call_participants table (source of truth). Falls back to
+    legacy Twilio API resolution for calls that predate the table.
 
     Returns:
         Dict with in_call, conference, participants, transfer, customer_call_sid
     """
     db = get_db()
-    twilio_service = get_twilio_service()
-    user_map = build_user_map(db)
-    transfer_names = {}  # consult_call_sid -> target_name
 
     result = {
         'in_call': True,
@@ -191,187 +183,121 @@ def get_call_state(agent_call_sid: str, caller_email: str = None) -> dict:
         'customer_call_sid': None,
     }
 
-    # Verify the agent's call is still active
-    try:
-        twilio_service.client.calls(agent_call_sid).fetch()
-    except Exception:
-        return {"in_call": False}
-
-    resolve_kwargs = dict(
-        agent_call_sid=agent_call_sid,
-        caller_email=caller_email,
-        user_map=user_map,
-        transfer_names=transfer_names,
-        db=db,
-        twilio_service=twilio_service,
-    )
-
-    # Strategy 1: answered queued calls
-    answered_calls = db.get_recent_answered_queued_calls(limit=10)
-    for qc in answered_calls:
-        conf_name = qc.get('conference_name')
-        if not conf_name:
-            continue
-
-        try:
-            confs = twilio_list(twilio_service.client.conferences,
-                friendly_name=conf_name, status='in-progress', limit=1
-            )
-            if not confs:
-                continue
-
-            participants = twilio_list(twilio_service.client.conferences(confs[0].sid).participants)
-            if not any(p.call_sid == agent_call_sid for p in participants):
-                continue
-
-            result['conference'] = conf_name
-            result['customer_call_sid'] = qc.get('call_sid')
-
-            # Populate transfer names before resolving participants
-            transfer_state = db.get_transfer_state(qc['call_sid'])
-            if transfer_state and transfer_state.get('transfer_status') in ('pending', 'consulting'):
-                consult_sid = transfer_state.get('transfer_consult_call_sid')
-                target_name = transfer_state.get('transfer_target_name')
-                if consult_sid and target_name:
-                    transfer_names[consult_sid] = target_name
-
-                result['transfer'] = _build_transfer_info(
-                    transfer_state, transfer_names, resolve_kwargs
-                )
-
-            result['participants'] = []
-            for p in participants:
-                info = resolve_participant(p.call_sid, **resolve_kwargs)
-                info['hold'] = p.hold
-                info['muted'] = p.muted
-                result['participants'].append(info)
-            break
-
-        except Exception as e:
-            logger.debug(f"Conference lookup for queued call failed: {e}")
-            continue
-
-    # Strategy 2: consult conferences (agent in transfer)
-    if not result['conference']:
-        for qc in answered_calls:
-            transfer_state = db.get_transfer_state(qc.get('call_sid', ''))
-            if not transfer_state:
-                continue
-            consult_conf = transfer_state.get('transfer_consult_conference')
-            if not consult_conf:
-                continue
-
-            try:
-                confs = twilio_list(twilio_service.client.conferences,
-                    friendly_name=consult_conf, status='in-progress', limit=1
-                )
-                if not confs:
-                    continue
-
-                participants = twilio_list(twilio_service.client.conferences(confs[0].sid).participants)
-                if not any(p.call_sid == agent_call_sid for p in participants):
-                    continue
-
-                consult_sid = transfer_state.get('transfer_consult_call_sid')
-                target_name = transfer_state.get('transfer_target_name')
-                if consult_sid and target_name:
-                    transfer_names[consult_sid] = target_name
-
-                result['conference'] = qc.get('conference_name')
-                result['customer_call_sid'] = qc.get('call_sid')
-
-                # Original conference participants
-                orig_parts = get_conference_participants(
-                    qc.get('conference_name'), **resolve_kwargs
-                )
-                result['participants'] = orig_parts or []
-
-                # Consult conference participants
-                transfer_info = {
-                    'status': transfer_state['transfer_status'],
-                    'target_name': target_name,
-                    'consult_participants': [],
-                }
-                for p in participants:
-                    info = resolve_participant(p.call_sid, **resolve_kwargs)
-                    info['hold'] = p.hold
-                    info['muted'] = p.muted
-                    transfer_info['consult_participants'].append(info)
-                result['transfer'] = transfer_info
-                break
-
-            except Exception as e:
-                logger.warning(f"Error checking consult conference {consult_conf}: {e}")
-                continue
-
-    # Strategy 3: agent's call_log has a stored conference
-    if not result['conference']:
+    # Find agent's conference — check call_participants first, then call_log
+    agent_participant = db.get_participant_by_sid(agent_call_sid)
+    if agent_participant:
+        conf_name = agent_participant['conference_name']
+    else:
         conf_name = db.get_call_conference(agent_call_sid)
-        if conf_name:
-            try:
-                child_sid = db.get_call_child_sid(agent_call_sid)
-                transfer_key = child_sid or agent_call_sid
-                transfer_state = db.get_transfer_state_log(transfer_key)
 
-                # For blind transfers: conference is "call_{original_sid}_xfer"
-                original_call_sid = None
-                if conf_name.startswith('call_') and conf_name.endswith('_xfer'):
-                    original_call_sid = conf_name[5:-5]
-                    if not transfer_state:
-                        transfer_state = db.get_transfer_state_log(original_call_sid)
+    if not conf_name:
+        # No conference found — verify the call is still active
+        try:
+            twilio_service = get_twilio_service()
+            twilio_service.client.calls(agent_call_sid).fetch()
+        except Exception:
+            return {"in_call": False}
+        return result
 
-                # Check if agent is in the stored conference
-                agent_conf = _find_agent_in_conference(
-                    conf_name, agent_call_sid, twilio_service
-                )
+    result['conference'] = conf_name
 
-                # If not found, agent may have been redirected to the
-                # consultation conference during a warm transfer
-                if not agent_conf and transfer_state:
-                    consult_conf = transfer_state.get('transfer_consult_conference')
-                    if consult_conf:
-                        agent_conf = _find_agent_in_conference(
-                            consult_conf, agent_call_sid, twilio_service
-                        )
+    # Get participants from DB
+    participants = db.get_participants(conf_name)
+    if participants:
+        # Fast path: participants recorded in DB
+        for p in participants:
+            result['participants'].append({
+                'call_sid': p['call_sid'],
+                'name': p['name'] or 'Unknown',
+                'role': p['role'],
+                'hold': False,
+                'muted': False,
+            })
+            if p['role'] == 'customer':
+                result['customer_call_sid'] = p['call_sid']
+    else:
+        # Fallback for calls that predate call_participants table:
+        # use legacy Twilio API resolution
+        result = _get_call_state_legacy(agent_call_sid, caller_email, conf_name, db)
 
-                if agent_conf:
-                    result['conference'] = conf_name  # report the main conference
-                    if child_sid:
-                        result['customer_call_sid'] = child_sid
+    # Check for active transfers
+    customer_sid = result.get('customer_call_sid')
+    if customer_sid:
+        transfer_state = db.get_transfer_state(customer_sid)
+        if not transfer_state:
+            transfer_state = db.get_transfer_state_log(customer_sid)
+        if transfer_state and transfer_state.get('transfer_status') in ('pending', 'consulting'):
+            result['transfer'] = {
+                'status': transfer_state['transfer_status'],
+                'target_name': transfer_state.get('transfer_target_name'),
+                'consult_participants': [],
+            }
+            # Get consult conference participants
+            consult_conf = transfer_state.get('transfer_consult_conference')
+            if consult_conf:
+                consult_parts = db.get_participants(consult_conf)
+                for p in consult_parts:
+                    result['transfer']['consult_participants'].append({
+                        'call_sid': p['call_sid'],
+                        'name': p['name'] or 'Unknown',
+                        'role': p['role'],
+                        'hold': False,
+                        'muted': False,
+                    })
 
-                    # Build transfer info if transfer is active
-                    if transfer_state and transfer_state.get('transfer_status') in ('pending', 'consulting'):
-                        consult_sid = transfer_state.get('transfer_consult_call_sid')
-                        t_name = transfer_state.get('transfer_target_name')
-                        if consult_sid and t_name:
-                            transfer_names[consult_sid] = t_name
-                        result['transfer'] = _build_transfer_info(
-                            transfer_state, transfer_names, resolve_kwargs
-                        )
+    # Also find customer_call_sid from child_sid if not set
+    if not result.get('customer_call_sid'):
+        child_sid = db.get_call_child_sid(agent_call_sid)
+        if child_sid:
+            result['customer_call_sid'] = child_sid
 
-                    # For completed blind transfers, look up customer from
-                    # the original call so we don't show the wrong name
-                    customer_info = None
-                    if original_call_sid:
-                        customer_info = _get_customer_from_call_log(original_call_sid, db)
+    return result
 
-                    # Resolve participants from the conference the agent is in
-                    result['participants'] = []
-                    for p in agent_conf:
-                        if p['call_sid'] == agent_call_sid:
-                            info = resolve_participant(p['call_sid'], **resolve_kwargs)
-                        elif customer_info:
-                            info = {'call_sid': p['call_sid'], **customer_info}
-                        else:
-                            info = resolve_participant(p['call_sid'], **resolve_kwargs)
-                        info['hold'] = p['hold']
-                        info['muted'] = p['muted']
-                        result['participants'].append(info)
-            except Exception as e:
-                logger.warning(f"Failed to fetch conference state for {conf_name}: {e}")
 
-    # Deduplicate participants — after transfers, the customer can appear
-    # twice (original leg + redirected leg) with different call SIDs
+def _get_call_state_legacy(agent_call_sid: str, caller_email: str,
+                            conf_name: str, db) -> dict:
+    """Fallback call state resolution using Twilio API.
+
+    Used for calls that started before the call_participants table existed.
+    """
+    twilio_service = get_twilio_service()
+    user_map = build_user_map(db)
+
+    result = {
+        'in_call': True,
+        'conference': conf_name,
+        'participants': [],
+        'transfer': None,
+        'customer_call_sid': None,
+    }
+
+    try:
+        confs = twilio_list(twilio_service.client.conferences,
+            friendly_name=conf_name, status='in-progress', limit=1
+        )
+        if not confs:
+            return result
+
+        participants = twilio_list(twilio_service.client.conferences(confs[0].sid).participants)
+        for p in participants:
+            info = resolve_participant(
+                p.call_sid,
+                agent_call_sid=agent_call_sid,
+                caller_email=caller_email,
+                user_map=user_map,
+                db=db,
+                twilio_service=twilio_service,
+            )
+            info['hold'] = p.hold
+            info['muted'] = p.muted
+            result['participants'].append(info)
+            if info.get('role') == 'customer':
+                result['customer_call_sid'] = p.call_sid
+
+    except Exception as e:
+        logger.warning(f"Legacy call state fetch failed for {conf_name}: {e}")
+
+    # Deduplicate
     if result.get('participants'):
         result['participants'] = _deduplicate_participants(result['participants'])
 

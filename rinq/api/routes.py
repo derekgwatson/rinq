@@ -1876,6 +1876,9 @@ def call_status_callback():
             talk_seconds=duration if call_status == 'completed' else 0,
         )
 
+        # Mark participant as left
+        db.remove_participant(call_sid)
+
         # Cancel any pending ring calls for conference-first inbound calls.
         # When the caller hangs up before an agent answers, the outbound
         # ring calls (SIP/browser) keep ringing because they're separate
@@ -2354,6 +2357,20 @@ def inbound_ring_status():
         db.set_call_conference(agent_call_sid, conference_name)
         db.set_call_conference(caller_call_sid, conference_name)
 
+        # Record agent participant (customer/caller was added when the call started)
+        agent_email = _resolve_agent_email(agent_call_sid, service)
+        agent_user = db.get_user_by_email(agent_email) if agent_email else None
+        agent_name = (agent_user.get('friendly_name') if agent_user else None) or agent_email
+        db.add_participant(conference_name, agent_call_sid, 'agent',
+                           name=agent_name, email=agent_email)
+
+        # For inbound calls, also record the customer if not already present
+        caller_number = db.get_call_log_field(caller_call_sid, 'from_number')
+        if caller_number:
+            customer_name = db.get_call_log_field(caller_call_sid, 'customer_name') or caller_number
+            db.add_participant(conference_name, caller_call_sid, 'customer',
+                               name=customer_name, phone_number=caller_number)
+
         for sid in ring_sids:
             if sid != agent_call_sid:
                 try:
@@ -2493,6 +2510,12 @@ def outbound_customer_join():
         })
 
     logger.info(f"Outbound customer answered: {customer_call_sid} joined conference {conference_name}")
+
+    # Record customer participant
+    customer_number = db.get_call_log_field(customer_call_sid, 'to_number') or ''
+    customer_name = db.get_call_log_field(customer_call_sid, 'customer_name') or customer_number
+    db.add_participant(conference_name, customer_call_sid, 'customer',
+                       name=customer_name, phone_number=customer_number)
 
     twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -4053,6 +4076,12 @@ def _handle_internal_extension_call(extension: str, from_identity: str, staff_em
     # Store conference name immediately for hold/hangup
     db.set_call_conference(call_sid, conference_name)
 
+    # Record caller as participant
+    caller_user = db.get_user_by_email(staff_email) if staff_email else None
+    caller_name = (caller_user.get('friendly_name') if caller_user else None) or staff_email
+    db.add_participant(conference_name, call_sid, 'agent',
+                       name=caller_name, email=staff_email)
+
     # Ring recipient's devices via REST API into the conference
     get_twilio_service().capture_for_thread()
     _ring_targets_into_conference(dial_targets, conference_name, dial_caller_id, call_sid,
@@ -4183,6 +4212,16 @@ def voice_outbound():
         # Store conference name for hold/unhold functionality
         db.set_call_conference(answer_call_sid, conference_name)
 
+        # Record participants
+        agent_user = db.get_user_by_email(staff_email) if staff_email else None
+        agent_name = (agent_user.get('friendly_name') if agent_user else None) or staff_email
+        db.add_participant(conference_name, call_sid, 'agent',
+                           name=agent_name, email=staff_email)
+        customer_number = queued_call.get('caller_number') or queued_call.get('from_number')
+        customer_name = queued_call.get('customer_name') or customer_number
+        db.add_participant(conference_name, answer_call_sid, 'customer',
+                           name=customer_name, phone_number=customer_number)
+
         db.log_activity(
             action="browser_answering_queue",
             target=conference_name,
@@ -4287,6 +4326,11 @@ def voice_outbound():
             'conference_name': conference_name,
         })
         db.set_call_child_sid(call_sid, customer_call.sid)
+        # Record participants — agent now, customer when they answer
+        agent_user = db.get_user_by_email(staff_email) if staff_email else None
+        agent_name = (agent_user.get('friendly_name') if agent_user else None) or staff_email
+        db.add_participant(conference_name, call_sid, 'agent',
+                           name=agent_name, email=staff_email)
         logger.info(f"Outbound: dialed {to_e164} as {customer_call.sid}, conference={conference_name}")
     except Exception as e:
         logger.error(f"Failed to dial customer {to_e164}: {e}")
@@ -5641,11 +5685,14 @@ def cleanup_queue():
     # Clean up stale ring attempts (safety net for missed callbacks)
     stale_ring_count = db.cleanup_old_ring_attempts(max_age_minutes=10)
 
+    # Clean up old participant records
+    stale_participants = db.cleanup_old_participants(hours=hours)
+
     caller = get_api_caller()
     db.log_activity(
         'queue_cleanup',
         f'{hours}h',
-        f"Deleted {deleted_count} old queued_calls, {stale_ring_count} stale ring_attempts",
+        f"Deleted {deleted_count} old queued_calls, {stale_ring_count} stale ring_attempts, {stale_participants} old participants",
         caller
     )
 

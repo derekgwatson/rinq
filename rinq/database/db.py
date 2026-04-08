@@ -3094,6 +3094,118 @@ class Database:
             conn.commit()
             return cursor.rowcount
 
+    # ── Call participant tracking ──────────────────────────────────────
+    # Source of truth for who is in each active call.
+
+    def add_participant(self, conference_name: str, call_sid: str, role: str,
+                        name: str = None, phone_number: str = None,
+                        email: str = None) -> None:
+        """Record a participant joining a call.
+
+        Args:
+            conference_name: The conference room name
+            call_sid: Twilio call SID for this participant
+            role: 'agent', 'customer', or 'transfer_target'
+            name: Display name
+            phone_number: E.164 phone number (if applicable)
+            email: Staff email (if agent)
+        """
+        with self._get_conn() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO call_participants
+                    (conference_name, call_sid, role, name, phone_number, email, joined_at, left_at)
+                VALUES (?, ?, ?, ?, ?, ?, datetime('now'), NULL)
+            """, (conference_name, call_sid, role, name, phone_number, email))
+            conn.commit()
+
+    def remove_participant(self, call_sid: str) -> None:
+        """Mark a participant as having left the call."""
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE call_participants SET left_at = datetime('now') WHERE call_sid = ? AND left_at IS NULL",
+                (call_sid,)
+            )
+            conn.commit()
+
+    def get_participants(self, conference_name: str, active_only: bool = True) -> list[dict]:
+        """Get participants for a conference.
+
+        Args:
+            conference_name: The conference room name
+            active_only: If True, only return participants who haven't left
+
+        Returns:
+            List of participant dicts
+        """
+        with self._get_conn() as conn:
+            if active_only:
+                rows = conn.execute(
+                    "SELECT * FROM call_participants WHERE conference_name = ? AND left_at IS NULL ORDER BY joined_at",
+                    (conference_name,)
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM call_participants WHERE conference_name = ? ORDER BY joined_at",
+                    (conference_name,)
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_participant_by_sid(self, call_sid: str) -> dict | None:
+        """Get a participant record by call SID."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM call_participants WHERE call_sid = ? AND left_at IS NULL",
+                (call_sid,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def update_participant(self, call_sid: str, **fields) -> None:
+        """Update fields on a participant record.
+
+        Args:
+            call_sid: The participant's call SID
+            **fields: Fields to update (role, name, phone_number, email)
+        """
+        allowed = {'role', 'name', 'phone_number', 'email'}
+        updates = {k: v for k, v in fields.items() if k in allowed}
+        if not updates:
+            return
+        set_clause = ', '.join(f'{k} = ?' for k in updates)
+        values = list(updates.values()) + [call_sid]
+        with self._get_conn() as conn:
+            conn.execute(
+                f"UPDATE call_participants SET {set_clause} WHERE call_sid = ? AND left_at IS NULL",
+                values
+            )
+            conn.commit()
+
+    def mark_conference_left(self, conference_name: str) -> None:
+        """Mark all participants in a conference as having left."""
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE call_participants SET left_at = datetime('now') WHERE conference_name = ? AND left_at IS NULL",
+                (conference_name,)
+            )
+            conn.commit()
+
+    def get_active_conferences(self) -> list[str]:
+        """Get conference names that have active (not left) participants."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT conference_name FROM call_participants WHERE left_at IS NULL"
+            ).fetchall()
+            return [r['conference_name'] for r in rows]
+
+    def cleanup_old_participants(self, hours: int = 24) -> int:
+        """Remove participant records older than the given hours."""
+        with self._get_conn() as conn:
+            cursor = conn.execute(
+                "DELETE FROM call_participants WHERE joined_at < datetime('now', ?)",
+                (f'-{hours} hours',)
+            )
+            conn.commit()
+            return cursor.rowcount
+
     def get_queue_stats(self, queue_id: int = None) -> dict:
         """Get statistics for queued calls.
 
