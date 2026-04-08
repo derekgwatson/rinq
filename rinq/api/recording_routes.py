@@ -93,11 +93,13 @@ def register(bp):
 
         recording_sid = request.form.get('RecordingSid')
         call_sid = request.form.get('CallSid')
+        conference_sid = request.form.get('ConferenceSid')
         recording_url = request.form.get('RecordingUrl')
         recording_status = request.form.get('RecordingStatus')
         recording_duration = request.form.get('RecordingDuration', '0')
 
-        logger.info(f"Recording status webhook: {recording_sid} -> {recording_status}")
+        logger.info(f"Recording status webhook: {recording_sid} -> {recording_status}" +
+                     (f" (conference={conference_sid})" if conference_sid else f" (call={call_sid})"))
 
         if recording_status != 'completed':
             logger.info(f"Recording {recording_sid} status {recording_status} - ignoring")
@@ -111,42 +113,77 @@ def register(bp):
 
         from_number = ''
         to_number = ''
-        try:
-            twilio = get_twilio_service()
-            call = twilio.client.calls(call_sid).fetch()
-            from_number = call.from_formatted or getattr(call, '_from', None) or ''
-            to_number = call.to_formatted or call.to or ''
-        except Exception as e:
-            logger.warning(f"Could not fetch call details from Twilio: {e}")
-
         call_type = 'unknown'
         staff_email = None
         staff_name = None
         caller_name = None
 
-        queued_call = db.get_queued_call_by_sid(call_sid)
-        if queued_call:
-            call_type = 'inbound'
-            answered_by = queued_call.get('answered_by')
-            from_number = from_number or queued_call.get('caller_number', '')
-            caller_name = queued_call.get('customer_name')
-            staff_email, staff_name = _normalize_staff_identifier(answered_by)
-        else:
-            activities = db.get_activity_log(limit=20)
-            for activity in activities:
-                if call_sid in (activity.get('details') or ''):
-                    if 'outbound_call' in activity.get('action', ''):
-                        call_type = 'outbound'
-                        to_number = to_number or activity.get('target', '')
-                    elif 'incoming_call' in activity.get('action', ''):
-                        call_type = 'inbound'
-                    performed_by = activity.get('performed_by', '')
-                    staff_email, staff_name = _normalize_staff_identifier(performed_by)
-                    break
+        if conference_sid:
+            # Conference recording — resolve from call_participants
+            # Find the conference name from any participant's call_sid
+            # or look up by conference SID via Twilio
+            conference_name = None
+            try:
+                twilio = get_twilio_service()
+                conf = twilio.client.conferences(conference_sid).fetch()
+                conference_name = conf.friendly_name
+            except Exception as e:
+                logger.warning(f"Could not fetch conference {conference_sid}: {e}")
 
-            if not staff_email and from_number and from_number.startswith('client:'):
-                staff_email, staff_name = _normalize_staff_identifier(from_number)
-                call_type = 'outbound'
+            if conference_name:
+                participants = db.get_participants(conference_name, active_only=False)
+                for p in participants:
+                    if p['role'] == 'agent' and not staff_email:
+                        staff_email = p.get('email')
+                        staff_name = p.get('name')
+                    elif p['role'] == 'customer':
+                        from_number = p.get('phone_number') or ''
+                        caller_name = p.get('name')
+
+                # Determine call type from conference name
+                if conference_name.startswith('hold_room_'):
+                    call_type = 'inbound'
+                elif conference_name.startswith('call_'):
+                    call_type = 'outbound'
+                    # For outbound, from is the agent, to is the customer
+                    to_number = from_number
+                    from_number = staff_email or ''
+
+                # Use the conference name as the call_sid for the recording record
+                call_sid = call_sid or conference_name
+        else:
+            # Call-level recording (legacy) — resolve from Twilio + DB
+            try:
+                twilio = get_twilio_service()
+                call = twilio.client.calls(call_sid).fetch()
+                from_number = call.from_formatted or getattr(call, '_from', None) or ''
+                to_number = call.to_formatted or call.to or ''
+            except Exception as e:
+                logger.warning(f"Could not fetch call details from Twilio: {e}")
+
+            queued_call = db.get_queued_call_by_sid(call_sid)
+            if queued_call:
+                call_type = 'inbound'
+                answered_by = queued_call.get('answered_by')
+                from_number = from_number or queued_call.get('caller_number', '')
+                caller_name = queued_call.get('customer_name')
+                staff_email, staff_name = _normalize_staff_identifier(answered_by)
+            else:
+                activities = db.get_activity_log(limit=20)
+                for activity in activities:
+                    if call_sid in (activity.get('details') or ''):
+                        if 'outbound_call' in activity.get('action', ''):
+                            call_type = 'outbound'
+                            to_number = to_number or activity.get('target', '')
+                        elif 'incoming_call' in activity.get('action', ''):
+                            call_type = 'inbound'
+                        performed_by = activity.get('performed_by', '')
+                        staff_email, staff_name = _normalize_staff_identifier(performed_by)
+                        break
+
+                if not staff_email and from_number and from_number.startswith('client:'):
+                    staff_email, staff_name = _normalize_staff_identifier(from_number)
+                    call_type = 'outbound'
 
         result = recording_service.process_completed_recording(
             recording_sid=recording_sid,

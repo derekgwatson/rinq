@@ -331,81 +331,131 @@ class RecordingService:
         return False
 
     def start_recording(self, call_sid: str) -> dict:
-        """Start recording an active call.
+        """Start recording an active call via its conference.
 
-        Uses Twilio's REST API to start recording on the call.
+        Finds the conference for the call and records at the conference level,
+        capturing all participants including across transfers.
+
+        Falls back to call-level recording if no conference is found.
 
         Args:
-            call_sid: The Twilio call SID to record
+            call_sid: The agent's Twilio call SID
 
         Returns:
             Dict with 'success' and 'recording_sid' or 'error'
         """
         try:
             client = get_twilio_service().client
+            status_callback = f"{config.webhook_base_url}/api/voice/recording-status"
+
+            # Try conference recording first
+            conference_name = self.db.get_call_conference(call_sid)
+            if conference_name:
+                confs = twilio_list(client.conferences,
+                    friendly_name=conference_name, status='in-progress', limit=1
+                )
+                if confs:
+                    recording = confs[0].recordings.create(
+                        recording_status_callback=status_callback,
+                        recording_status_callback_event=['completed', 'absent'],
+                    )
+                    logger.info(f"Started conference recording for {conference_name}: {recording.sid}")
+                    return {
+                        'success': True,
+                        'recording_sid': recording.sid,
+                        'conference': conference_name,
+                    }
+
+            # Fallback to call-level recording
             recording = client.calls(call_sid).recordings.create(
-                recording_status_callback=f"{config.webhook_base_url}/api/voice/recording-status",
+                recording_status_callback=status_callback,
                 recording_status_callback_event=['completed', 'absent'],
             )
-            logger.info(f"Started recording for call {call_sid}: {recording.sid}")
+            logger.info(f"Started call recording for {call_sid}: {recording.sid}")
             return {
                 'success': True,
                 'recording_sid': recording.sid,
             }
         except TwilioException as e:
-            logger.error(f"Failed to start recording for call {call_sid}: {e}")
+            logger.error(f"Failed to start recording for {call_sid}: {e}")
             return {'success': False, 'error': str(e)}
 
     def stop_recording(self, call_sid: str) -> dict:
         """Stop recording an active call.
 
-        Stops all active recordings on the call.
+        Checks both conference recordings and call recordings.
 
         Args:
-            call_sid: The Twilio call SID
+            call_sid: The agent's Twilio call SID
 
         Returns:
             Dict with 'success' and 'stopped_count' or 'error'
         """
         try:
             client = get_twilio_service().client
-            recordings = [r for r in twilio_list(client.calls(call_sid).recordings) if r.status == 'in-progress']
-
             stopped = 0
-            for recording in recordings:
-                recording.update(status='stopped')
-                stopped += 1
-                logger.info(f"Stopped recording {recording.sid}")
+
+            # Try conference recordings first
+            conference_name = self.db.get_call_conference(call_sid)
+            if conference_name:
+                confs = twilio_list(client.conferences,
+                    friendly_name=conference_name, status='in-progress', limit=1
+                )
+                if confs:
+                    for r in twilio_list(confs[0].recordings):
+                        if r.status == 'in-progress':
+                            r.update(status='stopped')
+                            stopped += 1
+                            logger.info(f"Stopped conference recording {r.sid}")
+
+            # Also check call-level recordings (backward compat)
+            for r in twilio_list(client.calls(call_sid).recordings):
+                if r.status == 'in-progress':
+                    r.update(status='stopped')
+                    stopped += 1
+                    logger.info(f"Stopped call recording {r.sid}")
 
             return {
                 'success': True,
                 'stopped_count': stopped,
             }
         except TwilioException as e:
-            logger.error(f"Failed to stop recording for call {call_sid}: {e}")
+            logger.error(f"Failed to stop recording for {call_sid}: {e}")
             return {'success': False, 'error': str(e)}
 
     def get_recording_status(self, call_sid: str) -> dict:
         """Get recording status for a call.
 
+        Checks both conference recordings and call recordings.
+
         Args:
-            call_sid: The Twilio call SID
+            call_sid: The agent's Twilio call SID
 
         Returns:
             Dict with 'recording' (bool), 'recording_sid' (if recording)
         """
         try:
             client = get_twilio_service().client
-            recordings = [r for r in twilio_list(client.calls(call_sid).recordings) if r.status == 'in-progress']
 
-            if recordings:
-                return {
-                    'recording': True,
-                    'recording_sid': recordings[0].sid,
-                }
+            # Check conference recordings first
+            conference_name = self.db.get_call_conference(call_sid)
+            if conference_name:
+                confs = twilio_list(client.conferences,
+                    friendly_name=conference_name, status='in-progress', limit=1
+                )
+                if confs:
+                    for r in twilio_list(confs[0].recordings):
+                        if r.status == 'in-progress':
+                            return {'recording': True, 'recording_sid': r.sid}
+
+            # Fallback to call recordings
+            for r in twilio_list(client.calls(call_sid).recordings):
+                if r.status == 'in-progress':
+                    return {'recording': True, 'recording_sid': r.sid}
+
             return {'recording': False}
         except TwilioException as e:
-            logger.error(f"Failed to get recording status for call {call_sid}: {e}")
+            logger.error(f"Failed to get recording status for {call_sid}: {e}")
             return {'recording': False, 'error': str(e)}
 
     def get_user_recording_preference(self, email: str) -> bool:
