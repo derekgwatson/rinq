@@ -33,8 +33,10 @@ def get_call_state(agent_call_sid: str, caller_email: str = None) -> dict:
     agent_participant = db.get_participant_by_sid(agent_call_sid)
     if agent_participant:
         conf_name = agent_participant['conference_name']
+        logger.debug(f"Call state: found participant record for {agent_call_sid} in {conf_name}")
     else:
         conf_name = db.get_call_conference(agent_call_sid)
+        logger.debug(f"Call state: no participant record for {agent_call_sid}, call_log conference={conf_name}")
 
     if not conf_name:
         # No conference found — verify the call is still active
