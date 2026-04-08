@@ -2088,18 +2088,57 @@ def queue_agent_answer(queue_id):
         _cancel_agent_calls(customer_call_sid, except_call_sid=agent_call_sid)
     threading.Thread(target=cancel_others, daemon=True).start()
 
-    # Connect the agent to the queue - this dequeues the waiting caller
+    # Conference-based answer: same pattern as browser queue answer.
+    # Redirect customer from queue into conference, agent joins same conference.
+    conference_name = f"hold_room_{customer_call_sid}"
+
+    twilio_service = get_twilio_service()
+    conference_url = f"{config.webhook_base_url}/api/voice/conference/join?room={conference_name}&role=caller"
+    try:
+        twilio_service.client.calls(customer_call_sid).update(
+            url=conference_url, method='POST'
+        )
+    except Exception as e:
+        logger.error(f"Auto-ring answer: redirect FAILED for {customer_call_sid}: {e}")
+        twiml = '''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say>Sorry, we could not connect to the caller. They may have hung up.</Say>
+    <Hangup/>
+</Response>'''
+        return Response(twiml, mimetype='application/xml')
+
+    db.update_queued_call_status(customer_call_sid, 'answered', answered_by=agent_info)
+    db.update_call_log(customer_call_sid, {
+        'status': 'answered',
+        'agent_email': agent_email,
+        'answered_at': 'CURRENT_TIMESTAMP',
+    })
+    db.set_call_conference(customer_call_sid, conference_name)
+
+    # Record participants
+    queued_call = db.get_queued_call_by_sid(customer_call_sid)
+    agent_user = db.get_user_by_email(agent_email) if agent_email else None
+    agent_name = (agent_user.get('friendly_name') if agent_user else None) or agent_info
+    db.add_participant(conference_name, agent_call_sid, 'agent',
+                       name=agent_name, email=agent_email)
+    customer_number = (queued_call.get('caller_number') or queued_call.get('from_number')) if queued_call else None
+    customer_name = (queued_call.get('customer_name') if queued_call else None) or customer_number
+    db.add_participant(conference_name, customer_call_sid, 'customer',
+                       name=customer_name, phone_number=customer_number)
+
+    # Agent joins the conference — brief message gives redirect time
     twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
+    <Say>Connecting.</Say>
     <Dial>
-        <Queue>{xml_escape(queue_name)}</Queue>
+        <Conference endConferenceOnExit="true" startConferenceOnEnter="true">{xml_escape(conference_name)}</Conference>
     </Dial>
 </Response>'''
 
     db.log_activity(
         action="agent_answered_auto_ring",
         target=queue.get('name'),
-        details=f"Agent {agent_info} answered, connecting to customer call {customer_call_sid}",
+        details=f"Agent {agent_info} answered, connecting to customer call {customer_call_sid} via conference {conference_name}",
         performed_by="twilio"
     )
 
