@@ -673,6 +673,59 @@ class TwilioService:
             return {"success": False, "error": str(e)}
 
     # =========================================================================
+    # SIP Registration Presence
+    # =========================================================================
+
+    def refresh_sip_registrations(self) -> dict:
+        """Check which SIP devices are currently registered and update staff_extensions.
+
+        Queries Twilio for active SIP registrations, maps them back to staff
+        emails via the users table, and stamps sip_registered_at on matching
+        staff_extensions rows. Clears the timestamp for users no longer registered.
+
+        Designed to be called every ~10 minutes via cron.
+        """
+        try:
+            domains = self.get_sip_domains()
+            if not domains:
+                return {"success": True, "registered": 0, "cleared": 0, "skipped": "no SIP domains"}
+
+            # Collect registered usernames across all domains
+            registered_usernames = set()
+            for domain in domains:
+                try:
+                    registrations = twilio_list(self.client.sip.domains(domain['sid']).registrations)
+                    for reg in registrations:
+                        registered_usernames.add(reg.address_of_record)
+                except (TwilioRestException, TwilioException) as e:
+                    logger.warning(f"Failed to get registrations for domain {domain['domain_name']}: {e}")
+
+            # Map SIP usernames to staff emails
+            db = self.db
+            users = db.get_users()
+            username_to_email = {
+                u['username']: u['staff_email']
+                for u in users
+                if u.get('username') and u.get('staff_email')
+            }
+
+            registered_emails = set()
+            for addr in registered_usernames:
+                # address_of_record may be "sip:username@domain" or just "username"
+                clean = addr.replace('sip:', '').split('@')[0]
+                email = username_to_email.get(clean)
+                if email:
+                    registered_emails.add(email)
+
+            counts = db.update_sip_registrations(registered_emails)
+            logger.info(f"SIP registration refresh: {counts['registered']} registered, {counts['cleared']} cleared")
+            return {"success": True, **counts}
+
+        except Exception as e:
+            logger.error(f"Failed to refresh SIP registrations: {e}")
+            return {"success": False, "error": str(e)}
+
+    # =========================================================================
     # Verified Caller IDs (Outgoing Caller IDs)
     # =========================================================================
 

@@ -2421,6 +2421,37 @@ class Database:
             conn.commit()
             return {'success': True}
 
+    def update_sip_registrations(self, registered_emails: set[str]) -> dict:
+        """Bulk-update sip_registered_at for staff extensions.
+
+        Sets the timestamp for emails in registered_emails and clears it
+        for all others. Returns counts of registered and cleared.
+        """
+        now = datetime.utcnow().isoformat()
+        registered_count = 0
+        cleared_count = 0
+        with self._get_conn() as conn:
+            extensions = conn.execute("SELECT email, sip_registered_at FROM staff_extensions").fetchall()
+            for ext in extensions:
+                email = ext['email']
+                was_registered = bool(ext['sip_registered_at'])
+                is_registered = email in registered_emails
+
+                if is_registered:
+                    conn.execute(
+                        "UPDATE staff_extensions SET sip_registered_at = ? WHERE email = ?",
+                        (now, email)
+                    )
+                    registered_count += 1
+                elif was_registered:
+                    conn.execute(
+                        "UPDATE staff_extensions SET sip_registered_at = NULL WHERE email = ?",
+                        (email,)
+                    )
+                    cleared_count += 1
+            conn.commit()
+        return {"registered": registered_count, "cleared": cleared_count}
+
     def get_or_create_staff_extension(self, email: str, created_by: str) -> dict:
         """Get a staff member's extension, creating one if it doesn't exist."""
         ext = self.get_staff_extension(email)

@@ -4563,13 +4563,41 @@ def get_presence():
             except (ValueError, TypeError):
                 pass
 
+        # SIP device registered (refreshed every ~10 min by cron)
+        sip_reg = ext.get('sip_registered_at')
+        sip_registered = False
+        if sip_reg:
+            try:
+                reg_time = datetime.fromisoformat(sip_reg)
+                sip_registered = (now - reg_time).total_seconds() < 900  # 15 min grace
+            except (ValueError, TypeError):
+                pass
+
         presence[email] = {
             'online': is_online,
             'dnd': bool(ext.get('dnd_enabled')),
             'on_call': email.lower() in on_call_emails,
+            'sip_registered': sip_registered,
         }
 
     return jsonify({"presence": presence})
+
+
+@api_bp.route('/sip/refresh-registrations', methods=['POST'])
+@api_or_session_auth
+def refresh_sip_registrations():
+    """Refresh SIP device registration status.
+
+    Checks Twilio for active SIP registrations and updates
+    staff_extensions.sip_registered_at. Called every 10 minutes via cron.
+
+    Returns:
+        {"success": true, "registered": N, "cleared": N}
+    """
+    from rinq.services.twilio_service import get_twilio_service
+    service = get_twilio_service()
+    result = service.refresh_sip_registrations()
+    return jsonify(result)
 
 
 # =============================================================================
