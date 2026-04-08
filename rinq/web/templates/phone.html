@@ -5021,6 +5021,7 @@ function renderCallStatePanel(state) {
         panel.style.display = 'none';
         return;
     }
+    console.log('renderCallStatePanel:', state.participants?.length, 'participants, transfer:', !!state.transfer);
 
     // Flat list of all participants across all conferences
     const allParticipants = [...(state.participants || [])];
