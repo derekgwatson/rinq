@@ -591,17 +591,24 @@ class Database:
             return dict(row) if row else None
 
     def get_recording_log(self, limit: int = 100, call_type: str = None,
-                          exclude_voicemail: bool = False) -> list[dict]:
+                          exclude_voicemail: bool = False,
+                          staff_emails: list[str] = None) -> list[dict]:
         """Get recent recording log entries.
 
         Args:
             limit: Max number of records to return
             call_type: Filter by call type ('inbound', 'outbound', etc.)
             exclude_voicemail: If True, exclude voicemail recordings
+            staff_emails: If provided, only return recordings for these staff
         """
         with self._get_conn() as conn:
             query = "SELECT * FROM recording_log WHERE 1=1"
             params = []
+
+            if staff_emails:
+                placeholders = ','.join('?' for _ in staff_emails)
+                query += f" AND staff_email IN ({placeholders})"
+                params.extend(e.lower() for e in staff_emails)
 
             if call_type:
                 query += " AND call_type = ?"

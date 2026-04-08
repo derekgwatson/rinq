@@ -306,7 +306,7 @@ def main():
     sp.add_argument('--tenant', required=True, help='Tenant ID')
     sp.add_argument('--email', required=True, help='User email')
     sp.add_argument('--name', help='User display name')
-    sp.add_argument('--role', default='admin', choices=['admin', 'manager', 'user'])
+    sp.add_argument('--role', default='admin')
     sp.set_defaults(func=add_user)
 
     # list-tenants

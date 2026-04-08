@@ -29,6 +29,60 @@
 .admin-card .text-muted {
     font-size: 0.9em;
 }
+.admins-section {
+    margin-top: 20px;
+}
+.admins-section h3 {
+    margin: 0 0 15px 0;
+}
+.admin-add-form {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 15px;
+}
+.admin-add-form select {
+    padding: 8px 12px;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    font-size: 0.9em;
+    min-width: 250px;
+}
+.admin-add-form button {
+    padding: 8px 16px;
+    background: #27ae60;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.9em;
+    font-weight: 600;
+}
+.admin-add-form button:hover {
+    background: #219a52;
+}
+.admin-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+}
+.admin-row + .admin-row {
+    border-top: 1px solid #eee;
+}
+.btn-remove {
+    padding: 4px 10px;
+    background: none;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    color: #6c757d;
+    cursor: pointer;
+    font-size: 0.8em;
+}
+.btn-remove:hover {
+    border-color: #e74c3c;
+    color: #e74c3c;
+}
 {% endblock %}
 
 {% block content %}
@@ -127,6 +181,36 @@
         </a>
     </div>
 </div>
+
+{% if admins is defined %}
+<div class="card admins-section">
+    <h3>Admins</h3>
+    <form class="admin-add-form" method="POST" action="{{ url_for('web.admin_add') }}">
+        <select name="email" required>
+            <option value="">Add admin...</option>
+            {% for s in available_staff %}
+            <option value="{{ s._email }}">{{ s.name }} ({{ s._email }})</option>
+            {% endfor %}
+        </select>
+        <button type="submit">Add</button>
+    </form>
+    {% for perm in admins %}
+    <div class="admin-row">
+        <span>{{ perm.email }}</span>
+        {% if perm.email != current_user.email %}
+        <form method="POST" action="{{ url_for('web.admin_remove') }}"
+              onsubmit="return confirm('Remove {{ perm.email }} as admin?')">
+            <input type="hidden" name="email" value="{{ perm.email }}">
+            <button type="submit" class="btn-remove">Remove</button>
+        </form>
+        {% endif %}
+    </div>
+    {% endfor %}
+    {% if not admins %}
+    <p class="text-muted" style="margin: 0;">No admins configured.</p>
+    {% endif %}
+</div>
+{% endif %}
 
 {% if account_info and not account_info.get('error') %}
 <div class="card" style="margin-top: 20px;">

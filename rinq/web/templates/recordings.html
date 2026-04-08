@@ -217,7 +217,7 @@ input:checked + .toggle-slider:before {
 
     <div class="help-tip" style="margin-bottom: 20px;">
         <strong>How it works:</strong>
-        {% if is_admin %}
+        {% if can_filter_staff %}
         You can view all staff recordings or filter to your own using the dropdown below.
         {% else %}
         This page shows recordings from your calls only.
@@ -237,7 +237,7 @@ input:checked + .toggle-slider:before {
             <option value="inbound" {% if filter_type == 'inbound' %}selected{% endif %}>Inbound</option>
             <option value="outbound" {% if filter_type == 'outbound' %}selected{% endif %}>Outbound</option>
         </select>
-        {% if is_admin %}
+        {% if can_filter_staff %}
         <label for="staffFilter">Staff:</label>
         <select id="staffFilter" onchange="filterRecordings()">
             <option value="">All staff</option>
@@ -328,7 +328,7 @@ input:checked + .toggle-slider:before {
     <div class="empty-state">
         <h3>No recordings found</h3>
         <p class="text-muted">
-            {% if is_admin and filter_staff != 'mine' %}
+            {% if can_filter_staff and filter_staff != 'mine' %}
             No call recordings found for any staff member.
             {% else %}
             You don't have any call recordings yet.

@@ -4,7 +4,6 @@ Standalone auth decorators for Tina/Rinq.
 Provides the same interface as GatewayAuth:
 - login_required
 - admin_required
-- manager_required
 - get_current_user()
 - api_or_session_auth (for API endpoints)
 """
@@ -92,23 +91,6 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated
 
-
-def manager_required(f):
-    """Require manager or admin role."""
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        if not session.get('user_id'):
-            return redirect(url_for('standalone_auth.login'))
-        user = get_current_user()
-        if not user:
-            return redirect(url_for('standalone_auth.login'))
-        base_role = user.role.split(':')[0] if ':' in user.role else user.role
-        if base_role not in ('manager', 'admin'):
-            from flask import flash
-            flash('You need manager access to view this page.', 'warning')
-            return redirect(url_for('web.index'))
-        return f(*args, **kwargs)
-    return decorated
 
 
 def api_or_session_auth(view_func):

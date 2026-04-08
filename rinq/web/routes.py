@@ -15,7 +15,7 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash,
 
 logger = logging.getLogger(__name__)
 
-from rinq.services.auth import login_required, admin_required, manager_required, get_current_user
+from rinq.services.auth import login_required, admin_required, get_current_user
 from rinq.services.twilio_service import get_twilio_service
 from rinq.database.db import get_db
 from rinq.config import config
@@ -248,6 +248,8 @@ def toggle_queue(queue_id):
 @admin_required
 def admin():
     """Admin dashboard - tiles linking to admin sub-pages."""
+    from rinq.integrations import get_permission_service, get_staff_directory
+
     service = get_twilio_service()
     user = get_current_user()
 
@@ -260,6 +262,28 @@ def admin():
     phone_numbers = service.get_phone_numbers()
     account_info = service.get_account_info()
 
+    # Get current admins for the admin management section
+    perms = get_permission_service()
+    admins = [p for p in (perms.get_permissions('tina') if perms else [])
+              if p.get('role') == 'admin']
+    admins.sort(key=lambda p: p.get('email', ''))
+
+    # Get staff list for the add-admin dropdown
+    admin_emails = {p.get('email', '').lower() for p in admins}
+    staff_dir = get_staff_directory()
+    try:
+        all_staff = staff_dir.get_active_staff() if staff_dir else []
+        available_staff = []
+        for s in all_staff:
+            staff_email = (s.get('work_email') or s.get('google_primary_email') or s.get('email') or '').lower()
+            if staff_email and staff_email not in admin_emails:
+                s['_email'] = staff_email
+                available_staff.append(s)
+        available_staff.sort(key=lambda s: s.get('name', ''))
+    except Exception as e:
+        logger.warning(f"Failed to get staff list for admin dropdown: {e}")
+        available_staff = []
+
     return render_template('admin.html',
                          phone_numbers_count=len(phone_numbers),
                          verified_caller_ids_count=len(db.get_verified_caller_ids(active_only=False)),
@@ -269,6 +293,8 @@ def admin():
                          audio_files=db.get_audio_files(),
                          holiday_templates=db.get_holiday_templates(),
                          account_info=account_info,
+                         admins=admins,
+                         available_staff=available_staff,
                          current_user=user)
 
 
@@ -1472,17 +1498,16 @@ def activity():
 def reports():
     """View call statistics and reporting dashboard.
 
-    Team-centric: managers see their reportees, admins see all staff,
-    regular users see just their own stats.
+    Admins see all staff, users with reportees see their team,
+    everyone else sees just their own stats.
     """
     from rinq.services.reporting_service import get_reporting_service
     from rinq.integrations import get_staff_directory
 
     period = request.args.get('period', 'today')
     user = get_current_user()
-    user_role = getattr(user, '_role', 'user')
 
-    # Build team_emails based on role / reportees
+    # Build team_emails based on admin status / reportees
     team_emails = None
     team_label = None
     staff_dir = get_staff_directory()
@@ -1498,7 +1523,7 @@ def reports():
         team_label = 'All Staff'
 
     else:
-        # Check if user has reportees (manager by hierarchy, not just role)
+        # Check if user has reportees via reports_to hierarchy
         reportees = []
         if staff_dir:
             try:
@@ -1554,90 +1579,34 @@ def leaderboard():
                          active_nav='leaderboard')
 
 
-@web_bp.route('/team')
-@manager_required
-def team():
-    """Team management — add/remove Tina users and managers."""
-    from rinq.integrations import get_permission_service, get_staff_directory
-
-    user = get_current_user()
-    db = get_db()
-    perms = get_permission_service()
-
-    # Get current Tina permissions
-    permissions = perms.get_permissions('tina') if perms else []
-
-    # Only show elevated roles (user access is automatic for all domain staff)
-    permissions = [p for p in permissions if p.get('role') in ('manager', 'admin')]
-
-    # Get staff list for the dropdown — all users, not just active phone agents
-    elevated_emails = {p.get('email', '').lower() for p in permissions}
-    all_users = db.get_users()
-    available_staff = []
-    for u in all_users:
-        staff_email = (u.get('staff_email') or '').lower()
-        if staff_email and staff_email not in elevated_emails:
-            available_staff.append({
-                '_email': staff_email,
-                'name': u.get('friendly_name') or staff_email.split('@')[0].replace('.', ' ').title(),
-            })
-    available_staff.sort(key=lambda s: s.get('name', ''))
-
-    # Sort: admins first, then managers
-    role_order = {'admin': 0, 'manager': 1}
-    permissions.sort(key=lambda p: (role_order.get(p.get('role', 'manager'), 9), p.get('email', '')))
-
-    is_admin = user.is_admin
-    available_roles = [
-        {'value': 'manager', 'label': 'Manager'},
-    ]
-    if is_admin:
-        available_roles.append({'value': 'admin', 'label': 'Admin'})
-
-    return render_template('team.html',
-                         permissions=permissions,
-                         available_roles=available_roles,
-                         available_staff=available_staff,
-                         is_admin=is_admin,
-                         current_user=user,
-                         active_nav='team')
-
-
-@web_bp.route('/team/add', methods=['POST'])
-@manager_required
-def team_add():
-    """Add a user to Tina via permission service."""
+@web_bp.route('/admin/admins/add', methods=['POST'])
+@admin_required
+def admin_add():
+    """Add an admin via permission service."""
     from rinq.integrations import get_permission_service
 
     user = get_current_user()
     email = request.form.get('email', '').strip().lower()
-    role = request.form.get('role', 'user')
 
     if not email:
         flash('Email is required.', 'danger')
-        return redirect(url_for('web.team'))
-
-    # Managers can only assign user/manager
-    base_role = role.split(':')[0]
-    if base_role == 'admin' and not user.is_admin:
-        flash('Only admins can assign admin roles.', 'danger')
-        return redirect(url_for('web.team'))
+        return redirect(url_for('web.admin'))
 
     perms = get_permission_service()
     if not perms:
         flash('No permission service configured.', 'danger')
-    elif perms.add_permission(email, 'tina', role, user.email):
-        flash(f'Added {email} as {role}.', 'success')
+    elif perms.add_permission(email, 'tina', 'admin', user.email):
+        flash(f'Added {email} as admin.', 'success')
     else:
         flash(f'Failed to add {email} — check server logs for details.', 'danger')
 
-    return redirect(url_for('web.team'))
+    return redirect(url_for('web.admin'))
 
 
-@web_bp.route('/team/remove', methods=['POST'])
-@manager_required
-def team_remove():
-    """Remove a user from Tina via permission service."""
+@web_bp.route('/admin/admins/remove', methods=['POST'])
+@admin_required
+def admin_remove():
+    """Remove an admin via permission service."""
     from rinq.integrations import get_permission_service
 
     user = get_current_user()
@@ -1645,31 +1614,19 @@ def team_remove():
 
     if not email:
         flash('Email is required.', 'danger')
-        return redirect(url_for('web.team'))
+        return redirect(url_for('web.admin'))
 
-    # Don't let managers remove admins
-    perms_svc = get_permission_service()
-    if not user.is_admin and perms_svc:
-        try:
-            all_perms = perms_svc.get_permissions('tina')
-            target_perm = next((p for p in all_perms if p.get('email', '').lower() == email), None)
-            if target_perm and target_perm.get('role') == 'admin':
-                flash('Only admins can remove other admins.', 'danger')
-                return redirect(url_for('web.team'))
-        except Exception:
-            pass
-
-    # Don't let users remove themselves
     if email == user.email.lower():
         flash("You can't remove yourself.", 'danger')
-        return redirect(url_for('web.team'))
+        return redirect(url_for('web.admin'))
 
-    if perms_svc and perms_svc.remove_permission(email, 'tina', user.email):
-        flash(f'Removed {email}.', 'success')
+    perms = get_permission_service()
+    if perms and perms.remove_permission(email, 'tina', user.email):
+        flash(f'Removed {email} as admin.', 'success')
     else:
-        flash('Failed to remove user.', 'danger')
+        flash('Failed to remove admin.', 'danger')
 
-    return redirect(url_for('web.team'))
+    return redirect(url_for('web.admin'))
 
 
 @web_bp.route('/recordings')
@@ -1686,24 +1643,33 @@ def recordings():
     # Get user's recording preference
     recording_enabled = db.get_user_recording_default(user.email)
 
-    # Check if user is admin or manager (both can see all recordings)
+    # Build the list of staff emails this user can see recordings for
     is_admin = user.is_admin
-    user_role = getattr(user, '_role', 'user')
-    can_see_all = is_admin or user_role == 'manager'
 
-    # Get recordings based on filters
-    # Regular users can only see their own recordings
-    # Admins and managers can toggle between "mine" and "all"
-    if not can_see_all or filter_staff == 'mine':
-        # Regular users always get their own, admins/managers get theirs if they select "mine"
-        recordings_list = db.get_recordings_for_staff(user.email, limit=100)
-        # Apply call type filter if specified
-        if filter_type:
-            recordings_list = [r for r in recordings_list if r.get('call_type') == filter_type]
-    elif filter_type:
-        recordings_list = db.get_recording_log(limit=100, call_type=filter_type, exclude_voicemail=True)
+    if is_admin and filter_staff != 'mine':
+        # Admins see all recordings
+        staff_emails = None
+    elif filter_staff == 'mine':
+        staff_emails = [user.email]
     else:
-        recordings_list = db.get_recording_log(limit=100, exclude_voicemail=True)
+        # User sees own + reportees' recordings
+        from rinq.integrations import get_staff_directory
+        staff_emails = [user.email]
+        staff_dir = get_staff_directory()
+        if staff_dir:
+            try:
+                reportees = staff_dir.get_reportees(user.email, recursive=True)
+                staff_emails.extend(r.get('email') for r in reportees if r.get('email'))
+            except Exception as e:
+                logger.warning(f"Failed to get reportees for {user.email}: {e}")
+
+    has_reportees = is_admin or (staff_emails and len(staff_emails) > 1)
+    recordings_list = db.get_recording_log(
+        limit=100,
+        call_type=filter_type,
+        exclude_voicemail=True,
+        staff_emails=staff_emails,
+    )
 
     return render_template('recordings.html',
                          recordings=recordings_list,
@@ -1711,7 +1677,7 @@ def recordings():
                          recordings_group=config.recordings_group_email,
                          filter_type=filter_type,
                          filter_staff=filter_staff,
-                         is_admin=can_see_all,
+                         can_filter_staff=has_reportees,
                          current_user=user)
 
 
