@@ -84,6 +84,12 @@ def init_integrations(provider: str = 'none', **kwargs):
         _staff_directory = LocalStaffDirectory()
         logger.info("Staff directory: local (staff_extensions table)")
 
+    # Permission service — fall back to local (permissions table)
+    if not _permission_service:
+        from rinq.integrations.local.permissions import LocalPermissionService
+        _permission_service = LocalPermissionService()
+        logger.info("Permission service: local (tenant DB)")
+
     # Customer lookup — auto-detect from WATSON_CLARA_URL
     if not _customer_lookup and os.environ.get('WATSON_CLARA_URL'):
         from rinq.integrations.watson.customers import WatsonCustomerLookup

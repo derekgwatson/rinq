@@ -3206,6 +3206,50 @@ class Database:
             conn.commit()
             return cursor.rowcount
 
+    # ── Local permissions ─────────────────────────────────────────────
+
+    def get_permissions(self, role_filter: list[str] = None) -> list[dict]:
+        """Get all permission records, optionally filtered by role."""
+        with self._get_conn() as conn:
+            if role_filter:
+                placeholders = ','.join('?' * len(role_filter))
+                rows = conn.execute(
+                    f"SELECT * FROM permissions WHERE role IN ({placeholders}) ORDER BY email",
+                    role_filter
+                ).fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM permissions ORDER BY email").fetchall()
+            return [dict(r) for r in rows]
+
+    def get_permission(self, email: str) -> dict | None:
+        """Get permission record for a specific email."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM permissions WHERE email = ?",
+                (email.lower(),)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def set_permission(self, email: str, role: str, granted_by: str = None) -> bool:
+        """Set or update a user's role. Returns True on success."""
+        with self._get_conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO permissions (email, role, granted_by) VALUES (?, ?, ?)",
+                (email.lower(), role, granted_by)
+            )
+            conn.commit()
+            return True
+
+    def remove_permission(self, email: str) -> bool:
+        """Remove a user's elevated permission. Returns True if removed."""
+        with self._get_conn() as conn:
+            cursor = conn.execute(
+                "DELETE FROM permissions WHERE email = ?",
+                (email.lower(),)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
     def get_queue_stats(self, queue_id: int = None) -> dict:
         """Get statistics for queued calls.
 
