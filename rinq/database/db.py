@@ -540,7 +540,7 @@ class Database:
         """
         with self._get_conn() as conn:
             cursor = conn.execute("""
-                INSERT INTO recording_log (
+                INSERT OR IGNORE INTO recording_log (
                     recording_sid, call_sid, from_number, to_number,
                     duration_seconds, recording_url, emailed_to, emailed_at,
                     deleted_from_twilio, created_at, google_message_id,

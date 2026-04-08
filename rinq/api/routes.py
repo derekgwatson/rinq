@@ -310,13 +310,17 @@ def _cancel_agent_calls(customer_call_sid: str, except_call_sid: str = None):
             logger.debug(f"Could not cancel agent call {agent_sid}: {e}")
 
     if cancelled > 0:
-        db = get_db()
-        db.log_activity(
-            action="agent_calls_cancelled",
-            target=customer_call_sid,
-            details=f"Cancelled {cancelled} pending agent calls",
-            performed_by="system"
-        )
+        try:
+            db = get_db()
+            db.log_activity(
+                action="agent_calls_cancelled",
+                target=customer_call_sid,
+                details=f"Cancelled {cancelled} pending agent calls",
+                performed_by="system"
+            )
+        except RuntimeError:
+            # No Flask app context in background thread — skip logging
+            logger.info(f"Cancelled {cancelled} agent calls for {customer_call_sid} (no app context for activity log)")
 
 
 def _get_sip_domain() -> str | None:
@@ -3558,7 +3562,9 @@ def voicemail_handler():
         logger.warning(f"Voicemail lookup: phone={to_number}, call_flow_id={phone_record.get('call_flow_id') if phone_record else 'no phone record'}")
 
     # Log the recording with call_type = 'voicemail'
-    db.log_recording({
+    # INSERT OR IGNORE handles duplicate Twilio webhooks — if the recording_sid
+    # already exists, lastrowid will be 0 and we skip routing to avoid duplicate tickets.
+    row_id = db.log_recording({
         "recording_sid": recording_sid,
         "call_sid": call_sid,
         "from_number": from_number,
@@ -3571,6 +3577,10 @@ def voicemail_handler():
         "deleted_from_twilio": 0,
         "created_at": datetime.utcnow().isoformat(),
     })
+
+    if not row_id:
+        logger.info(f"Voicemail {recording_sid} already logged — duplicate webhook, skipping")
+        return '<Response/>', 200
 
     # Route voicemail if destination configured
     if voicemail_dest:
@@ -4467,12 +4477,13 @@ def toggle_dnd():
     if not ext:
         return jsonify({'error': 'No staff extension found'}), 404
 
-    db.set_dnd(email, bool(enabled), get_api_caller())
+    performed_by = get_api_caller()
+    db.set_dnd(email, bool(enabled), performed_by)
     db.log_activity(
         action="dnd_toggled",
         target=email,
         details=f"DND {'enabled' if enabled else 'disabled'}",
-        performed_by=caller
+        performed_by=performed_by
     )
 
     return jsonify({'success': True, 'dnd_enabled': bool(enabled)})
