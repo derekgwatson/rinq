@@ -138,12 +138,17 @@ Several functions spawn background threads for Twilio API calls (ringing agents,
 12. **SIP domain voice URL** — must point to `/api/voice/outbound` (handles both browser and SIP device calls). NOT `/api/sip/incoming` (doesn't exist)
 13. **SIP URI parameters** — Twilio appends `;transport=UDP` to SIP URIs. Always strip parameters after `@` before matching (e.g. `split(';')[0]`)
 14. **Tenant resolution for SIP** — SIP calls have SIP URIs in From/To, not phone numbers. Middleware resolves tenant from the SIP domain name via `twilio_sip_domain` in the tenant record
+15. **Twilio has no SIP registration API** — there is no REST API or webhook to check if a SIP device is currently registered. SIP presence is tracked by stamping `staff_extensions.sip_registered_at` when we ring or see a call from a SIP device. Users with activity in the last 24h show as "desk phone" in contacts/transfer targets
+16. **LocalStaffDirectory email field** — returns `email` key, not `google_primary_email`/`work_email` (Peter format). Code consuming staff directory results must check all three
+17. **Unix socket auth bypass** — requests hitting gunicorn directly (no `X-Forwarded-For` header) skip API key auth. All cron jobs should use `--unix-socket` instead of API keys
 
 ## Cron Jobs (derek user on server)
 
-- **Recordings purge:** daily 3am — `POST /api/recordings/purge`
-- **Stats aggregation:** every 15min — `POST /api/stats/aggregate`
-- **Queue cleanup:** every 5min — `POST /api/queue/cleanup`
+Cron jobs hit the gunicorn unix socket directly (no API key needed):
+
+- **Recordings purge:** daily 3am — `curl -s -X POST --unix-socket /var/www/rinq/rinq.sock http://localhost/api/recordings/purge`
+- **Stats aggregation:** every 15min — `curl -s -X POST --unix-socket /var/www/rinq/rinq.sock http://localhost/api/stats/aggregate`
+- **Queue cleanup:** every 5min — `curl -s -X POST --unix-socket /var/www/rinq/rinq.sock http://localhost/api/queue/cleanup`
 
 ## Testing
 
