@@ -36,68 +36,15 @@ Accumulated tech debt from 2026-04-06 testing session. Every fix risked breaking
 
 ---
 
-## Next: Call Participants Table (replaces call_state.py internals)
+## ~~Call Participants Table~~ ✅ Done (2026-04-08)
 
-### Problem
+Replaced the reverse-engineering approach with a `call_participants` table as the source of truth. Participants tracked explicitly at every lifecycle event. `call_state.py` dropped from ~390 lines to ~95 (single DB query, zero Twilio API calls per poll).
 
-The call panel reverse-engineers participant state from scattered DB entries and Twilio API calls every 3 seconds. Every fix (dedup, fallback lookups, conference name parsing) is a patch over the same fundamental issue: **nobody records who's in a call**.
-
-This causes:
-- Agent 2 (transfer target) never sees the call panel
-- Duplicate participants after transfers
-- Wrong names after blind transfers
-- Slow polling (multiple Twilio API round-trips per poll)
-
-### Solution
-
-A `call_participants` table that's the source of truth:
-
-```sql
-CREATE TABLE call_participants (
-    id INTEGER PRIMARY KEY,
-    conference_name TEXT NOT NULL,
-    call_sid TEXT NOT NULL,
-    role TEXT NOT NULL,           -- 'agent', 'customer', 'transfer_target'
-    name TEXT,
-    phone_number TEXT,
-    email TEXT,
-    joined_at TEXT NOT NULL,
-    left_at TEXT,
-    UNIQUE(conference_name, call_sid)
-);
-CREATE INDEX idx_call_participants_conf ON call_participants(conference_name);
-CREATE INDEX idx_call_participants_sid ON call_participants(call_sid);
-```
-
-Updated explicitly at every lifecycle event instead of discovered after the fact.
-
-### Entry Points That Need Writes
-
-| Event | Route/Function | Write |
-|-------|---------------|-------|
-| Agent answers queue call | `queue_agent_answer`, `conference_join` | Insert agent + customer |
-| Outbound call connects | `voice_outbound`, `outbound_customer_join` | Insert agent + customer |
-| Extension call connects | `_handle_internal_extension_call` | Insert both agents |
-| Transfer target joins | `transfer_consult_join`, `transfer_target_join` | Insert target |
-| Transfer completes | `warm_transfer_complete` | Update roles (target→agent, original agent leaves) |
-| Transfer fails | `transfer_consult_status` | Remove target |
-| Agent answers inbound | `inbound_ring_status` | Insert agent + customer |
-| Participant hangs up | `call_status_callback` | Set left_at |
-| Conference ends | cleanup | Mark all remaining as left |
-
-### Migration Path
-
-1. Create table (migration)
-2. Add DB methods: `add_participant()`, `remove_participant()`, `get_participants()`
-3. Add writes to each entry point listed above
-4. Replace `get_call_state()` internals with a simple DB read
-5. Remove old code: `resolve_participant()`, `_find_agent_in_conference()`, `_deduplicate_participants()`, `_get_customer_from_call_log()`, `build_user_map()`
-6. Call state endpoint becomes fast (no Twilio API calls) — can poll more frequently
-
-### Benefits
-
-- **Correct**: participants tracked from creation, not discovered later
-- **Fast**: single SQLite query instead of multiple Twilio API calls per poll
-- **Simple**: `get_call_state()` becomes ~20 lines instead of ~300
-- **Agent 2 works**: transfer target is explicitly added when they join
-- **No dedup needed**: each participant added once, removed once
+Also completed in this session:
+- **ring_attempts table** — fixes cross-worker ring tracking (gunicorn workers no longer have isolated in-memory state)
+- **Every call is a conference** — converted SIP auto-ring queue answer from `<Queue>` to conference. Enables consistent recording, hold, transfer, participant tracking
+- **Conference recording** — via TwiML `record="record-from-start"`, captures full call including transfers
+- **Local permission service** — team management no longer depends on external Grant API
+- **`_handle_participant_left()`** — DRY cleanup across all 5 call-end paths
+- **Outbound call improvements** — instant dial (no blocking on customer lookup), proper "Ringing..." → "Connected" status, auto-record waits for answer
+- **Old code removed** — `resolve_participant()`, `build_user_map()`, `get_conference_participants()`, `_find_agent_in_conference()`, `_deduplicate_participants()`, `_get_customer_from_call_log()`, `_build_transfer_info()`, legacy fallback path
