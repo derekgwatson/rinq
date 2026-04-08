@@ -2903,6 +2903,7 @@ async function makeCall() {
             if (currentCall.parameters && currentCall.parameters.CallSid) {
                 currentOutboundCallSid = currentCall.parameters.CallSid;
             }
+            startCallStatePolling();
             // Auto-start recording if enabled
             autoStartRecordingIfEnabled();
         });
