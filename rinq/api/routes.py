@@ -2230,8 +2230,6 @@ def conference_join():
 </Response>'''
         return Response(twiml, mimetype='application/xml')
 
-    db = get_db()
-
     # Different settings for caller vs agent
     if role == 'caller':
         # Caller: end conference when they hang up so agent side disconnects too
