@@ -5543,18 +5543,25 @@ def get_conference_participants():
     Returns:
         {"participants": [{"call_sid": "...", "hold": false, "role": "caller|agent", "name": "..."}]}
     """
-    from rinq.api.call_state import get_conference_participants as _get_conf_parts, build_user_map
-
     conference_name = request.args.get('conference')
     if not conference_name:
         return jsonify({"participants": []})
 
-    user_map = build_user_map()
-    participants = _get_conf_parts(conference_name, user_map=user_map)
-    if participants is None:
+    db = get_db()
+    participants = db.get_participants(conference_name)
+    if not participants:
         return jsonify({"participants": [], "conference_ended": True})
 
-    return jsonify({"participants": participants})
+    result = []
+    for p in participants:
+        result.append({
+            'call_sid': p['call_sid'],
+            'name': p['name'] or 'Unknown',
+            'role': p['role'],
+            'hold': False,
+            'muted': False,
+        })
+    return jsonify({"participants": result})
 
 
 # Call History
