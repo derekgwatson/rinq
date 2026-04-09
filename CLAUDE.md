@@ -150,18 +150,18 @@ Cron jobs hit the gunicorn unix socket directly (no API key needed):
 - **Stats aggregation:** every 15min — `curl -s -X POST --unix-socket /var/www/rinq/rinq.sock http://localhost/api/stats/aggregate`
 - **Queue cleanup:** every 5min — `curl -s -X POST --unix-socket /var/www/rinq/rinq.sock http://localhost/api/queue/cleanup`
 
-## Testing
-
-No automated tests yet (inherited from Tina, tests are in bot-team repo).
-Manual test runsheet at `/admin/test-runsheet`.
-
 18. **Every call is a conference** — all call types (outbound, inbound, queue answer, extension, SIP auto-ring) use Twilio conferences. No `<Queue>` noun or direct `<Dial><Number>` bridges. This enables consistent recording, participant tracking, hold/transfer for all calls
 19. **call_participants table** — source of truth for who is in each call. Updated at every lifecycle event (join, leave, transfer). `call_state.py` reads from this table instead of making Twilio API calls. The `conference_join` endpoint is the catch-all for participant tracking
 20. **ring_attempts table** — tracks outbound ring calls across gunicorn workers (replaces in-memory dicts that broke across processes). Cleaned up by the 5-minute queue cleanup cron
 21. **Don't force-end calls via REST API** — `calls.update(status='completed')` triggers after-dial TwiML processing which can cause unexpected callbacks (e.g. blind transfer rejection flow calling agent back). Let calls end naturally via conference end or browser disconnect
 22. **Twilio SDK `call._from` not `call.from_`** — SDK 9.10.4 uses `_from` (leading underscore) for the from field. Use `getattr(call, '_from', None)`
 23. **Conference recording via TwiML** — use `record="record-from-start"` on the Conference noun, NOT the REST API. The SDK's `conference.recordings` has no `create()` method
-24. **Local permission service** — roles stored in tenant DB `permissions` table via `LocalPermissionService`. No dependency on external Grant API
+24. **Permissions model** — two levels: admin and everyone else. Domain-level Google OAuth controls login access. The `reports_to` field in `staff_extensions` determines visibility (recordings, reports) — you see your own data plus anyone who reports to you. Admins see everything. Admin management is on the `/admin` page. Only decorators are `login_required` and `admin_required` (no `manager_required`)
+
+## Testing
+
+No automated tests yet (inherited from Tina, tests are in bot-team repo).
+Manual test runsheet at `/admin/test-runsheet`.
 
 ## Known Issues
 
