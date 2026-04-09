@@ -70,6 +70,27 @@ input:checked + .toggle-slider:before {
     transform: translateX(24px);
 }
 
+.staff-toggle {
+    display: inline-flex;
+    background: #e9ecef;
+    border-radius: 6px;
+    padding: 2px;
+}
+.staff-toggle a {
+    padding: 5px 14px;
+    border-radius: 4px;
+    text-decoration: none;
+    color: #6c757d;
+    font-size: 0.85em;
+    font-weight: 500;
+    transition: all 0.15s;
+}
+.staff-toggle a.active {
+    background: white;
+    color: #333;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
 .filter-form {
     display: flex;
     gap: 15px;
@@ -238,11 +259,10 @@ input:checked + .toggle-slider:before {
             <option value="outbound" {% if filter_type == 'outbound' %}selected{% endif %}>Outbound</option>
         </select>
         {% if can_filter_staff %}
-        {% if filter_staff == 'mine' %}
-        <a href="{{ url_for('web.recordings') }}" style="padding: 6px 14px; background: #e9ecef; border-radius: 4px; text-decoration: none; color: #495057; font-size: 0.9em; font-weight: 500;">All staff</a>
-        {% else %}
-        <a href="{{ url_for('web.recordings', staff='mine') }}" style="padding: 6px 14px; background: #e9ecef; border-radius: 4px; text-decoration: none; color: #495057; font-size: 0.9em; font-weight: 500;">My recordings</a>
-        {% endif %}
+        <div class="staff-toggle">
+            <a href="{{ url_for('web.recordings') }}" class="{% if filter_staff != 'mine' %}active{% endif %}">All staff</a>
+            <a href="{{ url_for('web.recordings', staff='mine') }}" class="{% if filter_staff == 'mine' %}active{% endif %}">Mine</a>
+        </div>
         {% endif %}
     </div>
 
