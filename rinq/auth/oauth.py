@@ -1,5 +1,5 @@
 """
-Google OAuth authentication for Tina/Rinq standalone mode.
+Google OAuth authentication for Rinq standalone mode.
 
 Direct OAuth flow — no Chester gateway needed.
 """

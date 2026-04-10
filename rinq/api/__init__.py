@@ -1,1 +1,1 @@
-# API module for Tina
+# API module for Rinq

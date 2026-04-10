@@ -1,5 +1,5 @@
 """
-Standalone auth decorators for Tina/Rinq.
+Standalone auth decorators for Rinq.
 
 Provides the same interface as GatewayAuth:
 - login_required

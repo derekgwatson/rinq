@@ -12,7 +12,7 @@ import base64
 import logging
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 
 from twilio.base.exceptions import TwilioException
 
@@ -289,7 +289,7 @@ class RecordingService:
                        local_file_path, google_message_id, recordings_email,
                        drive_file_id):
         """Log recording to database and update Drive file ID. Returns recording_id."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         log_data = {
             'recording_sid': recording_sid,
             'call_sid': call_sid,

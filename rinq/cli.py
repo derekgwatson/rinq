@@ -1,5 +1,5 @@
 """
-Tina/Rinq CLI for tenant management.
+Rinq CLI for tenant management.
 
 Usage:
     python -m tina.cli setup-tenant --id watson --name "Watson Blinds" --email derek@watsonblinds.com.au
@@ -287,7 +287,7 @@ def register_number(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Tina/Rinq Tenant Management CLI')
+    parser = argparse.ArgumentParser(description='Rinq Tenant Management CLI')
     subparsers = parser.add_subparsers(dest='command')
 
     # setup-tenant

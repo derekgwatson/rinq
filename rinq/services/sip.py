@@ -6,7 +6,7 @@ without importing from the API layer.
 
 import logging
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from rinq.database.db import get_db
 from rinq.services.twilio_service import get_twilio_service
@@ -32,7 +32,7 @@ def get_sip_domain() -> str | None:
     with _sip_cache_lock:
         cached = _sip_domain_cache.get(tenant_id)
         if cached and cached['fetched_at']:
-            age = datetime.utcnow() - cached['fetched_at']
+            age = datetime.now(timezone.utc) - cached['fetched_at']
             if age < timedelta(minutes=5):
                 return cached['domain']
 
@@ -43,7 +43,7 @@ def get_sip_domain() -> str | None:
         if domains:
             domain_name = domains[0]['domain_name']
             with _sip_cache_lock:
-                _sip_domain_cache[tenant_id] = {'domain': domain_name, 'fetched_at': datetime.utcnow()}
+                _sip_domain_cache[tenant_id] = {'domain': domain_name, 'fetched_at': datetime.now(timezone.utc)}
             return domain_name
     except Exception as e:
         logger.warning(f"Failed to get SIP domain: {e}")

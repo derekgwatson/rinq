@@ -1,5 +1,5 @@
 """
-Web routes for Tina (Twilio PBX Manager).
+Web routes for Rinq (Cloud Phone System).
 
 Provides dashboard for:
 - Viewing and managing phone numbers
@@ -27,6 +27,79 @@ except ImportError:
         return {'shared_css_url': None}
 
 web_bp = Blueprint('web', __name__, template_folder='templates')
+
+# Audio type definitions — used by admin_audio page and TTS generation
+AUDIO_TYPE_DEFS = [
+    {'value': 'greeting', 'label': 'Greeting', 'category': 'Call Flow', 'per_flow': True,
+     'description': 'Plays when a call first comes in — assigned per call flow',
+     'default_text': 'Welcome to Watson Blinds and Awnings. Your call is important to us.'},
+    {'value': 'closed', 'label': 'Closed Message', 'category': 'Call Flow', 'per_flow': True,
+     'description': 'Plays outside business hours — assigned per call flow',
+     'default_text': 'We are currently closed. Our hours are Monday to Friday, 8am to 5pm.'},
+    {'value': 'voicemail', 'label': 'Voicemail Prompt', 'category': 'Call Flow', 'per_flow': True,
+     'description': 'Before recording — assigned per voicemail destination',
+     'default_text': 'Please leave a brief message with your name and phone number and we\'ll get back to you.'},
+    {'value': 'hold_music', 'label': 'Hold Music', 'category': 'Queue', 'per_flow': True,
+     'description': 'Loops while waiting in a queue — assigned per queue',
+     'default_text': ''},
+    {'value': 'queue_welcome_vm_cb', 'label': 'Queue Welcome (VM + Callback)', 'category': 'Queue',
+     'description': 'Announces both escape options while waiting in queue',
+     'default_text': 'Press 1 at any time to leave a voicemail, or press 2 to request a callback instead of waiting.'},
+    {'value': 'queue_welcome_vm', 'label': 'Queue Welcome (VM Only)', 'category': 'Queue',
+     'description': 'Announces voicemail option while waiting in queue',
+     'default_text': 'Press 1 at any time to leave a voicemail instead of waiting.'},
+    {'value': 'queue_welcome_cb', 'label': 'Queue Welcome (CB Only)', 'category': 'Queue',
+     'description': 'Announces callback option while waiting in queue',
+     'default_text': 'Press 2 at any time to request a callback instead of waiting.'},
+    {'value': 'callback_reminder', 'label': 'Callback Reminder', 'category': 'Queue',
+     'description': 'Short reminder about callback option between announcements',
+     'default_text': 'Press 2 to request a callback. We\'ll call you back without losing your place in line.'},
+    {'value': 'voicemail_escape', 'label': 'Voicemail Escape', 'category': 'Queue Exit',
+     'description': 'Plays after caller presses 1, right before the recording tone',
+     'default_text': 'No problem. Please leave your message after the tone and we\'ll get back to you as soon as possible.'},
+    {'value': 'callback_confirm', 'label': 'Callback Confirm', 'category': 'Queue Exit',
+     'description': 'Plays after caller presses 2, before hanging up',
+     'default_text': 'No problem. We have your number and someone will call you back shortly. Goodbye.'},
+    {'value': 'queue_no_agents', 'label': 'Queue No Agents', 'category': 'Queue Exit',
+     'description': 'Plays when queue times out or no agents available, before voicemail',
+     'default_text': 'Sorry, our team is unable to take your call right now. Please leave a message after the tone.'},
+    {'value': 'ext_prompt', 'label': 'Extension Prompt', 'category': 'Extension',
+     'description': 'Auto-attendant prompt to enter an extension number',
+     'default_text': 'Please enter the extension of the person you are trying to reach.'},
+    {'value': 'ext_unavailable', 'label': 'Extension Unavailable', 'category': 'Extension',
+     'description': 'Plays when dialled extension doesn\'t answer or is on DND',
+     'default_text': 'Sorry, that extension is not available right now. Please try again later.'},
+    {'value': 'reopen_prefix', 'label': 'Reopen Prefix', 'category': 'Reopen',
+     'description': 'Played before the day and time — e.g. "We reopen"',
+     'default_text': 'We reopen'},
+    {'value': 'reopen_day_tomorrow', 'label': 'Tomorrow', 'category': 'Reopen',
+     'description': 'Day snippet for "tomorrow"', 'default_text': 'tomorrow'},
+    {'value': 'reopen_day_later_today', 'label': 'Later Today', 'category': 'Reopen',
+     'description': 'Day snippet for "later today"', 'default_text': 'later today'},
+    {'value': 'reopen_day_monday', 'label': 'Monday', 'category': 'Reopen',
+     'description': 'Day snippet', 'default_text': 'Monday'},
+    {'value': 'reopen_day_tuesday', 'label': 'Tuesday', 'category': 'Reopen',
+     'description': 'Day snippet', 'default_text': 'Tuesday'},
+    {'value': 'reopen_day_wednesday', 'label': 'Wednesday', 'category': 'Reopen',
+     'description': 'Day snippet', 'default_text': 'Wednesday'},
+    {'value': 'reopen_day_thursday', 'label': 'Thursday', 'category': 'Reopen',
+     'description': 'Day snippet', 'default_text': 'Thursday'},
+    {'value': 'reopen_day_friday', 'label': 'Friday', 'category': 'Reopen',
+     'description': 'Day snippet', 'default_text': 'Friday'},
+    {'value': 'reopen_day_saturday', 'label': 'Saturday', 'category': 'Reopen',
+     'description': 'Day snippet', 'default_text': 'Saturday'},
+    {'value': 'reopen_day_sunday', 'label': 'Sunday', 'category': 'Reopen',
+     'description': 'Day snippet', 'default_text': 'Sunday'},
+    {'value': 'reopen_time_0830', 'label': 'at 8:30 AM', 'category': 'Reopen',
+     'description': 'Time snippet for 8:30 AM opening', 'default_text': 'at 8 30 AY EM'},
+    {'value': 'reopen_time_0900', 'label': 'at 9:00 AM', 'category': 'Reopen',
+     'description': 'Time snippet for 9:00 AM opening', 'default_text': 'at 9 AY EM'},
+]
+
+
+def _audit_tag(user):
+    """Build an audit performer tag from a logged-in user."""
+    return f"session:{user.email}"
 
 
 @web_bp.context_processor
@@ -309,7 +382,7 @@ def admin_test_runsheet():
 @web_bp.route('/admin/staff')
 @admin_required
 def admin_staff():
-    """Manage staff extensions and Tina activation status."""
+    """Manage staff extensions and Rinq activation status."""
     user = get_current_user()
     db = get_db()
 
@@ -473,7 +546,7 @@ def regenerate_all_staff_audio():
 @web_bp.route('/admin/staff/<email>/activate', methods=['POST'])
 @admin_required
 def toggle_staff_active(email):
-    """Toggle a staff member's active status in Tina.
+    """Toggle a staff member's active status in Rinq.
 
     Manual toggle always sets is_active_locked=True so auto-activation
     won't override the admin's decision.
@@ -502,7 +575,7 @@ def unlock_staff_active(email):
     db = get_db()
     ext = db.get_staff_extension(email)
     if ext:
-        now = __import__('datetime').datetime.utcnow().isoformat()
+        now = __import__('datetime').datetime.now(timezone.utc).isoformat()
         with db._get_conn() as conn:
             conn.execute("""
                 UPDATE staff_extensions
@@ -684,7 +757,7 @@ def admin_phone_numbers():
     covered_sections = {n.get('section') for n in phone_numbers if n.get('section')}
     covered_sections.update({v.get('section') for v in verified_caller_ids if v.get('section')})
 
-    # Get all Tina users and check coverage
+    # Get all Rinq users and check coverage
     tina_users = db.get_all_staff_extensions()
     uncovered_users = []
 
@@ -920,14 +993,14 @@ def admin_caller_id_save():
         db.update_staff_extension_caller_id(
             email=email,
             caller_id=new_caller_id,
-            updated_by=f"session:{user.email}"
+            updated_by=_audit_tag(user)
         )
         db.log_activity(
             action='caller_id_updated',
             target=email,
             details=f"Caller ID set to {new_caller_id or 'auto'}" +
                     (f" (was {current})" if current else ""),
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         updated += 1
 
@@ -988,13 +1061,13 @@ def add_verified_caller_id():
             friendly_name=friendly_name or None,
             section=section or None,
             notes=notes or None,
-            created_by=f"session:{user.email}"
+            created_by=_audit_tag(user)
         )
         db.log_activity(
             action="add_verified_caller_id",
             target=phone_number,
             details=f"Added verified caller ID: {friendly_name or phone_number}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Added verified caller ID: {friendly_name or phone_number}", "success")
     except Exception as e:
@@ -1013,7 +1086,7 @@ def sync_verified_caller_ids():
     user = get_current_user()
     twilio = get_twilio_service()
 
-    result = twilio.sync_verified_caller_ids(performed_by=f"session:{user.email}")
+    result = twilio.sync_verified_caller_ids(performed_by=_audit_tag(user))
 
     if result.get("success"):
         flash(
@@ -1046,13 +1119,13 @@ def update_verified_caller_id(phone_number):
             section=section,
             is_active=is_active,
             notes=notes,
-            updated_by=f"session:{user.email}"
+            updated_by=_audit_tag(user)
         )
         db.log_activity(
             action="update_verified_caller_id",
             target=phone_number,
             details=f"Updated verified caller ID: {'active' if is_active else 'inactive'}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Updated verified caller ID: {phone_number}", "success")
     except Exception as e:
@@ -1074,7 +1147,7 @@ def delete_verified_caller_id(phone_number):
             action="delete_verified_caller_id",
             target=phone_number,
             details="Deleted verified caller ID",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Deleted verified caller ID: {phone_number}", "success")
     except Exception as e:
@@ -1126,7 +1199,7 @@ def admin_queues():
     for queue in queues:
         queue['members'] = db.get_queue_members(queue['id'])
 
-    # Get all staff who have logged into Tina (have extensions)
+    # Get all staff who have logged into Rinq (have extensions)
     all_staff = db.get_all_staff_extensions()
 
     # Get audio files for hold music selection
@@ -1177,73 +1250,8 @@ def admin_audio():
 
     tts_available = tts.elevenlabs_available or tts.cartesia_available or tts.google_available
 
-    # --- Audio type definitions ---
-    audio_type_defs = [
-        {'value': 'greeting', 'label': 'Greeting', 'category': 'Call Flow', 'per_flow': True,
-         'description': 'Plays when a call first comes in — assigned per call flow',
-         'default_text': 'Welcome to Watson Blinds and Awnings. Your call is important to us.'},
-        {'value': 'closed', 'label': 'Closed Message', 'category': 'Call Flow', 'per_flow': True,
-         'description': 'Plays outside business hours — assigned per call flow',
-         'default_text': 'We are currently closed. Our hours are Monday to Friday, 8am to 5pm.'},
-        {'value': 'voicemail', 'label': 'Voicemail Prompt', 'category': 'Call Flow', 'per_flow': True,
-         'description': 'Before recording — assigned per voicemail destination',
-         'default_text': 'Please leave a brief message with your name and phone number and we\'ll get back to you.'},
-        {'value': 'hold_music', 'label': 'Hold Music', 'category': 'Queue', 'per_flow': True,
-         'description': 'Loops while waiting in a queue — assigned per queue',
-         'default_text': ''},
-        {'value': 'queue_welcome_vm_cb', 'label': 'Queue Welcome (VM + Callback)', 'category': 'Queue',
-         'description': 'Announces both escape options while waiting in queue',
-         'default_text': 'Press 1 at any time to leave a voicemail, or press 2 to request a callback instead of waiting.'},
-        {'value': 'queue_welcome_vm', 'label': 'Queue Welcome (VM Only)', 'category': 'Queue',
-         'description': 'Announces voicemail option while waiting in queue',
-         'default_text': 'Press 1 at any time to leave a voicemail instead of waiting.'},
-        {'value': 'queue_welcome_cb', 'label': 'Queue Welcome (CB Only)', 'category': 'Queue',
-         'description': 'Announces callback option while waiting in queue',
-         'default_text': 'Press 2 at any time to request a callback instead of waiting.'},
-        {'value': 'callback_reminder', 'label': 'Callback Reminder', 'category': 'Queue',
-         'description': 'Short reminder about callback option between announcements',
-         'default_text': 'Press 2 to request a callback. We\'ll call you back without losing your place in line.'},
-        {'value': 'voicemail_escape', 'label': 'Voicemail Escape', 'category': 'Queue Exit',
-         'description': 'Plays after caller presses 1, right before the recording tone',
-         'default_text': 'No problem. Please leave your message after the tone and we\'ll get back to you as soon as possible.'},
-        {'value': 'callback_confirm', 'label': 'Callback Confirm', 'category': 'Queue Exit',
-         'description': 'Plays after caller presses 2, before hanging up',
-         'default_text': 'No problem. We have your number and someone will call you back shortly. Goodbye.'},
-        {'value': 'queue_no_agents', 'label': 'Queue No Agents', 'category': 'Queue Exit',
-         'description': 'Plays when queue times out or no agents available, before voicemail',
-         'default_text': 'Sorry, our team is unable to take your call right now. Please leave a message after the tone.'},
-        {'value': 'ext_prompt', 'label': 'Extension Prompt', 'category': 'Extension',
-         'description': 'Auto-attendant prompt to enter an extension number',
-         'default_text': 'Please enter the extension of the person you are trying to reach.'},
-        {'value': 'ext_unavailable', 'label': 'Extension Unavailable', 'category': 'Extension',
-         'description': 'Plays when dialled extension doesn\'t answer or is on DND',
-         'default_text': 'Sorry, that extension is not available right now. Please try again later.'},
-        {'value': 'reopen_prefix', 'label': 'Reopen Prefix', 'category': 'Reopen',
-         'description': 'Played before the day and time — e.g. "We reopen"',
-         'default_text': 'We reopen'},
-        {'value': 'reopen_day_tomorrow', 'label': 'Tomorrow', 'category': 'Reopen',
-         'description': 'Day snippet for "tomorrow"', 'default_text': 'tomorrow'},
-        {'value': 'reopen_day_later_today', 'label': 'Later Today', 'category': 'Reopen',
-         'description': 'Day snippet for "later today"', 'default_text': 'later today'},
-        {'value': 'reopen_day_monday', 'label': 'Monday', 'category': 'Reopen',
-         'description': 'Day snippet', 'default_text': 'Monday'},
-        {'value': 'reopen_day_tuesday', 'label': 'Tuesday', 'category': 'Reopen',
-         'description': 'Day snippet', 'default_text': 'Tuesday'},
-        {'value': 'reopen_day_wednesday', 'label': 'Wednesday', 'category': 'Reopen',
-         'description': 'Day snippet', 'default_text': 'Wednesday'},
-        {'value': 'reopen_day_thursday', 'label': 'Thursday', 'category': 'Reopen',
-         'description': 'Day snippet', 'default_text': 'Thursday'},
-        {'value': 'reopen_day_friday', 'label': 'Friday', 'category': 'Reopen',
-         'description': 'Day snippet', 'default_text': 'Friday'},
-        {'value': 'reopen_day_saturday', 'label': 'Saturday', 'category': 'Reopen',
-         'description': 'Day snippet', 'default_text': 'Saturday'},
-        {'value': 'reopen_day_sunday', 'label': 'Sunday', 'category': 'Reopen',
-         'description': 'Day snippet', 'default_text': 'Sunday'},
-        {'value': 'reopen_time_0830', 'label': 'at 8:30 AM', 'category': 'Reopen',
-         'description': 'Time snippet for 8:30 AM opening', 'default_text': 'at 8 30 AY EM'},
-        {'value': 'reopen_time_0900', 'label': 'at 9:00 AM', 'category': 'Reopen',
-         'description': 'Time snippet for 9:00 AM opening', 'default_text': 'at 9 AY EM'},
-    ]
+    import copy
+    audio_type_defs = copy.deepcopy(AUDIO_TYPE_DEFS)
 
     # Enrich with recordings data
     for t in audio_type_defs:
@@ -1400,7 +1408,7 @@ def sync():
     """Sync phone numbers from Twilio (admin only)."""
     service = get_twilio_service()
     user = get_current_user()
-    result = service.sync_phone_numbers(performed_by=f"session:{user.email}")
+    result = service.sync_phone_numbers(performed_by=_audit_tag(user))
 
     if result.get("success"):
         flash(f"Synced {result['count']} phone numbers from Twilio", "success")
@@ -1422,7 +1430,7 @@ def update_forward(sid):
 
     service = get_twilio_service()
     user = get_current_user()
-    result = service.update_forwarding(sid, forward_to, performed_by=f"session:{user.email}")
+    result = service.update_forwarding(sid, forward_to, performed_by=_audit_tag(user))
 
     if result.get("success"):
         flash(f"Updated forwarding to {result['forward_to']}", "success")
@@ -1446,12 +1454,12 @@ def add_assignment(sid):
     db = get_db()
 
     try:
-        db.add_assignment(sid, staff_email, True, True, f"session:{user.email}")
+        db.add_assignment(sid, staff_email, True, True, _audit_tag(user))
         db.log_activity(
             action="assign_user",
             target=staff_email,
             details=f"Assigned to phone number {sid}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Assigned {staff_email} to phone number", "success")
     except Exception as e:
@@ -1475,7 +1483,7 @@ def remove_assignment(assignment_id):
         action="unassign_user",
         target=str(assignment_id),
         details="Removed phone number assignment",
-        performed_by=f"session:{user.email}"
+        performed_by=_audit_tag(user)
     )
     flash("Assignment removed", "success")
 
@@ -1814,7 +1822,7 @@ def add_desk_phone():
             action="create_desk_phone",
             target=username,
             details=f"Created SIP credential for {friendly_name}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
     else:
         flash(f'Failed to create user: {result.get("error")}', 'error')
@@ -1854,7 +1862,7 @@ def delete_desk_phone(sid):
             action="delete_desk_phone",
             target=desk_user["username"],
             details=f"Deleted SIP credential",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
     else:
         flash(f'Failed to delete user: {result.get("error")}', 'error')
@@ -1869,7 +1877,7 @@ def sync_desk_phones():
     service = get_twilio_service()
     user = get_current_user()
 
-    result = service.sync_credentials(performed_by=f"session:{user.email}")
+    result = service.sync_credentials(performed_by=_audit_tag(user))
 
     if result.get('success'):
         flash(f'Synced {result["count"]} credentials ({result["added"]} added, {result["updated"]} updated)', 'success')
@@ -1928,7 +1936,7 @@ def admin_regenerate_password(sid):
             action="admin_regenerate_password",
             target=credential['username'],
             details=f"Admin regenerated SIP password for {credential.get('friendly_name', credential['username'])}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Password regenerated for {credential.get('friendly_name', credential['username'])}", 'success')
     else:
@@ -2004,14 +2012,14 @@ def set_desk_phone_caller_id():
     db.update_staff_extension_caller_id(
         email=user.email,
         caller_id=caller_id if caller_id else None,
-        updated_by=f"session:{user.email}"
+        updated_by=_audit_tag(user)
     )
 
     db.log_activity(
         action="set_default_caller_id",
         target=user.email,
         details=f"Set default caller ID to: {caller_id or 'None'}",
-        performed_by=f"session:{user.email}"
+        performed_by=_audit_tag(user)
     )
 
     if caller_id:
@@ -2056,7 +2064,7 @@ def regenerate_desk_phone_password():
             action="regenerate_desk_phone_password",
             target=credential['username'],
             details=f"Regenerated SIP password",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         # Pass new password via query param to show once
         return redirect(url_for('web.my_devices', new_password=new_password))
@@ -2120,7 +2128,7 @@ def my_devices():
                     action="link_desk_phone",
                     target=username,
                     details=f"Linked existing SIP credential to {user.name}",
-                    performed_by=f"session:{user.email}"
+                    performed_by=_audit_tag(user)
                 )
                 credential = db.get_user_by_email(user.email)
                 # Don't show password - they need to use existing or regenerate
@@ -2142,7 +2150,7 @@ def my_devices():
                         action="auto_create_desk_phone",
                         target=username,
                         details=f"Auto-created SIP credential for {user.name}",
-                        performed_by=f"session:{user.email}"
+                        performed_by=_audit_tag(user)
                     )
                     # Fetch the newly created credential
                     credential = db.get_user_by_email(user.email)
@@ -2222,14 +2230,14 @@ def update_ring_settings():
         email=user.email,
         ring_browser=ring_browser,
         ring_sip=ring_sip,
-        updated_by=f"session:{user.email}"
+        updated_by=_audit_tag(user)
     )
 
     db.log_activity(
         action="update_ring_settings",
         target=user.email,
         details=f"Ring browser: {ring_browser}, Ring SIP: {ring_sip}",
-        performed_by=f"session:{user.email}"
+        performed_by=_audit_tag(user)
     )
 
     flash('Ring settings updated.', 'success')
@@ -2249,65 +2257,11 @@ def phone():
 
     db = get_db()
 
-    # Get user's default caller ID from their staff extension
-    staff_ext = db.get_staff_extension(user.email)
-    default_caller_id = staff_ext.get('default_caller_id') if staff_ext else None
-
-    # If no default set, check if user is directly assigned to a number
-    if not default_caller_id:
-        assignments = db.get_assignments_for_user(user.email)
-        if assignments:
-            # Use the first assigned number (with can_make) as caller ID
-            for assignment in assignments:
-                if assignment.get('can_make'):
-                    # Look up the actual phone number from the SID
-                    phone_numbers = db.get_phone_numbers()
-                    for number in phone_numbers:
-                        if number['sid'] == assignment['phone_number_sid']:
-                            default_caller_id = number['phone_number']
-                            break
-                    if default_caller_id:
-                        break
-
-    # If no assignment, fall back to user's section-based number
-    if not default_caller_id:
-        user_section = None
-        from rinq.integrations import get_staff_directory
-        staff_dir = get_staff_directory()
-        if staff_dir:
-            staff_data = staff_dir.get_staff_by_email(user.email)
-            if staff_data:
-                user_section = staff_data.get('section')
-
-        # Find a matching number for their section
-        if user_section:
-            phone_numbers = db.get_phone_numbers()
-            for number in phone_numbers:
-                if number.get('section') == user_section:
-                    default_caller_id = number['phone_number']
-                    break
-
-    # If still no caller ID, use system default
-    if not default_caller_id:
-        default_caller_id = get_twilio_config('twilio_default_caller_id')
-
-    # Get friendly name for display
-    caller_id_display = default_caller_id
-    if default_caller_id:
-        phone_numbers = db.get_phone_numbers()
-        for number in phone_numbers:
-            if number['phone_number'] == default_caller_id:
-                caller_id_display = number.get('friendly_name') or default_caller_id
-                if number.get('section'):
-                    caller_id_display += f" ({number['section']})"
-                break
-        else:
-            # Check verified caller IDs
-            verified_caller_ids = db.get_verified_caller_ids(active_only=True)
-            for vcid in verified_caller_ids:
-                if vcid['phone_number'] == default_caller_id:
-                    caller_id_display = vcid.get('friendly_name') or default_caller_id
-                    break
+    # Resolve outbound caller ID via priority chain
+    from rinq.services.caller_id import resolve_caller_id
+    cid = resolve_caller_id(user.email, db)
+    default_caller_id = cid['caller_id']
+    caller_id_display = cid['display']
 
     # Check if API key is configured (required for browser phone)
     api_key_configured = bool(get_twilio_config('twilio_api_key') and get_twilio_config('twilio_api_secret'))
@@ -2375,13 +2329,13 @@ def create_queue():
                 'reject_action': reject_action,
                 'hold_music_id': hold_music_id,
             },
-            created_by=f"session:{user.email}"
+            created_by=_audit_tag(user)
         )
         db.log_activity(
             action="create_queue",
             target=name,
             details=f"Created queue ID {queue_id}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Created queue '{name}'", "success")
     except Exception as e:
@@ -2408,7 +2362,7 @@ def add_queue_member(queue_id):
             queue_id=queue_id,
             user_email=user_email,
             priority=0,  # Default priority
-            created_by=f"session:{user.email}"
+            created_by=_audit_tag(user)
         )
 
         # Note: ring_browser and ring_sip default to True in users table,
@@ -2418,7 +2372,7 @@ def add_queue_member(queue_id):
             action="add_queue_member",
             target=user_email,
             details=f"Added to queue {queue_id}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Added {user_email} to queue", "success")
     except Exception as e:
@@ -2442,7 +2396,7 @@ def remove_queue_member(queue_id, member_id):
         action="remove_queue_member",
         target=str(member_id),
         details=f"Removed from queue {queue_id}",
-        performed_by=f"session:{user.email}"
+        performed_by=_audit_tag(user)
     )
     flash("Removed from queue", "success")
 
@@ -2495,13 +2449,13 @@ def update_queue(queue_id):
                 'hold_music_id': hold_music_id,
                 'max_wait_time': max_wait_time,
             },
-            updated_by=f"session:{user.email}"
+            updated_by=_audit_tag(user)
         )
         db.log_activity(
             action="update_queue",
             target=name,
             details=f"Updated queue {queue_id}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Updated queue '{name}'", "success")
     except Exception as e:
@@ -2523,7 +2477,7 @@ def delete_queue(queue_id):
             action="delete_queue",
             target=str(queue_id),
             details="Deleted queue",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash("Queue deleted", "success")
     except Exception as e:
@@ -2584,13 +2538,13 @@ def create_call_flow():
                 'extension_prompt_audio_id': int(extension_prompt_audio_id) if extension_prompt_audio_id else None,
                 'extension_invalid_audio_id': int(extension_invalid_audio_id) if extension_invalid_audio_id else None,
             },
-            created_by=f"session:{user.email}"
+            created_by=_audit_tag(user)
         )
         db.log_activity(
             action="create_call_flow",
             target=name,
             details=f"Created call flow ID {flow_id}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Created call flow '{name}'", "success")
     except Exception as e:
@@ -2612,13 +2566,13 @@ def assign_call_flow(sid):
         db.set_phone_number_call_flow(
             phone_sid=sid,
             call_flow_id=int(call_flow_id) if call_flow_id else None,
-            updated_by=f"session:{user.email}"
+            updated_by=_audit_tag(user)
         )
         db.log_activity(
             action="assign_call_flow",
             target=sid,
             details=f"Assigned call flow {call_flow_id}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash("Call flow assigned", "success")
     except Exception as e:
@@ -2676,13 +2630,13 @@ def update_call_flow(flow_id):
                 'extension_prompt_audio_id': int(extension_prompt_audio_id) if extension_prompt_audio_id else None,
                 'extension_invalid_audio_id': int(extension_invalid_audio_id) if extension_invalid_audio_id else None,
             },
-            updated_by=f"session:{user.email}"
+            updated_by=_audit_tag(user)
         )
         db.log_activity(
             action="update_call_flow",
             target=name,
             details=f"Updated call flow ID {flow_id}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Call flow '{name}' updated", "success")
     except Exception as e:
@@ -2722,12 +2676,12 @@ def clone_call_flow(flow_id):
             'extension_prompt_audio_id': source.get('extension_prompt_audio_id'),
             'extension_no_answer_action': source.get('extension_no_answer_action', 'voicemail'),
         }
-        new_id = db.create_call_flow(data=clone_data, created_by=f"session:{user.email}")
+        new_id = db.create_call_flow(data=clone_data, created_by=_audit_tag(user))
         db.log_activity(
             action="clone_call_flow",
             target=clone_data['name'],
             details=f"Cloned from '{source['name']}' (ID {flow_id}) to new ID {new_id}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Cloned call flow '{source['name']}' as '{clone_data['name']}'", "success")
     except Exception as e:
@@ -2756,7 +2710,7 @@ def delete_call_flow(flow_id):
                 action="delete_call_flow",
                 target=flow['name'],
                 details=f"Deleted call flow ID {flow_id}",
-                performed_by=f"session:{user.email}"
+                performed_by=_audit_tag(user)
             )
             flash(f"Call flow '{flow['name']}' deleted", "success")
         else:
@@ -2814,7 +2768,7 @@ def create_voicemail_destination():
                 'description': description,
                 'zendesk_group_id': zendesk_group_id,
             },
-            created_by=f"session:{user.email}"
+            created_by=_audit_tag(user)
         )
 
         detail = f"group_id={zendesk_group_id}" if routing_type == 'zendesk' else f"email={email}"
@@ -2822,7 +2776,7 @@ def create_voicemail_destination():
             action="create_voicemail_destination",
             target=name,
             details=f"Created {routing_type} voicemail destination: {detail}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Voicemail destination '{name}' created", "success")
     except Exception as e:
@@ -2883,7 +2837,7 @@ def update_voicemail_destination(destination_id):
                 'description': description,
                 'zendesk_group_id': zendesk_group_id,
             },
-            updated_by=f"session:{user.email}"
+            updated_by=_audit_tag(user)
         )
 
         detail = f"group_id={zendesk_group_id}" if routing_type == 'zendesk' else f"email={email}"
@@ -2891,7 +2845,7 @@ def update_voicemail_destination(destination_id):
             action="update_voicemail_destination",
             target=name,
             details=f"Updated {routing_type} destination: {detail}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Voicemail destination '{name}' updated", "success")
     except Exception as e:
@@ -2919,7 +2873,7 @@ def delete_voicemail_destination(destination_id):
                 action="delete_voicemail_destination",
                 target=destination['name'],
                 details=f"Deleted voicemail destination ID {destination_id}",
-                performed_by=f"session:{user.email}"
+                performed_by=_audit_tag(user)
             )
             flash(f"Voicemail destination '{destination['name']}' deleted", "success")
         else:
@@ -2943,13 +2897,13 @@ def update_phone_section(sid):
         db.update_phone_number_section(
             sid=sid,
             section=section,
-            updated_by=f"session:{user.email}"
+            updated_by=_audit_tag(user)
         )
         db.log_activity(
             action="update_phone_section",
             target=sid,
             details=f"Set section to '{section}'" if section else "Cleared section",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         if section:
             flash(f"Section set to {section}", "success")
@@ -3009,13 +2963,13 @@ def create_schedule():
                 'default_closure_audio_id': default_closure_audio_id,
                 'default_closure_forward_to': default_closure_forward_to,
             },
-            created_by=f"session:{user.email}"
+            created_by=_audit_tag(user)
         )
         db.log_activity(
             action="create_schedule",
             target=name,
             details=f"Created schedule ID {schedule_id}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Created schedule '{name}'", "success")
     except Exception as e:
@@ -3059,13 +3013,13 @@ def update_schedule(schedule_id):
                 'timezone': timezone,
                 'business_hours': json.dumps(business_hours) if business_hours else None,
             },
-            updated_by=f"session:{user.email}"
+            updated_by=_audit_tag(user)
         )
         db.log_activity(
             action="update_schedule",
             target=name,
             details=f"Updated schedule ID {schedule_id}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Updated schedule '{name}'", "success")
     except Exception as e:
@@ -3105,13 +3059,13 @@ def update_closure_defaults(schedule_id):
                 'default_closure_audio_id': default_closure_audio_id,
                 'default_closure_forward_to': default_closure_forward_to,
             },
-            updated_by=f"session:{user.email}"
+            updated_by=_audit_tag(user)
         )
         db.log_activity(
             action="update_closure_defaults",
             target=schedule['name'],
             details=f"Updated closure defaults: action={default_closure_action or 'none'}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash("Updated closure defaults", "success")
     except Exception as e:
@@ -3143,13 +3097,13 @@ def clone_schedule(schedule_id):
         new_id = db.clone_schedule(
             schedule_id=schedule_id,
             new_name=new_name,
-            created_by=f"session:{user.email}"
+            created_by=_audit_tag(user)
         )
         db.log_activity(
             action="clone_schedule",
             target=new_name,
             details=f"Cloned schedule '{schedule['name']}' (ID {schedule_id}) to new schedule ID {new_id}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         holiday_count = len(schedule.get('holidays', []))
         flash(f"Created '{new_name}' from '{schedule['name']}' with {holiday_count} holiday{'s' if holiday_count != 1 else ''}", "success")
@@ -3178,7 +3132,7 @@ def delete_schedule(schedule_id):
             action="delete_schedule",
             target=schedule['name'],
             details=f"Deleted schedule ID {schedule_id}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Deleted schedule '{schedule['name']}'", "success")
     except ValueError as e:
@@ -3235,7 +3189,7 @@ def add_holiday(schedule_id):
             name=name,
             date=date,
             is_recurring=False,
-            created_by=f"session:{user.email}",
+            created_by=_audit_tag(user),
             audio_id=int(audio_id) if audio_id else None,
             recurrence=recurrence,
             day_of_week=day_of_week_int,
@@ -3256,7 +3210,7 @@ def add_holiday(schedule_id):
             action="add_closure",
             target=name,
             details=f"Added to schedule {schedule_id} ({detail})",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Added closure '{name}'", "success")
     except Exception as e:
@@ -3313,13 +3267,13 @@ def update_holiday(schedule_id, holiday_id):
                 'action': action or None,
                 'forward_to': forward_to or None,
             },
-            updated_by=f"session:{user.email}"
+            updated_by=_audit_tag(user)
         )
         db.log_activity(
             action="update_closure",
             target=name,
             details=f"Updated closure ID {holiday_id}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Updated closure '{name}'", "success")
     except Exception as e:
@@ -3341,7 +3295,7 @@ def remove_holiday(schedule_id, holiday_id):
             action="remove_holiday",
             target=str(holiday_id),
             details="Removed holiday",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash("Holiday removed", "success")
     except Exception as e:
@@ -3392,13 +3346,13 @@ def create_template():
             description=description or None,
             source_url=source_url or None,
             data_as_at=data_as_at or None,
-            created_by=f"session:{user.email}"
+            created_by=_audit_tag(user)
         )
         db.log_activity(
             action="create_template",
             target=name,
             details=f"Created holiday template ID {template_id}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Created holiday template '{name}'", "success")
     except Exception as e:
@@ -3435,13 +3389,13 @@ def update_template(template_id):
             description=description or None,
             source_url=source_url or None,
             data_as_at=data_as_at or None,
-            updated_by=f"session:{user.email}"
+            updated_by=_audit_tag(user)
         )
         db.log_activity(
             action="update_template",
             target=name,
             details=f"Updated holiday template ID {template_id}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Updated template '{name}'", "success")
     except Exception as e:
@@ -3473,13 +3427,13 @@ def clone_template(template_id):
         new_id = db.clone_holiday_template(
             template_id=template_id,
             new_name=new_name,
-            created_by=f"session:{user.email}"
+            created_by=_audit_tag(user)
         )
         db.log_activity(
             action="clone_template",
             target=new_name,
             details=f"Cloned template '{template['name']}' (ID {template_id}) to new template ID {new_id}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Created '{new_name}' from '{template['name']}' with {len(template.get('items', []))} holidays", "success")
     except Exception as e:
@@ -3507,7 +3461,7 @@ def delete_template(template_id):
             action="delete_template",
             target=template['name'],
             details=f"Deleted holiday template ID {template_id}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Deleted template '{template['name']}'", "success")
     except Exception as e:
@@ -3542,13 +3496,13 @@ def add_template_item(template_id):
             name=name,
             date=date,
             is_recurring=False,  # Always use absolute dates now
-            created_by=f"session:{user.email}"
+            created_by=_audit_tag(user)
         )
         db.log_activity(
             action="add_template_item",
             target=name,
             details=f"Added to template {template_id} (date={date})",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Added '{name}' to template", "success")
     except Exception as e:
@@ -3570,7 +3524,7 @@ def remove_template_item(template_id, item_id):
             action="remove_template_item",
             target=str(item_id),
             details="Removed template item",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash("Holiday removed from template", "success")
     except Exception as e:
@@ -3594,12 +3548,12 @@ def update_template_item(template_id, item_id):
     db = get_db()
 
     try:
-        db.update_template_item(item_id, name=name, date=date, updated_by=f"session:{user.email}")
+        db.update_template_item(item_id, name=name, date=date, updated_by=_audit_tag(user))
         db.log_activity(
             action="update_template_item",
             target=name,
             details=f"Updated to date={date}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Updated '{name}'", "success")
     except Exception as e:
@@ -3625,14 +3579,14 @@ def link_schedule_to_template(template_id):
         created = db.link_template_to_schedule(
             template_id=template_id,
             schedule_id=schedule_id,
-            created_by=f"session:{user.email}"
+            created_by=_audit_tag(user)
         )
         if created:
             db.log_activity(
                 action="link_template_schedule",
                 target=str(template_id),
                 details=f"Linked template {template_id} to schedule {schedule_id}",
-                performed_by=f"session:{user.email}"
+                performed_by=_audit_tag(user)
             )
             flash("Schedule linked to template", "success")
         else:
@@ -3657,7 +3611,7 @@ def unlink_schedule_from_template(template_id, schedule_id):
                 action="unlink_template_schedule",
                 target=str(template_id),
                 details=f"Unlinked template {template_id} from schedule {schedule_id}",
-                performed_by=f"session:{user.email}"
+                performed_by=_audit_tag(user)
             )
             flash("Schedule unlinked from template", "success")
         else:
@@ -3702,7 +3656,7 @@ def apply_template(template_id):
         result = db.apply_template_to_schedules(
             template_id=template_id,
             schedule_ids=schedule_ids,
-            created_by=f"session:{user.email}"
+            created_by=_audit_tag(user)
         )
 
         if 'error' in result:
@@ -3714,7 +3668,7 @@ def apply_template(template_id):
                 action="apply_template",
                 target=str(template_id),
                 details=f"Applied to schedules: {added_count} added, {skipped_count} skipped",
-                performed_by=f"session:{user.email}"
+                performed_by=_audit_tag(user)
             )
             flash(f"Applied template: {added_count} holidays added, {skipped_count} already existed", "success")
     except Exception as e:
@@ -3810,14 +3764,14 @@ def upload_audio():
                 'tts_text': tts_text or None,
                 'duration_seconds': duration_seconds,
             },
-            created_by=f"session:{user.email}"
+            created_by=_audit_tag(user)
         )
 
         db.log_activity(
             action="upload_audio",
             target=name,
             details=f"Uploaded {file_type} audio: {filename}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Uploaded audio file '{name}'", "success")
     except Exception as e:
@@ -3863,14 +3817,14 @@ def update_audio(audio_id):
                 'file_type': file_type,
                 'tts_text': tts_text or None,
             },
-            updated_by=f"session:{user.email}"
+            updated_by=_audit_tag(user)
         )
 
         db.log_activity(
             action="update_audio",
             target=name,
             details=f"Updated audio file ID {audio_id} (type={file_type})",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Updated audio file '{name}'", "success")
     except Exception as e:
@@ -3905,7 +3859,7 @@ def delete_audio(audio_id):
             action="delete_audio",
             target=audio['name'],
             details=f"Deleted audio file ID {audio_id}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
         flash(f"Deleted audio file '{audio['name']}'", "success")
     except Exception as e:
@@ -3977,153 +3931,6 @@ def admin_tts():
     """Redirect to unified audio page."""
     return redirect(url_for('web.admin_audio'))
 
-def _admin_tts_legacy():
-    """Legacy TTS page handler — kept for reference, no longer routed."""
-    from rinq.services.tts_service import get_tts_service
-
-    user = get_current_user()
-    db = get_db()
-    tts = get_tts_service()
-
-    # Load default TTS settings
-    settings = db.get_tts_settings()
-    default_provider = settings.get('default_provider', 'elevenlabs')
-    default_voice = settings.get('default_voice', 'cjVigY5qzO86Huf0OWal')
-
-    # Get voice name for display
-    current_voice_name = 'Not Set'
-    if default_provider == 'elevenlabs' and tts.elevenlabs_available:
-        voices = tts.get_elevenlabs_voices()
-        voice_info = voices.get(default_voice, {})
-        current_voice_name = voice_info.get('name', default_voice)
-        if voice_info.get('accent'):
-            current_voice_name += f" ({voice_info['accent']})"
-    elif default_provider == 'cartesia' and tts.cartesia_available:
-        voices = tts.get_cartesia_voices()
-        voice_info = voices.get(default_voice, {})
-        current_voice_name = voice_info.get('name', default_voice)
-        if voice_info.get('gender'):
-            current_voice_name += f" ({voice_info['gender'].capitalize()})"
-    elif default_provider == 'google' and tts.google_available:
-        voice_info = tts.GOOGLE_VOICES.get(default_voice, {})
-        current_voice_name = voice_info.get('name', default_voice)
-        if voice_info.get('gender'):
-            current_voice_name += f" ({voice_info['gender']})"
-
-    # Check for prefill text from query params (for regenerate)
-    prefill_text = request.args.get('text', '')
-    prefill_type = request.args.get('type', '')
-
-    # Build audio type data for the type picker panel
-    audio_files = db.get_audio_files()
-    # per_flow types are assigned per call-flow/queue — multiple recordings are normal
-    # global types are auto-selected by type — only the first recording is used
-    audio_type_defs = [
-        {'value': 'greeting', 'label': 'Greeting', 'category': 'Call Flow', 'per_flow': True,
-         'description': 'Plays when a call first comes in — assigned per call flow',
-         'default_text': 'Welcome to Watson Blinds and Awnings. Your call is important to us.'},
-        {'value': 'closed', 'label': 'Closed Message', 'category': 'Call Flow', 'per_flow': True,
-         'description': 'Plays outside business hours — assigned per call flow',
-         'default_text': 'We are currently closed. Our hours are Monday to Friday, 8am to 5pm.'},
-        {'value': 'voicemail', 'label': 'Voicemail Prompt', 'category': 'Call Flow', 'per_flow': True,
-         'description': 'Before recording — assigned per voicemail destination',
-         'default_text': 'Please leave a brief message with your name and phone number and we\'ll get back to you.'},
-        {'value': 'hold_music', 'label': 'Hold Music', 'category': 'Queue', 'per_flow': True,
-         'description': 'Loops while waiting in a queue — assigned per queue',
-         'default_text': ''},
-        {'value': 'queue_welcome_vm_cb', 'label': 'Queue Welcome (VM + Callback)', 'category': 'Queue',
-         'description': 'Announces both escape options while waiting in queue',
-         'default_text': 'Press 1 at any time to leave a voicemail, or press 2 to request a callback instead of waiting.'},
-        {'value': 'queue_welcome_vm', 'label': 'Queue Welcome (VM Only)', 'category': 'Queue',
-         'description': 'Announces voicemail option while waiting in queue',
-         'default_text': 'Press 1 at any time to leave a voicemail instead of waiting.'},
-        {'value': 'queue_welcome_cb', 'label': 'Queue Welcome (CB Only)', 'category': 'Queue',
-         'description': 'Announces callback option while waiting in queue',
-         'default_text': 'Press 2 at any time to request a callback instead of waiting.'},
-        {'value': 'callback_reminder', 'label': 'Callback Reminder', 'category': 'Queue',
-         'description': 'Short reminder about callback option between announcements',
-         'default_text': 'Press 2 to request a callback. We\'ll call you back without losing your place in line.'},
-        {'value': 'voicemail_escape', 'label': 'Voicemail Escape', 'category': 'Queue Exit',
-         'description': 'Plays after caller presses 1, right before the recording tone',
-         'default_text': 'No problem. Please leave your message after the tone and we\'ll get back to you as soon as possible.'},
-        {'value': 'callback_confirm', 'label': 'Callback Confirm', 'category': 'Queue Exit',
-         'description': 'Plays after caller presses 2, before hanging up',
-         'default_text': 'No problem. We have your number and someone will call you back shortly. Goodbye.'},
-        {'value': 'queue_no_agents', 'label': 'Queue No Agents', 'category': 'Queue Exit',
-         'description': 'Plays when queue times out or no agents available, before voicemail',
-         'default_text': 'Sorry, our team is unable to take your call right now. Please leave a message after the tone.'},
-        {'value': 'ext_prompt', 'label': 'Extension Prompt', 'category': 'Extension',
-         'description': 'Auto-attendant prompt to enter an extension number',
-         'default_text': 'Please enter the extension of the person you are trying to reach.'},
-        {'value': 'ext_unavailable', 'label': 'Extension Unavailable', 'category': 'Extension',
-         'description': 'Plays when dialled extension doesn\'t answer or is on DND',
-         'default_text': 'Sorry, that extension is not available right now. Please try again later.'},
-        {'value': 'reopen_prefix', 'label': 'Reopen Prefix', 'category': 'Reopen',
-         'description': 'Played before the day and time — e.g. "We reopen"',
-         'default_text': 'We reopen'},
-        {'value': 'reopen_day_tomorrow', 'label': 'Tomorrow', 'category': 'Reopen',
-         'description': 'Day snippet for "tomorrow"',
-         'default_text': 'tomorrow'},
-        {'value': 'reopen_day_later_today', 'label': 'Later Today', 'category': 'Reopen',
-         'description': 'Day snippet for "later today"',
-         'default_text': 'later today'},
-        {'value': 'reopen_day_monday', 'label': 'Monday', 'category': 'Reopen',
-         'description': 'Day snippet', 'default_text': 'Monday'},
-        {'value': 'reopen_day_tuesday', 'label': 'Tuesday', 'category': 'Reopen',
-         'description': 'Day snippet', 'default_text': 'Tuesday'},
-        {'value': 'reopen_day_wednesday', 'label': 'Wednesday', 'category': 'Reopen',
-         'description': 'Day snippet', 'default_text': 'Wednesday'},
-        {'value': 'reopen_day_thursday', 'label': 'Thursday', 'category': 'Reopen',
-         'description': 'Day snippet', 'default_text': 'Thursday'},
-        {'value': 'reopen_day_friday', 'label': 'Friday', 'category': 'Reopen',
-         'description': 'Day snippet', 'default_text': 'Friday'},
-        {'value': 'reopen_day_saturday', 'label': 'Saturday', 'category': 'Reopen',
-         'description': 'Day snippet', 'default_text': 'Saturday'},
-        {'value': 'reopen_day_sunday', 'label': 'Sunday', 'category': 'Reopen',
-         'description': 'Day snippet', 'default_text': 'Sunday'},
-        {'value': 'reopen_time_0830', 'label': 'at 8:30 AM', 'category': 'Reopen',
-         'description': 'Time snippet for 8:30 AM opening',
-         'default_text': 'at 8 30 AY EM'},
-        {'value': 'reopen_time_0900', 'label': 'at 9:00 AM', 'category': 'Reopen',
-         'description': 'Time snippet for 9:00 AM opening',
-         'default_text': 'at 9 AY EM'},
-    ]
-
-    # Enrich with status, existing recordings, and audio URLs
-    for t in audio_type_defs:
-        existing = [a for a in audio_files if a['file_type'] == t['value']]
-        t['count'] = len(existing)
-        t['has_recording'] = bool(existing)
-        # For per-flow types, list all recordings; for global types, just the first
-        if t.get('per_flow'):
-            t['recordings'] = [{'name': a.get('name', ''), 'url': a.get('file_url', '')} for a in existing]
-            t['audio_url'] = ''  # No single URL for per-flow types
-            t['existing_text'] = t['default_text']  # Always use default for new per-flow recordings
-        else:
-            t['recordings'] = []
-            t['audio_url'] = existing[0].get('file_url', '') if existing else ''
-            # Use existing tts_text if available, otherwise default_text
-            if existing and existing[0].get('tts_text'):
-                t['existing_text'] = existing[0]['tts_text']
-            else:
-                t['existing_text'] = t['default_text']
-
-    return render_template('admin_tts.html',
-                         elevenlabs_available=tts.elevenlabs_available,
-                         cartesia_available=tts.cartesia_available,
-                         google_available=tts.google_available,
-                         elevenlabs_voices=tts.get_elevenlabs_voices_grouped() if tts.elevenlabs_available else {},
-                         cartesia_voices=tts.get_cartesia_voices_grouped() if tts.cartesia_available else {},
-                         google_voices=tts.get_google_voices_grouped(),
-                         default_provider=default_provider,
-                         default_voice=default_voice,
-                         current_voice_name=current_voice_name,
-                         prefill_text=prefill_text,
-                         prefill_type=prefill_type,
-                         audio_type_defs=audio_type_defs,
-                         current_user=user)
-
-
 @web_bp.route('/admin/tts/settings', methods=['POST'])
 @admin_required
 def save_tts_settings():
@@ -4139,14 +3946,14 @@ def save_tts_settings():
     db = get_db()
 
     try:
-        db.set_tts_setting('default_provider', provider, f"session:{user.email}")
-        db.set_tts_setting('default_voice', voice, f"session:{user.email}")
+        db.set_tts_setting('default_provider', provider, _audit_tag(user))
+        db.set_tts_setting('default_voice', voice, _audit_tag(user))
 
         db.log_activity(
             action="update_tts_settings",
             target="default_voice",
             details=f"Set default TTS to {provider} voice {voice}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
 
         flash("Voice settings saved", "success")
@@ -4301,14 +4108,14 @@ def save_tts_audio():
                 'tts_voice': voice,
                 'tts_settings': json.dumps(tts_settings),
             },
-            created_by=f"session:{user.email}"
+            created_by=_audit_tag(user)
         )
 
         db.log_activity(
             action="save_tts_audio",
             target=name,
             details=f"Saved {file_type} audio with {provider_info}",
-            performed_by=f"session:{user.email}"
+            performed_by=_audit_tag(user)
         )
 
         flash(f"Saved audio file '{name}'", "success")

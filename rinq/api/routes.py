@@ -1,5 +1,5 @@
 """
-API routes for Tina (Twilio PBX Manager).
+API routes for Rinq (Cloud Phone System).
 
 Provides endpoints for:
 - Phone number management and forwarding
@@ -15,7 +15,7 @@ import json
 import logging
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode, quote
 from xml.sax.saxutils import escape as xml_escape
 
@@ -59,34 +59,34 @@ _build_closed_message_twiml = _build_closed_message_twiml_impl
 _say_or_play = _say_or_play_impl
 
 
-def _get_rosie_redirect_url() -> str:
-    """Get the base URL for Rosie's voice/answer endpoint."""
+def _get_ai_receptionist_url() -> str:
+    """Get the base URL for AI receptionist voice/answer endpoint."""
     from rinq.integrations import get_ai_receptionist
     ai = get_ai_receptionist()
     return ai.get_answer_url() if ai else None
 
 
-def _notify_rosie_call_ended(call_sid: str, call_status: str):
-    """Notify Rosie that an AI receptionist call has ended."""
+def _notify_ai_receptionist_call_ended(call_sid: str, call_status: str):
+    """Notify the AI receptionist that a call has ended."""
     from rinq.integrations import get_ai_receptionist
     ai = get_ai_receptionist()
     if ai:
         if ai.notify_call_ended(call_sid, call_status):
-            logger.info(f"Notified Rosie of call end: {call_sid} -> {call_status}")
+            logger.info(f"Notified AI receptionist of call end: {call_sid} -> {call_status}")
         else:
-            logger.warning(f"Failed to notify Rosie of call end {call_sid}")
+            logger.warning(f"Failed to notify AI receptionist of call end {call_sid}")
 
 
-def _redirect_to_rosie(response_parts, called_number, from_number, call_sid,
+def _redirect_to_ai_receptionist(response_parts, called_number, from_number, call_sid,
                         db, routing, reason="no_answer"):
-    """Build TwiML that redirects the caller to Rosie (AI receptionist).
+    """Build TwiML that redirects the caller to AI receptionist (AI receptionist).
 
-    Passes caller context as query params so Rosie has enrichment data.
-    Falls back to voicemail if Rosie is not configured.
+    Passes caller context as query params for enrichment data.
+    Falls back to voicemail if the AI receptionist is not configured.
     """
-    rosie_url = _get_rosie_redirect_url()
-    if not rosie_url:
-        logger.warning("Rosie not configured (ROSIE_WEBHOOK_URL not set) - falling back to voicemail")
+    _ai_url = _get_ai_receptionist_url()
+    if not _ai_url:
+        logger.warning("AI receptionist not configured (AI_RECEPTIONIST_URL not set) - falling back to voicemail")
         call_flow = routing.get('call_flow') if routing else None
         return _go_to_voicemail(response_parts, call_flow, called_number, from_number, call_sid, db, routing)
 
@@ -97,7 +97,7 @@ def _redirect_to_rosie(response_parts, called_number, from_number, call_sid,
 
     queue = routing.get('queue') if routing else None
 
-    # Build query params with caller context for Rosie
+    # Build query params with caller context for AI receptionist
     params = {
         'call_sid': call_sid,
         'caller_number': from_number,
@@ -119,7 +119,7 @@ def _redirect_to_rosie(response_parts, called_number, from_number, call_sid,
     if caller_info.get('priority_reason'):
         params['priority_reason'] = caller_info['priority_reason']
 
-    redirect_url = f"{rosie_url}?{urlencode(params)}"
+    redirect_url = f"{_ai_url}?{urlencode(params)}"
 
     response_parts.append(f'    <Redirect method="POST">{xml_escape(redirect_url)}</Redirect>')
     response_parts.append('</Response>')
@@ -131,13 +131,13 @@ def _redirect_to_rosie(response_parts, called_number, from_number, call_sid,
     })
 
     db.log_activity(
-        action="call_to_rosie",
+        action="call_to_ai_receptionist",
         target=called_number,
         details=f"From: {from_number}, Reason: {reason}, Customer: {caller_info.get('customer_name') or 'Unknown'}",
         performed_by="twilio"
     )
 
-    logger.info(f"Redirecting call {call_sid} to Rosie (reason: {reason})")
+    logger.info(f"Redirecting call {call_sid} to AI receptionist (reason: {reason})")
     return Response('\n'.join(response_parts), mimetype='application/xml')
 
 
@@ -225,8 +225,8 @@ def sync_phone_numbers():
 def configure_status_callbacks():
     """Set status callback URL on all Twilio phone numbers.
 
-    Ensures Twilio sends call-ended events to Tina so post-call processing
-    works (e.g. notifying Rosie for AI receptionist calls).
+    Ensures Twilio sends call-ended events to Rinq so post-call processing
+    works (e.g. notifying AI receptionist of call end).
     """
     service = get_twilio_service()
     caller = get_api_caller()
@@ -794,7 +794,7 @@ def voice_incoming():
                 no_answer = call_flow.get('open_no_answer_action', 'ai_receptionist') if call_flow else 'ai_receptionist'
                 logger.warning(f"No dial targets for queue {queue.get('name')} - action: {no_answer}")
                 if no_answer == 'ai_receptionist':
-                    return _redirect_to_rosie(
+                    return _redirect_to_ai_receptionist(
                         response_parts, called_number, from_number, call_sid, db, routing,
                         reason="no_dial_targets"
                     )
@@ -843,7 +843,7 @@ def voice_incoming():
                     performed_by="twilio"
                 )
                 if no_answer == 'ai_receptionist':
-                    return _redirect_to_rosie(
+                    return _redirect_to_ai_receptionist(
                         response_parts, called_number, from_number, call_sid, db, routing,
                         reason="no_active_members"
                     )
@@ -922,12 +922,12 @@ def voice_incoming():
             response_parts.append('    </Dial>')
 
         elif action == 'ai_receptionist':
-            # Play closed message, then redirect to Rosie
+            # Play closed message, then redirect to AI receptionist
             closed_seq = _build_closed_sequence()
             if closed_seq:
                 response_parts.extend(closed_seq)
 
-            return _redirect_to_rosie(
+            return _redirect_to_ai_receptionist(
                 response_parts, called_number, from_number, call_sid, db, routing,
                 reason="closed"
             )
@@ -1237,7 +1237,7 @@ def _handle_incoming_call_internal(called_number: str, from_number: str, call_si
                 no_answer = call_flow.get('open_no_answer_action', 'ai_receptionist') if call_flow else 'ai_receptionist'
                 logger.warning(f"No active queue members for queue {queue.get('name')} - action: {no_answer}")
                 if no_answer == 'ai_receptionist':
-                    return _redirect_to_rosie(
+                    return _redirect_to_ai_receptionist(
                         response_parts, called_number, from_number, call_sid, db, routing,
                         reason="no_active_members"
                     )
@@ -1448,7 +1448,7 @@ def _handle_closed_call(response_parts, call_flow, schedule, matched_holiday,
         return Response('\n'.join(response_parts), mimetype='application/xml')
 
     if closure_action == 'ai_receptionist' and not is_test:
-        # Play closed message first, then redirect to Rosie
+        # Play closed message first, then redirect to AI receptionist
         closed_seq = _build_closed_sequence()
         if closed_seq:
             response_parts.extend(closed_seq)
@@ -1463,7 +1463,7 @@ def _handle_closed_call(response_parts, call_flow, schedule, matched_holiday,
             performed_by="twilio"
         )
 
-        return _redirect_to_rosie(
+        return _redirect_to_ai_receptionist(
             response_parts, called_number, from_number, call_sid, db, routing,
             reason="closed"
         )
@@ -1611,10 +1611,10 @@ def queue_no_answer(queue_id):
             logger.warning(f"No active agents in queue {queue.get('name')} - action: {no_answer_action}")
 
             if no_answer_action == 'ai_receptionist':
-                # Build response_parts and routing to reuse _redirect_to_rosie
+                # Build response_parts and routing to reuse _redirect_to_ai_receptionist
                 response_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>']
                 routing = {'queue': queue}
-                return _redirect_to_rosie(
+                return _redirect_to_ai_receptionist(
                     response_parts, called_number, from_number, call_sid, db, routing,
                     reason="no_active_agents"
                 )
@@ -1911,11 +1911,11 @@ def call_status_callback():
                     logger.debug(f"Could not cancel ring call {sid}: {e}")
             logger.info(f"Caller {call_sid} disconnected — cancelled {len(ring_sids)} ringing agent calls")
 
-        # If this was an AI receptionist call, notify Rosie so it can
+        # If this was an AI receptionist call, notify AI receptionist so it can
         # run post-call processing (summary, Zendesk ticket, email)
         call_type = db.get_call_log_field(call_sid, 'call_type')
         if call_type == 'ai_receptionist':
-            _notify_rosie_call_ended(call_sid, call_status)
+            _notify_ai_receptionist_call_ended(call_sid, call_status)
 
     return Response('OK', status=200)
 
@@ -2554,7 +2554,7 @@ def inbound_no_answer():
 
     if no_answer_action == 'ai_receptionist':
         routing = db.get_call_routing(called_number)
-        return _redirect_to_rosie(
+        return _redirect_to_ai_receptionist(
             response_parts, called_number, from_number, call_sid, db,
             routing or {}, reason="no_answer"
         )
@@ -3124,67 +3124,6 @@ def queue_wait(queue_id):
     return Response(twiml, mimetype='application/xml')
 
 
-@api_bp.route('/voice/queue/<int:queue_id>/voicemail-escape', methods=['POST'])
-def queue_voicemail_escape(queue_id):
-    """Handle when a caller presses 1 to leave voicemail instead of waiting.
-
-    This is called by the <Gather> in queue_wait when the caller presses a digit.
-    If they pressed 1, we redirect them to voicemail. Any other digit returns
-    them to hold music.
-
-    No auth required - Twilio calls this directly.
-    """
-    db = get_db()
-    queue = db.get_queue(queue_id)
-
-    digits = request.form.get('Digits', '')
-    call_sid = request.form.get('CallSid', '')
-    from_number = request.form.get('From', '')
-
-    logger.info(f"Voicemail escape: queue={queue_id}, digits={digits}, call_sid={call_sid}")
-
-    # Only accept digit 1 for voicemail
-    if digits != '1':
-        # Wrong digit - return to hold music (Twilio will call waitUrl again)
-        logger.info(f"Caller pressed {digits}, not 1 - returning to queue")
-        wait_url = f"{config.webhook_base_url}/api/voice/queue/{queue_id}/wait"
-        twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Redirect method="POST">{xml_escape(wait_url)}</Redirect>
-</Response>'''
-        return Response(twiml, mimetype='application/xml')
-
-    # Caller pressed 1 - they want to leave voicemail
-    logger.info(f"Caller {from_number} chose voicemail escape from queue {queue.get('name') if queue else queue_id}")
-
-    # Cancel any auto-ring calls for this customer
-    import threading
-    def cancel_calls():
-        _cancel_agent_calls(call_sid)
-    threading.Thread(target=cancel_calls, daemon=True).start()
-
-    # Update queued call status
-    queued_call = db.get_queued_call_by_sid(call_sid)
-    if queued_call:
-        db.update_queued_call_status(call_sid, 'voicemail')
-
-    db.log_activity(
-        action="caller_chose_voicemail",
-        target=f"queue_{queue_id}",
-        details=f"Caller {from_number} pressed 1 to leave voicemail instead of waiting",
-        performed_by="twilio"
-    )
-
-    # <Record> is not valid in queue wait context — must <Leave/> first.
-    # queue_leave handler checks for 'voicemail' status and routes accordingly.
-    twiml = '''<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Leave/>
-</Response>'''
-
-    return Response(twiml, mimetype='application/xml')
-
-
 # =============================================================================
 # Queue Escape (unified handler for voicemail + callback)
 # =============================================================================
@@ -3518,7 +3457,7 @@ def _extension_fallback(flow_id, called_number, from_number, call_sid, db, say_f
 
     if fallback_action == 'ai_receptionist':
         routing = {'call_flow': call_flow} if call_flow else {}
-        return _redirect_to_rosie(
+        return _redirect_to_ai_receptionist(
             response_parts, called_number, from_number, call_sid, db, routing,
             reason="extension_no_answer"
         )
@@ -3543,48 +3482,6 @@ def _extension_fallback(flow_id, called_number, from_number, call_sid, db, say_f
     return _go_to_voicemail(response_parts, call_flow, called_number, from_number, call_sid, db, routing)
 
 
-@api_bp.route('/voice/queue/<int:queue_id>/connect', methods=['POST'])
-def queue_connect(queue_id):
-    """Connect a queued caller to an available agent.
-
-    This is called when we want to dequeue a caller and connect them.
-    Typically triggered when an agent becomes available.
-
-    No auth required - called internally.
-    """
-    db = get_db()
-    queue = db.get_queue(queue_id)
-    routing = {'queue': queue, 'user_settings': {}}
-
-    if queue:
-        # Get ring settings for all queue members
-        members = db.get_queue_members(queue_id)
-        for member in members:
-            ring_settings = db.get_user_ring_settings(member['user_email'])
-            routing['user_settings'][member['user_email']] = ring_settings
-        routing['queue']['members'] = members
-
-    dial_targets = _build_dial_targets(routing)
-
-    if dial_targets:
-        targets_xml = '\n        '.join(dial_targets)
-        timeout = queue.get('ring_timeout', 30) if queue else 30
-        twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Dial timeout="{timeout}">
-        {targets_xml}
-    </Dial>
-</Response>'''
-    else:
-        twiml = '''<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Say>Sorry, no agents are available. Please try again later.</Say>
-    <Hangup/>
-</Response>'''
-
-    return Response(twiml, mimetype='application/xml')
-
-
 @api_bp.route('/voice/voicemail', methods=['POST'])
 def voicemail_handler():
     """Handle voicemail recording completion.
@@ -3596,7 +3493,6 @@ def voicemail_handler():
     """
     import base64
     import requests
-    from datetime import datetime
 
     recording_url = request.form.get('RecordingUrl')
     recording_sid = request.form.get('RecordingSid')
@@ -3652,9 +3548,9 @@ def voicemail_handler():
         "recording_url": recording_url,
         "call_type": "voicemail",
         "emailed_to": voicemail_dest['name'] if voicemail_dest else None,
-        "emailed_at": datetime.utcnow().isoformat() if voicemail_dest else None,
+        "emailed_at": datetime.now(timezone.utc).isoformat() if voicemail_dest else None,
         "deleted_from_twilio": 0,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     })
 
     if not row_id:
@@ -4661,7 +4557,7 @@ def get_presence():
     """
     db = get_db()
     extensions = db.get_all_staff_extensions()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     # Get active calls to show "on call" status
     active_calls = _get_active_calls_from_twilio()
@@ -4711,10 +4607,10 @@ def get_pam_directory_overrides():
     GET /api/pam/directory-overrides
 
     Returns the extension directory phone number and a list of staff who are
-    active on Tina. PAM uses this to replace dead old VoIP numbers with the
-    extension directory number + Tina extension.
+    active on Rinq. PAM uses this to replace dead old VoIP numbers with the
+    extension directory number + Rinq extension.
 
-    A staff member is considered "on Tina" if staff_extensions.is_active = 1,
+    A staff member is considered "on Rinq" if staff_extensions.is_active = 1,
     which is controlled from /admin/staff (auto-activated by usage signals,
     or manually set by an admin).
 
@@ -4743,7 +4639,7 @@ def get_pam_directory_overrides():
             ext_dir_number = to_local(pn['phone_number'])
             break
 
-    # Get staff who are marked active in Tina (staff_extensions.is_active)
+    # Get staff who are marked active in Rinq (staff_extensions.is_active)
     # This is the flag controlled from /admin/staff
     active_extensions = db.get_active_staff_extensions()
     tina_staff = {}
@@ -4780,7 +4676,7 @@ def sync_staff_extensions():
 
     POST /api/staff/sync
 
-    Fetches all active staff from Peter and ensures each has a Tina
+    Fetches all active staff from Peter and ensures each has a Rinq
     staff_extensions record with an auto-assigned extension number.
 
     Returns:
@@ -4934,7 +4830,7 @@ def get_staff_phones():
 @api_bp.route('/staff-phones/active')
 @api_or_session_auth
 def get_active_staff_phones():
-    """Get staff who are actively using Tina.
+    """Get staff who are actively using Rinq.
 
     For Peter integration — only returns users an admin has activated.
 
@@ -5091,8 +4987,7 @@ def get_queued_callers():
     # Verify callers against Twilio queues — the DB may have stale 'waiting'
     # records from missed queue_leave webhooks. Fetch actual Twilio queue
     # members (one API call per queue) and remove any DB records not in Twilio.
-    from datetime import datetime
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     if callers:
         # Collect unique queue IDs we need to check
@@ -5172,8 +5067,7 @@ def get_pending_callbacks():
     callbacks = db.get_pending_callbacks(queue_id=queue_id)
 
     # Calculate wait time since request
-    from datetime import datetime
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     for cb in callbacks:
         if cb.get('requested_at'):
             try:
@@ -5387,7 +5281,7 @@ def get_contacts():
 
     GET /api/contacts?q=search+term
 
-    Merges Peter staff directory with Tina extensions/assignments.
+    Merges Peter staff directory with Rinq extensions/assignments.
 
     Query params:
         q: Optional search term (filters by name)
@@ -5949,14 +5843,13 @@ def buy_number():
 
         # Save to local database
         db = get_db()
-        from datetime import datetime
         db.upsert_phone_number({
             'sid': incoming.sid,
             'phone_number': incoming.phone_number,
             'friendly_name': incoming.friendly_name or incoming.phone_number,
             'forward_to': None,
             'is_active': 1,
-            'synced_at': datetime.utcnow().isoformat(),
+            'synced_at': datetime.now(timezone.utc).isoformat(),
         })
 
         # Register to tenant in master DB

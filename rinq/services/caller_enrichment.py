@@ -1,5 +1,5 @@
 """
-Caller enrichment service for Tina.
+Caller enrichment service for Rinq.
 
 Looks up caller information from customer and order integrations
 to provide context about who is calling.
@@ -111,8 +111,8 @@ class CallerEnrichmentService:
             }
 
             # Check for upcoming installations
-            from datetime import datetime, timedelta
-            now = datetime.utcnow()
+            from datetime import datetime, timedelta, timezone
+            now = datetime.now(timezone.utc)
             soon = now + timedelta(hours=48)
 
             for order in customer_orders:

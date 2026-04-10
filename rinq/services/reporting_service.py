@@ -1,5 +1,5 @@
 """
-Reporting service for Tina.
+Reporting service for Rinq.
 
 Provides call statistics, agent performance metrics, and queue analytics.
 Handles both real-time data (today) and historical aggregated data.

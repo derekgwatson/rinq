@@ -1,5 +1,5 @@
 """
-Text-to-Speech service for Tina.
+Text-to-Speech service for Rinq.
 
 Supports:
 - ElevenLabs: Premium quality with Australian accent options
@@ -371,7 +371,7 @@ def get_tts_service() -> TTSService:
 def generate_staff_name_audio(email: str, name: str, extension: str, actor: str) -> dict:
     """Generate a TTS audio clip of a staff member's name.
 
-    Uses the default TTS provider/voice configured in Tina's settings.
+    Uses the default TTS provider/voice configured in Rinq's settings.
     Saves to a deterministic filename so regeneration overwrites cleanly.
 
     Returns {'success': True} or {'success': False, 'error': '...'}.

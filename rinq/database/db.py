@@ -1,5 +1,5 @@
 """
-Database operations for Tina.
+Database operations for Rinq.
 
 Manages:
 - Phone numbers and their forwarding rules
@@ -18,7 +18,7 @@ except ImportError:
 
 
 class Database:
-    """SQLite database for Tina."""
+    """SQLite database for Rinq."""
 
     def __init__(self, db_path: str = None):
         if db_path is None:
@@ -87,7 +87,7 @@ class Database:
 
     def update_forward_to(self, sid: str, forward_to: str, updated_by: str) -> None:
         """Update the forwarding number for a phone number."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE phone_numbers
@@ -98,7 +98,7 @@ class Database:
 
     def update_browser_ring(self, sid: str, ring_browser: bool, browser_identity: str, updated_by: str) -> None:
         """Update browser ring settings for a phone number."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE phone_numbers
@@ -109,7 +109,7 @@ class Database:
 
     def update_phone_number_section(self, sid: str, section: str, updated_by: str) -> None:
         """Update the section for a phone number."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE phone_numbers
@@ -211,7 +211,7 @@ class Database:
 
         Returns the ID of the new row.
         """
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 INSERT INTO verified_caller_ids
@@ -234,7 +234,7 @@ class Database:
 
         Returns True if a row was updated.
         """
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         updates = []
         params = []
 
@@ -422,7 +422,7 @@ class Database:
             caller_id: E.164 phone number to use as caller ID, or None to clear
             updated_by: Who is making this change
         """
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 UPDATE users
@@ -488,7 +488,7 @@ class Database:
     def add_assignment(self, phone_number_sid: str, staff_email: str,
                        can_receive: bool, can_make: bool, created_by: str) -> int:
         """Add a phone assignment."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 INSERT INTO phone_assignments
@@ -504,7 +504,7 @@ class Database:
     def update_assignment(self, assignment_id: int, can_receive: bool,
                           can_make: bool, updated_by: str) -> None:
         """Update a phone assignment."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE phone_assignments
@@ -658,7 +658,7 @@ class Database:
     def update_recording_local_file(self, recording_sid: str,
                                      local_file_path: str) -> None:
         """Update a recording's local file path and mark as accessed."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE recording_log
@@ -669,7 +669,7 @@ class Database:
 
     def update_recording_last_accessed(self, recording_sid: str) -> None:
         """Update the last_accessed_at timestamp when a recording is played."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE recording_log
@@ -691,7 +691,7 @@ class Database:
             List of recording dicts with local_file_path set
         """
         from datetime import timedelta
-        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
         with self._get_conn() as conn:
             rows = conn.execute("""
@@ -717,7 +717,7 @@ class Database:
             List of recording dicts
         """
         from datetime import timedelta
-        cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
         with self._get_conn() as conn:
             rows = conn.execute("""
@@ -800,7 +800,7 @@ class Database:
     def set_user_recording_default(self, email: str, enabled: bool,
                                     updated_by: str) -> None:
         """Set whether a user has call recording enabled by default."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE users
@@ -819,7 +819,7 @@ class Database:
             conn.execute("""
                 INSERT INTO activity_log (action, target, details, performed_by, performed_at)
                 VALUES (?, ?, ?, ?, ?)
-            """, (action, target, details, performed_by, datetime.utcnow().isoformat()))
+            """, (action, target, details, performed_by, datetime.now(timezone.utc).isoformat()))
             conn.commit()
 
     def get_activity_log(self, limit: int = 100) -> list[dict]:
@@ -861,7 +861,7 @@ class Database:
 
     def create_audio_file(self, data: dict, created_by: str) -> int:
         """Create a new audio file record."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 INSERT INTO audio_files (name, description, file_type, file_url, file_path,
@@ -877,7 +877,7 @@ class Database:
 
     def update_audio_file(self, audio_id: int, data: dict, updated_by: str) -> None:
         """Update an audio file's metadata (name, description, type, spoken text)."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE audio_files
@@ -890,7 +890,7 @@ class Database:
 
     def deactivate_audio_file(self, audio_id: int) -> None:
         """Soft delete an audio file by setting is_active = 0."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE audio_files SET is_active = 0, updated_at = ?
@@ -947,7 +947,7 @@ class Database:
 
     def create_schedule(self, data: dict, created_by: str) -> int:
         """Create a new schedule."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 INSERT INTO schedules (name, description, timezone, business_hours,
@@ -965,7 +965,7 @@ class Database:
 
     def update_schedule(self, schedule_id: int, data: dict, updated_by: str) -> None:
         """Update a schedule."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE schedules
@@ -1035,7 +1035,7 @@ class Database:
             action: 'message', 'voicemail', 'forward' (NULL = use schedule default)
             forward_to: Phone number for forward action
         """
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 INSERT INTO schedule_holidays
@@ -1208,7 +1208,7 @@ class Database:
             source_url: URL of the source document (e.g., government holiday list)
             data_as_at: Date when the source data was accurate (YYYY-MM-DD)
         """
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 INSERT INTO holiday_templates (name, description, source_url, data_as_at,
@@ -1230,7 +1230,7 @@ class Database:
             source_url: URL of the source document
             data_as_at: Date when the source data was accurate (YYYY-MM-DD)
         """
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE holiday_templates
@@ -1262,7 +1262,7 @@ class Database:
         if not template:
             raise ValueError(f"Template {template_id} not found")
 
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             # Create the new template (copy source_url and data_as_at)
             cursor = conn.execute("""
@@ -1298,7 +1298,7 @@ class Database:
         if not schedule:
             raise ValueError(f"Schedule {schedule_id} not found")
 
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             # Create the new schedule (copy description, timezone, business_hours, closure defaults)
             cursor = conn.execute("""
@@ -1328,7 +1328,7 @@ class Database:
     def add_template_item(self, template_id: int, name: str, date: str,
                           is_recurring: bool, created_by: str) -> int:
         """Add a holiday item to a template."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 INSERT INTO holiday_template_items (template_id, name, date, is_recurring, created_at, created_by)
@@ -1364,7 +1364,7 @@ class Database:
         Returns:
             True if link was created, False if already existed
         """
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             try:
                 conn.execute("""
@@ -1538,7 +1538,7 @@ class Database:
         if not template:
             return {'error': 'Template not found'}
 
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         added = []
         skipped = []
 
@@ -1620,7 +1620,7 @@ class Database:
 
     def create_queue(self, data: dict, created_by: str) -> int:
         """Create a new queue."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 INSERT INTO queues (name, description, hold_music_id, position_announcement,
@@ -1647,7 +1647,7 @@ class Database:
 
     def update_queue(self, queue_id: int, data: dict, updated_by: str) -> None:
         """Update a queue."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE queues
@@ -1721,7 +1721,7 @@ class Database:
     def add_queue_member(self, queue_id: int, user_email: str, priority: int,
                          created_by: str) -> int:
         """Add a member to a queue."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 INSERT INTO queue_members (queue_id, user_email, priority,
@@ -1739,7 +1739,7 @@ class Database:
 
     def set_queue_member_active(self, member_id: int, is_active: bool, updated_by: str) -> None:
         """Set a queue member's active status (e.g., on break)."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE queue_members
@@ -1780,7 +1780,7 @@ class Database:
         Returns:
             True if updated, False if user not found
         """
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 UPDATE users
@@ -1854,7 +1854,7 @@ class Database:
 
     def create_call_flow(self, data: dict, created_by: str) -> int:
         """Create a new call flow."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 INSERT INTO call_flows (name, description, greeting_audio_id, schedule_id,
@@ -1882,7 +1882,7 @@ class Database:
 
     def update_call_flow(self, flow_id: int, data: dict, updated_by: str) -> None:
         """Update a call flow."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE call_flows
@@ -1932,7 +1932,7 @@ class Database:
     def set_phone_number_call_flow(self, phone_sid: str, call_flow_id: int | None,
                                     updated_by: str) -> None:
         """Set the call flow for a phone number."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE phone_numbers
@@ -2101,7 +2101,7 @@ class Database:
     def create_callback_request(self, queue_id: int, customer_phone: str,
                                  customer_name: str = None, call_sid: str = None) -> int:
         """Create a new callback request."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 INSERT INTO callback_requests (queue_id, customer_phone, customer_name,
@@ -2134,7 +2134,7 @@ class Database:
 
     def claim_callback(self, callback_id: int, agent_email: str) -> bool:
         """Claim a callback request (set to in_progress)."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 UPDATE callback_requests
@@ -2147,7 +2147,7 @@ class Database:
 
     def complete_callback(self, callback_id: int, call_sid: str = None) -> None:
         """Mark a callback as completed."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE callback_requests
@@ -2158,7 +2158,7 @@ class Database:
 
     def fail_callback(self, callback_id: int, notes: str = None) -> None:
         """Mark a callback as failed."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE callback_requests
@@ -2189,7 +2189,7 @@ class Database:
 
     def set_tts_setting(self, key: str, value: str, updated_by: str) -> None:
         """Set a TTS setting value."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 INSERT INTO tts_settings (setting_key, setting_value, updated_at, updated_by)
@@ -2215,7 +2215,7 @@ class Database:
 
     def update_staff_extension_caller_id(self, email: str, caller_id: str | None, updated_by: str) -> bool:
         """Set a staff member's default caller ID for outbound calls."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 UPDATE staff_extensions
@@ -2242,7 +2242,7 @@ class Database:
             return [dict(row) for row in rows]
 
     def get_active_staff_extensions(self) -> list[dict]:
-        """Get staff extensions that are actively using Tina."""
+        """Get staff extensions that are actively using Rinq."""
         with self._get_conn() as conn:
             rows = conn.execute("""
                 SELECT * FROM staff_extensions
@@ -2262,8 +2262,8 @@ class Database:
             return [dict(row) for row in rows]
 
     def set_staff_extension_active(self, email: str, is_active: bool, updated_by: str) -> None:
-        """Toggle whether a staff member is actively using Tina."""
-        now = datetime.utcnow().isoformat()
+        """Toggle whether a staff member is actively using Rinq."""
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE staff_extensions
@@ -2274,7 +2274,7 @@ class Database:
 
     def set_dnd(self, email: str, enabled: bool, updated_by: str) -> None:
         """Toggle do-not-disturb for a staff member."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE staff_extensions
@@ -2285,7 +2285,7 @@ class Database:
 
     def update_heartbeat(self, email: str) -> None:
         """Update the last_heartbeat timestamp for a staff member."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE staff_extensions
@@ -2312,7 +2312,7 @@ class Database:
         if new_extension.startswith('0'):
             return {'success': False, 'error': 'Extension cannot start with zero.'}
 
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             # Check uniqueness
             existing = conn.execute(
@@ -2332,7 +2332,7 @@ class Database:
 
     def create_staff_extension(self, email: str, created_by: str, extension: str = None) -> dict:
         """Create a new staff extension, optionally with a specific extension number."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         if extension:
             # Check it's not already taken
             with self._get_conn() as conn:
@@ -2355,7 +2355,7 @@ class Database:
 
     def update_staff_extension(self, email: str, data: dict, updated_by: str) -> None:
         """Update a staff member's extension settings."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE staff_extensions
@@ -2377,7 +2377,7 @@ class Database:
 
     def update_staff_reports_to(self, email: str, reports_to: str | None, updated_by: str) -> bool:
         """Set who a staff member reports to (manager email)."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 UPDATE staff_extensions
@@ -2390,7 +2390,7 @@ class Database:
     def update_staff_name_audio(self, email: str, name_audio_path: str,
                                 name_audio_text: str, updated_by: str) -> None:
         """Update the name audio path and text for a staff extension."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE staff_extensions
@@ -2410,7 +2410,7 @@ class Database:
 
         Returns dict with success/error.
         """
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             # Check the new extension isn't already taken
             existing = conn.execute(
@@ -2434,7 +2434,7 @@ class Database:
         Called when we see a SIP call (inbound ring or outbound dial).
         Used to distinguish real desk phone users from people who just have credentials.
         """
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute(
                 "UPDATE staff_extensions SET sip_registered_at = ? WHERE email = ?",
@@ -2526,7 +2526,7 @@ class Database:
         Returns list of emails that were activated.
         """
         signals = self.get_staff_usage_signals()
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         activated = []
 
         with self._get_conn() as conn:
@@ -2566,7 +2566,7 @@ class Database:
 
         When locked=True, auto-activation won't change the status.
         """
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE staff_extensions
@@ -2616,7 +2616,7 @@ class Database:
 
     def toggle_queue_membership(self, queue_id: int, email: str, updated_by: str) -> bool:
         """Toggle a user's membership in a queue. Returns True if now a member."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             # Check if already a member
             row = conn.execute("""
@@ -2680,7 +2680,7 @@ class Database:
 
     def create_voicemail_destination(self, data: dict, created_by: str) -> int:
         """Create a new voicemail destination."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 INSERT INTO voicemail_destinations (name, email, description, zendesk_group_id,
@@ -2695,7 +2695,7 @@ class Database:
     def update_voicemail_destination(self, destination_id: int, data: dict,
                                      updated_by: str) -> None:
         """Update a voicemail destination."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE voicemail_destinations
@@ -2744,7 +2744,7 @@ class Database:
         Returns:
             The ID of the new queued_call record
         """
-        now = datetime.utcnow().isoformat() + 'Z'  # Add Z suffix for JavaScript parsing
+        now = datetime.now(timezone.utc).isoformat() + 'Z'  # Add Z suffix for JavaScript parsing
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 INSERT INTO queued_calls (
@@ -2825,7 +2825,7 @@ class Database:
             status: New status (answered, abandoned, timeout)
             answered_by: Agent email if status is 'answered'
         """
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             # Get enqueued_at to calculate wait time
             row = conn.execute("""
@@ -2836,7 +2836,7 @@ class Database:
             if row and row['enqueued_at']:
                 try:
                     enqueued = datetime.fromisoformat(row['enqueued_at'])
-                    wait_seconds = int((datetime.utcnow() - enqueued).total_seconds())
+                    wait_seconds = int((datetime.now(timezone.utc) - enqueued).total_seconds())
                 except (ValueError, TypeError):
                     pass
 
@@ -2869,7 +2869,7 @@ class Database:
         Returns:
             True if this agent claimed the call, False otherwise
         """
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             # Calculate wait time
             row = conn.execute("""
@@ -2884,7 +2884,7 @@ class Database:
             if row['enqueued_at']:
                 try:
                     enqueued = datetime.fromisoformat(row['enqueued_at'])
-                    wait_seconds = int((datetime.utcnow() - enqueued).total_seconds())
+                    wait_seconds = int((datetime.now(timezone.utc) - enqueued).total_seconds())
                 except (ValueError, TypeError):
                     pass
 
@@ -2923,7 +2923,7 @@ class Database:
             if cursor.rowcount == 0:
                 # No existing record — insert a minimal one so get_call_conference
                 # can find it (happens for transferred calls with agent's SID)
-                now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+                now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
                 conn.execute(
                     "INSERT OR IGNORE INTO call_log (call_sid, conference_name, status, direction, from_number, to_number, started_at) VALUES (?, ?, 'in-progress', 'internal', '', '', ?)",
                     (call_sid, conference_name, now)
@@ -2968,7 +2968,7 @@ class Database:
                 (child_call_sid, call_sid)
             )
             if cursor.rowcount == 0:
-                now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+                now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
                 conn.execute(
                     "INSERT OR IGNORE INTO call_log (call_sid, child_call_sid, status, direction, from_number, to_number, started_at) VALUES (?, ?, 'in-progress', 'internal', '', '', ?)",
                     (call_sid, child_call_sid, now)
@@ -3312,7 +3312,7 @@ class Database:
     def start_transfer(self, call_sid: str, transfer_type: str, target: str,
                        target_name: str, transferred_by: str) -> None:
         """Start a transfer for a call. Writes to both queued_calls and call_log."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         params = (transfer_type, target, target_name, transferred_by, now, call_sid)
         with self._get_conn() as conn:
             conn.execute("""
@@ -3358,7 +3358,7 @@ class Database:
 
     def complete_transfer(self, call_sid: str) -> None:
         """Mark a transfer as completed."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE queued_calls
@@ -3450,7 +3450,7 @@ class Database:
     def start_transfer_log(self, call_sid: str, transfer_type: str, target: str,
                            target_name: str, transferred_by: str) -> None:
         """Start a transfer for any call type (uses call_log)."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE call_log
@@ -3479,7 +3479,7 @@ class Database:
 
     def complete_transfer_log(self, call_sid: str) -> None:
         """Mark a transfer as completed (uses call_log)."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE call_log
@@ -3571,7 +3571,7 @@ class Database:
 
     def set_bot_setting(self, key: str, value: str, updated_by: str) -> None:
         """Set a bot setting value."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute("""
                 INSERT INTO bot_settings (setting_key, setting_value, updated_at, updated_by)
@@ -3600,7 +3600,7 @@ class Database:
             Dict with counts of records aggregated
         """
         if not target_date:
-            target_date = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')
+            target_date = (datetime.now(timezone.utc) - timedelta(days=1)).strftime('%Y-%m-%d')
 
         with self._get_conn() as conn:
             # Aggregate queue stats by queue and agent
@@ -3655,7 +3655,7 @@ class Database:
                 for row in recording_data if row['agent_email']
             }
 
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             records_created = 0
 
             for row in queue_data:
@@ -3722,7 +3722,7 @@ class Database:
             Dict with counts of records aggregated
         """
         if not target_date:
-            target_date = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')
+            target_date = (datetime.now(timezone.utc) - timedelta(days=1)).strftime('%Y-%m-%d')
 
         with self._get_conn() as conn:
             hourly_data = conn.execute("""
@@ -3739,7 +3739,7 @@ class Database:
                 GROUP BY queue_id, queue_name, hour
             """, (target_date,)).fetchall()
 
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             records_created = 0
 
             for row in hourly_data:
@@ -4036,7 +4036,7 @@ class Database:
         Returns:
             Dict with today's statistics
         """
-        today = datetime.utcnow().strftime('%Y-%m-%d')
+        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
         with self._get_conn() as conn:
             # Queue stats from queued_calls
@@ -4112,7 +4112,7 @@ class Database:
         Returns:
             List of dicts with per-agent stats for today
         """
-        today = datetime.utcnow().strftime('%Y-%m-%d')
+        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
         with self._get_conn() as conn:
             # Get agent stats from queued_calls
@@ -4167,7 +4167,7 @@ class Database:
         Returns:
             List of dicts with per-queue stats for today
         """
-        today = datetime.utcnow().strftime('%Y-%m-%d')
+        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
         with self._get_conn() as conn:
             rows = conn.execute("""
@@ -4212,7 +4212,7 @@ class Database:
         Returns:
             List of 24 dicts with hourly call counts for today
         """
-        today = datetime.utcnow().strftime('%Y-%m-%d')
+        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
         with self._get_conn() as conn:
             rows = conn.execute("""
@@ -4287,7 +4287,7 @@ class Database:
                 data.get('customer_name'),
                 data.get('customer_email'),
                 data.get('conference_name'),
-                data.get('started_at', datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')),
+                data.get('started_at', datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')),
             ))
             conn.commit()
             return cursor.lastrowid
@@ -4318,7 +4318,7 @@ class Database:
         """Update a call_log entry."""
         if not updates:
             return
-        now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+        now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
         set_clauses = []
         values = []
         for key, value in updates.items():
@@ -4332,7 +4332,7 @@ class Database:
         if not set_clauses:
             return
         set_clauses.append("updated_at = ?")
-        values.append(datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'))
+        values.append(datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'))
         values.append(call_sid)
         with self._get_conn() as conn:
             conn.execute(f"UPDATE call_log SET {', '.join(set_clauses)} WHERE call_sid = ?", values)
@@ -4341,7 +4341,7 @@ class Database:
     def complete_call(self, call_sid: str, status: str, agent_email: str = None,
                       talk_seconds: int = None) -> None:
         """Mark a call as completed with final status and duration."""
-        now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+        now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
         with self._get_conn() as conn:
             row = conn.execute("SELECT started_at, answered_at FROM call_log WHERE call_sid = ?", (call_sid,)).fetchone()
             updates = {'status': status, 'ended_at': now, 'updated_at': now}

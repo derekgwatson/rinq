@@ -1,5 +1,5 @@
 """
-Authentication compatibility layer for Tina.
+Authentication compatibility layer for Rinq.
 
 Auth is handled by GatewayAuth in app.py, which injects the actual
 decorators into this module at runtime for backward compatibility

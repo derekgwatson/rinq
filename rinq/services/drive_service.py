@@ -1,5 +1,5 @@
 """
-Google Drive Service for Tina.
+Google Drive Service for Rinq.
 
 Handles file operations on Google Drive using the Drive API v3.
 Used for storing call recordings with 12-month retention.
@@ -42,7 +42,7 @@ class GoogleDriveService:
             return
 
         try:
-            logger.info("=== Tina Google Drive Service Initialization ===")
+            logger.info("=== Rinq Google Drive Service Initialization ===")
             logger.info(f"Credentials file: {config.google_credentials_file}")
             logger.info(f"Admin email for delegation: {config.google_admin_email}")
 
@@ -142,7 +142,7 @@ class GoogleDriveService:
         """Get the configured recordings folder ID from settings.
 
         The folder must be created manually in Google Drive and configured
-        in Tina's admin settings. This ensures explicit control over where
+        in Rinq's admin settings. This ensures explicit control over where
         recordings are stored.
 
         Returns:
@@ -157,7 +157,7 @@ class GoogleDriveService:
 
         if not folder_id:
             logger.warning("Drive recordings folder not configured. "
-                           "Create a folder in Google Drive and configure its ID in Tina Admin > Settings.")
+                           "Create a folder in Google Drive and configure its ID in Rinq Admin > Settings.")
             return None
 
         self._recordings_folder_id = folder_id
@@ -275,7 +275,7 @@ class GoogleDriveService:
 
     def upload_recording(self, recording_sid: str, content: bytes,
                          metadata: dict = None) -> dict:
-        """Upload a call recording to the Tina Recordings folder."""
+        """Upload a call recording to the Rinq Recordings folder."""
         folder_id = self.get_recordings_folder_id()
         if not folder_id:
             return {'error': 'Could not get/create recordings folder'}

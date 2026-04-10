@@ -1,1 +1,1 @@
-# Web module for Tina
+# Web module for Rinq

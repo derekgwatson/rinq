@@ -1,5 +1,5 @@
 """
-Transfer service for Tina.
+Transfer service for Rinq.
 
 Handles call transfer operations:
 - Blind transfer: Immediately transfer caller to target, agent drops
@@ -1084,7 +1084,7 @@ class TransferService:
                 # Agent just needs to leave — their call ends
                 # The conference continues with customer and target
                 #
-                # Clean up Tina's involvement: mark call as done and clear
+                # Clean up Rinq's involvement: mark call as done and clear
                 # conference name so any subsequent Twilio callbacks don't
                 # trigger queue alerts or other side effects
                 self.db.complete_transfer_log(transfer_key)

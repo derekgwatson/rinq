@@ -1,5 +1,5 @@
 """
-Abstract base classes for Tina/Rinq integrations.
+Abstract base classes for Rinq integrations.
 
 Each interface defines the contract that implementations must fulfill.
 All methods return dicts or lists — no implementation-specific types leak out.

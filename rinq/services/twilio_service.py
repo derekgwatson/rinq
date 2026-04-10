@@ -1,5 +1,5 @@
 """
-Twilio service for Tina.
+Twilio service for Rinq.
 
 Handles all Twilio API interactions:
 - Phone number management
@@ -10,7 +10,7 @@ Handles all Twilio API interactions:
 
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from twilio.rest import Client
@@ -131,7 +131,7 @@ class TwilioService:
         """
         try:
             numbers = twilio_list(self.client.incoming_phone_numbers)
-            synced_at = datetime.utcnow().isoformat()
+            synced_at = datetime.now(timezone.utc).isoformat()
             count = 0
 
             # Track which SIDs we see from Twilio
@@ -175,7 +175,7 @@ class TwilioService:
     def configure_status_callbacks(self, performed_by: str = "system") -> dict:
         """Set status callback URL on all Twilio phone numbers.
 
-        One-time operation to ensure Twilio sends call status events to Tina.
+        One-time operation to ensure Twilio sends call status events to Rinq.
         """
         if not config.webhook_base_url:
             return {"success": False, "error": "TINA_WEBHOOK_URL not configured"}
@@ -212,7 +212,7 @@ class TwilioService:
         """Update the forwarding number for a phone number.
 
         Updates the local database. If TINA_WEBHOOK_URL is configured,
-        also updates the Twilio phone number's voice URL to point to Tina.
+        also updates the Twilio phone number's voice URL to point to Rinq.
         """
         try:
             # Format number to E.164 if needed
@@ -539,7 +539,7 @@ class TwilioService:
 
         try:
             twilio_creds = self.get_credentials_in_list()
-            synced_at = datetime.utcnow().isoformat()
+            synced_at = datetime.now(timezone.utc).isoformat()
             count = 0
             added = 0
             updated = 0
@@ -629,7 +629,7 @@ class TwilioService:
                 "friendly_name": friendly_name or username,
                 "staff_email": staff_email,
                 "is_active": 1,
-                "synced_at": datetime.utcnow().isoformat(),
+                "synced_at": datetime.now(timezone.utc).isoformat(),
             })
 
             # Store password locally for later retrieval
@@ -709,7 +709,7 @@ class TwilioService:
         """
         try:
             twilio_caller_ids = self.get_outgoing_caller_ids()
-            synced_at = datetime.utcnow().isoformat()
+            synced_at = datetime.now(timezone.utc).isoformat()
             added = 0
             updated = 0
 
@@ -780,7 +780,7 @@ class TwilioService:
             call = self.client.calls.create(
                 to=to_e164,
                 from_=from_number,
-                twiml='<Response><Say>Hello! This is a test call from Tina. Your phone system is working correctly.</Say></Response>'
+                twiml='<Response><Say>Hello! This is a test call from Rinq. Your phone system is working correctly.</Say></Response>'
             )
 
             logger.info(f"Initiated test call: {call.sid}")
