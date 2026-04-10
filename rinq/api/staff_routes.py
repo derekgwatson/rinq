@@ -1,0 +1,490 @@
+"""Staff API routes — PAM integration, staff sync, staff phones, contacts.
+
+Extracted from routes.py. Registered via register(api_bp) at import time.
+"""
+
+import logging
+
+from flask import jsonify, request
+
+from rinq.database.db import get_db
+from rinq.tenant.context import get_twilio_config
+
+try:
+    from shared.auth.bot_api import api_or_session_auth, get_api_caller, get_api_caller_email
+except ImportError:
+    from rinq.auth.decorators import api_or_session_auth, get_api_caller, get_api_caller_email
+
+logger = logging.getLogger(__name__)
+
+
+def register(bp):
+    """Register all staff routes on the given blueprint."""
+
+    # =========================================================================
+    # PAM Integration
+    # =========================================================================
+
+    @bp.route('/pam/directory-overrides')
+    @api_or_session_auth
+    def get_pam_directory_overrides():
+        """Get directory overrides for PAM.
+
+        GET /api/pam/directory-overrides
+
+        Returns the extension directory phone number and a list of staff who are
+        active on Rinq. PAM uses this to replace dead old VoIP numbers with the
+        extension directory number + Rinq extension.
+
+        A staff member is considered "on Rinq" if staff_extensions.is_active = 1,
+        which is controlled from /admin/staff (auto-activated by usage signals,
+        or manually set by an admin).
+
+        Returns:
+            {
+                "extension_directory_number": "0261926833",
+                "tina_staff": {
+                    "cid.cortes@watsonblinds.com.au": {"extension": "1234"},
+                    "jane.doe@watsonblinds.com.au": {"extension": "1235"},
+                    ...
+                }
+            }
+        """
+        db = get_db()
+
+        # Find the extension directory phone number:
+        # It's a phone number whose call flow has open_action = 'extension_directory'
+        ext_dir_number = None
+        phone_numbers = db.get_phone_numbers()
+        call_flows = db.get_call_flows()
+        ext_dir_flow_ids = {cf['id'] for cf in call_flows if cf.get('open_action') == 'extension_directory'}
+
+        from rinq.services.phone import to_local
+        for pn in phone_numbers:
+            if pn.get('call_flow_id') in ext_dir_flow_ids:
+                ext_dir_number = to_local(pn['phone_number'])
+                break
+
+        # Get staff who are marked active in Rinq (staff_extensions.is_active)
+        # This is the flag controlled from /admin/staff
+        active_extensions = db.get_active_staff_extensions()
+        tina_staff = {}
+        for ext in active_extensions:
+            email = ext['email'].lower()
+            tina_staff[email] = {
+                'extension': ext['extension'],
+            }
+
+        # All extensions (including inactive) - PAM uses this to show the
+        # extension directory number for staff who have no fixed line
+        all_extensions = {}
+        for ext in db.get_all_staff_extensions():
+            email = ext['email'].lower()
+            all_extensions[email] = {
+                'extension': ext['extension'],
+            }
+
+        return jsonify({
+            'extension_directory_number': ext_dir_number,
+            'tina_staff': tina_staff,
+            'all_extensions': all_extensions,
+        })
+
+    # =========================================================================
+    # Staff Sync
+    # =========================================================================
+
+    @bp.route('/staff/sync', methods=['POST'])
+    @api_or_session_auth
+    def sync_staff_extensions():
+        """Sync staff from Peter - create extensions for anyone who doesn't have one.
+
+        POST /api/staff/sync
+
+        Fetches all active staff from Peter and ensures each has a Rinq
+        staff_extensions record with an auto-assigned extension number.
+
+        Returns:
+            {"created": 5, "existing": 42, "total": 47, "details": [...]}
+        """
+        from rinq.integrations import get_staff_directory
+
+        caller = get_api_caller()
+        db = get_db()
+
+        # Fetch active staff from staff directory
+        staff_dir = get_staff_directory()
+        peter_staff = staff_dir.get_active_staff() if staff_dir else []
+        if not peter_staff:
+            return jsonify({'error': 'Could not fetch staff from directory'}), 502
+
+        created = 0
+        existing = 0
+        details = []
+
+        for staff in peter_staff:
+            email = (staff.get('google_primary_email') or staff.get('work_email') or '').lower().strip()
+            if not email:
+                continue
+
+            ext = db.get_staff_extension(email)
+            if ext:
+                existing += 1
+            else:
+                peter_ext = staff.get('extension', '').strip() or None
+                ext = db.create_staff_extension(email, caller or 'system:sync', extension=peter_ext)
+                created += 1
+                details.append({'email': email, 'extension': ext['extension']})
+
+        db.log_activity(
+            action="staff_sync",
+            target="staff_extensions",
+            details=f"Synced from Peter: {created} created, {existing} existing",
+            performed_by=caller or 'system:sync'
+        )
+
+        return jsonify({
+            'created': created,
+            'existing': existing,
+            'total': created + existing,
+            'details': details,
+        })
+
+    @bp.route('/staff/import-hierarchy', methods=['POST'])
+    @api_or_session_auth
+    def import_staff_hierarchy():
+        """One-off import of reporting hierarchy from Peter (Watson bot-team).
+
+        POST /api/staff/import-hierarchy
+
+        Fetches each active staff member's reportees from Peter and populates
+        the reports_to field in staff_extensions. Only updates staff who don't
+        already have a reports_to set (unless ?force=true).
+
+        Returns:
+            {"updated": 5, "skipped": 3, "details": [...]}
+        """
+        from rinq.integrations.watson.staff import WatsonStaffDirectory
+
+        caller = get_api_caller()
+        db = get_db()
+        force = request.args.get('force', '').lower() == 'true'
+
+        peter = WatsonStaffDirectory()
+        peter_staff = peter.get_active_staff()
+        if not peter_staff:
+            return jsonify({'error': 'Could not fetch staff from Peter'}), 502
+
+        # Build manager→reportees mapping from Peter
+        # For each staff member, ask Peter for their direct reports
+        reports_to_map = {}  # email -> manager_email
+        for staff in peter_staff:
+            email = (staff.get('google_primary_email') or staff.get('work_email') or '').lower().strip()
+            if not email:
+                continue
+            direct_reports = peter.get_reportees(email, recursive=False)
+            for report in direct_reports:
+                report_email = (report.get('google_primary_email') or report.get('work_email') or report.get('email', '')).lower().strip()
+                if report_email:
+                    reports_to_map[report_email] = email
+
+        updated = 0
+        skipped = 0
+        details = []
+
+        for email, manager_email in reports_to_map.items():
+            ext = db.get_staff_extension(email)
+            if not ext:
+                skipped += 1
+                continue
+            if ext.get('reports_to') and not force:
+                skipped += 1
+                continue
+            db.update_staff_reports_to(email, manager_email, caller or 'system:peter-import')
+            updated += 1
+            details.append({'email': email, 'reports_to': manager_email})
+
+        db.log_activity(
+            action="hierarchy_import",
+            target="staff_extensions",
+            details=f"Imported from Peter: {updated} updated, {skipped} skipped",
+            performed_by=caller or 'system:peter-import'
+        )
+
+        return jsonify({
+            'updated': updated,
+            'skipped': skipped,
+            'details': details,
+        })
+
+    # =========================================================================
+    # Staff Phones (for PAM integration)
+    # =========================================================================
+
+    @bp.route('/staff-phones')
+    @api_or_session_auth
+    def get_staff_phones():
+        """Get staff phone extensions for PAM directory.
+
+        Returns only extensions where show_in_pam is enabled.
+
+        Response:
+            {
+                "extensions": [
+                    {"email": "user@example.com", "extension": "101"},
+                    ...
+                ]
+            }
+        """
+        db = get_db()
+        extensions = db.get_visible_staff_extensions()
+
+        return jsonify({
+            "extensions": [
+                {
+                    "email": ext['email'],
+                    "extension": ext['extension'],
+                }
+                for ext in extensions
+            ]
+        })
+
+    @bp.route('/staff-phones/active')
+    @api_or_session_auth
+    def get_active_staff_phones():
+        """Get staff who are actively using Rinq.
+
+        For Peter integration — only returns users an admin has activated.
+
+        Response:
+            {
+                "extensions": [
+                    {"email": "...", "extension": "1234", "forward_to": "...", "forward_mode": "..."},
+                    ...
+                ]
+            }
+        """
+        db = get_db()
+        extensions = db.get_active_staff_extensions()
+
+        return jsonify({
+            "extensions": [
+                {
+                    "email": ext['email'],
+                    "extension": ext['extension'],
+                    "forward_to": ext.get('forward_to'),
+                    "forward_mode": ext.get('forward_mode'),
+                }
+                for ext in extensions
+            ]
+        })
+
+    @bp.route('/staff-phones/<email>')
+    @api_or_session_auth
+    def get_staff_phone(email):
+        """Get a specific staff member's extension.
+
+        Returns extension info regardless of show_in_pam setting.
+        """
+        db = get_db()
+        ext = db.get_staff_extension(email)
+
+        if not ext:
+            return jsonify({"error": "Extension not found"}), 404
+
+        return jsonify({
+            "email": ext['email'],
+            "extension": ext['extension'],
+            "show_in_pam": bool(ext['show_in_pam']),
+            "is_active": bool(ext.get('is_active')),
+            "forward_to": ext['forward_to'],
+            "forward_mode": ext['forward_mode'],
+        })
+
+    @bp.route('/staff-phones/resolved')
+    @api_or_session_auth
+    def get_resolved_staff_phones():
+        """Get resolved external phone numbers for all staff.
+
+        GET /api/staff-phones/resolved
+
+        Returns the extension directory number as each staff member's external
+        number. To reach a specific person, callers dial this number then
+        enter the extension.
+
+        Phone assignments (store numbers, queue lines) are operational — they
+        route calls to queues/teams, not to individuals. If true personal DIDs
+        are needed in future, add a did_number field to staff_extensions.
+
+        This is the source of truth for external phone numbers. Peter pulls
+        from this endpoint to display phone info without owning it.
+
+        Returns:
+            {
+                "staff": {
+                    "user@example.com": {
+                        "extension": "1042",
+                        "external_number": "0261920000"
+                    }
+                }
+            }
+        """
+        from rinq.services.phone import to_local
+        db = get_db()
+
+        # Find extension directory phone number
+        ext_dir_number = None
+        phone_numbers = db.get_phone_numbers()
+        call_flows = db.get_call_flows()
+        ext_dir_flow_ids = {cf['id'] for cf in call_flows if cf.get('open_action') == 'extension_directory'}
+
+        for pn in phone_numbers:
+            if pn.get('call_flow_id') in ext_dir_flow_ids:
+                ext_dir_number = to_local(pn['phone_number'])
+                break
+
+        # Resolve each staff extension — everyone gets the extension directory
+        # number as their external number (callers dial it + enter extension)
+        all_extensions = db.get_all_staff_extensions()
+        staff = {}
+        for ext in all_extensions:
+            email = ext['email'].lower()
+            extension = ext['extension']
+
+            staff[email] = {
+                'extension': extension,
+                'external_number': ext_dir_number if extension else None,
+            }
+
+        return jsonify({'staff': staff})
+
+    # =========================================================================
+    # Contacts / Address Book
+    # =========================================================================
+
+    @bp.route('/contacts', methods=['GET'])
+    @api_or_session_auth
+    def get_contacts():
+        """Get staff contacts for the address book.
+
+        GET /api/contacts?q=search+term
+
+        Merges Peter staff directory with Rinq extensions/assignments.
+
+        Query params:
+            q: Optional search term (filters by name)
+
+        Returns:
+            {
+                "contacts": [
+                    {
+                        "name": "John Smith",
+                        "email": "john.smith@watsonblinds.com.au",
+                        "position": "Sales Consultant",
+                        "section": "Canberra",
+                        "extension": "123",
+                        "phone": "+61412345678",
+                        "has_browser": true,
+                        "has_sip": true
+                    },
+                    ...
+                ]
+            }
+        """
+        from rinq.integrations import get_staff_directory
+
+        search = request.args.get('q', '').strip().lower()
+        db = get_db()
+
+        # Fetch staff from external directory (Peter) if available
+        staff_dir = get_staff_directory()
+        peter_staff = staff_dir.get_active_staff() if staff_dir else []
+
+        # Get local extensions and ring settings
+        extensions = {ext['email']: ext for ext in db.get_all_staff_extensions()}
+        assignments = {}
+        for assignment in db.get_assignments():
+            email = assignment.get('staff_email')
+            if email and email not in assignments:
+                # The assignments query joins phone_numbers, so phone_number is included
+                phone_num = assignment.get('phone_number')
+                if phone_num:
+                    assignments[email] = phone_num
+
+        # Build contacts list
+        contacts = []
+
+        if peter_staff:
+            # External staff directory available — merge with local data
+            for staff in peter_staff:
+                name = staff.get('name', '')
+                # Peter uses google_primary_email, local uses email
+                email = (staff.get('google_primary_email') or staff.get('work_email') or staff.get('email') or '').lower()
+
+                if not email:
+                    continue
+
+                # Apply search filter
+                if search:
+                    searchable = f"{name} {email} {staff.get('section', '')} {staff.get('position', '')}".lower()
+                    if search not in searchable:
+                        continue
+
+                ext = extensions.get(email, {})
+                ring_settings = db.get_user_ring_settings(email) if ext else {}
+
+                # Phone: assignment > mobile > fixed line > extension
+                phone = (assignments.get(email, '')
+                         or staff.get('phone_mobile', '')
+                         or staff.get('phone_fixed', '')
+                         or ext.get('extension', ''))
+
+                contacts.append({
+                    'name': name,
+                    'email': email,
+                    'position': staff.get('position', ''),
+                    'section': staff.get('section', ''),
+                    'extension': ext.get('extension', ''),
+                    'phone': phone,
+                    'has_browser': ring_settings.get('ring_browser', False),
+                    'has_sip': ring_settings.get('ring_sip', False),
+                    'is_active_in_tina': ext.get('is_active', False),
+                    'dnd': bool(ext.get('dnd_enabled')),
+                })
+        else:
+            # No external directory — build contacts from local staff extensions + users
+            users_by_email = {}
+            for user in db.get_users():
+                email = (user.get('staff_email') or '').lower()
+                if email:
+                    users_by_email[email] = user
+
+            for email, ext in extensions.items():
+                user = users_by_email.get(email, {})
+                name = user.get('friendly_name') or email.split('@')[0].replace('.', ' ').title()
+
+                # Apply search filter
+                if search:
+                    searchable = f"{name} {email} {ext.get('extension', '')}".lower()
+                    if search not in searchable:
+                        continue
+
+                ring_settings = db.get_user_ring_settings(email)
+                phone = assignments.get(email, '') or ext.get('forward_to', '') or ext.get('extension', '')
+
+                contacts.append({
+                    'name': name,
+                    'email': email,
+                    'position': '',
+                    'section': '',
+                    'extension': ext.get('extension', ''),
+                    'phone': phone,
+                    'has_browser': ring_settings.get('ring_browser', False),
+                    'has_sip': ring_settings.get('ring_sip', False),
+                    'is_active_in_tina': ext.get('is_active', False),
+                    'dnd': bool(ext.get('dnd_enabled')),
+                })
+
+        contacts.sort(key=lambda c: c['name'].lower())
+
+        return jsonify({"contacts": contacts})
