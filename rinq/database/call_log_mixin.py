@@ -610,9 +610,3 @@ class CallLogMixin:
                 'calls': calls,
                 'last_call_date': calls[0]['started_at'] if calls else None
             }
-
-
-def get_db() -> Database:
-    """Get the tenant-scoped database for the current request."""
-    from rinq.tenant.context import get_tenant_db
-    return get_tenant_db()
