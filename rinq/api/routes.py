@@ -2313,7 +2313,9 @@ def conference_join():
                             name = user.get('friendly_name')
                         resolved_role = 'agent'  # Staff member, not customer
                     elif to.startswith('+'):
-                        name = to
+                        # External number — use caller's number, not the number they dialled
+                        caller_number = getattr(call, '_from', None) or to
+                        name = caller_number
                 except Exception:
                     pass
                 db.add_participant(room, call_sid, resolved_role,
