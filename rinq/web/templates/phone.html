@@ -4146,6 +4146,12 @@ async function completeTransfer() {
         closeTransferModal();
         return;
     }
+
+    // Immediate feedback
+    const completeBtn = document.getElementById('btnCompleteTransfer');
+    completeBtn.disabled = true;
+    completeBtn.textContent = 'Completing...';
+
     try {
         const body = { call_type: currentTransferCallType };
         if (currentTransferCallType === 'queue') {
@@ -4178,10 +4184,14 @@ async function completeTransfer() {
                 currentTransferKey = null;
             } else {
                 showTransferError(data.error || 'Failed to complete transfer');
+                completeBtn.disabled = false;
+                completeBtn.textContent = 'Complete Transfer';
             }
         }
     } catch (error) {
         showTransferError('Error: ' + error.message);
+        completeBtn.disabled = false;
+        completeBtn.textContent = 'Complete Transfer';
     }
 }
 
