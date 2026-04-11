@@ -3274,8 +3274,9 @@ function updateRecordButton() {
     } else {
         btnRecord.classList.remove('recording');
         recordIcon.textContent = '⏺️';
-        recordText.textContent = 'Record';
-        btnRecord.title = 'Resume recording';
+        const isPaused = currentRecordingSid != null;
+        recordText.textContent = isPaused ? 'Resume' : 'Record';
+        btnRecord.title = isPaused ? 'Resume recording' : 'Start recording';
     }
 }
 
