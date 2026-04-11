@@ -4396,8 +4396,9 @@ function renderQueueCallers(callers) {
 
     // Render caller cards
     queueCallersList.innerHTML = waitingCallers.map(caller => {
-        const waitTime = caller.wait_display || formatWaitTime(caller.enqueued_at);
-        const isLongWait = (caller.wait_seconds || getWaitSeconds(caller.enqueued_at)) > 60;
+        const waitSecs = caller.wait_seconds || 0;
+        const waitTime = `${Math.floor(waitSecs / 60)}:${String(waitSecs % 60).padStart(2, '0')}`;
+        const isLongWait = waitSecs > 60;
         const isAnswering = answeringCallSid === caller.call_sid;
 
         let details = [];
@@ -4633,8 +4634,9 @@ function renderQueueCallers(callers) {
     }
 
     queueCallersList.innerHTML = waitingCallers.map(caller => {
-        const waitTime = caller.wait_display || formatWaitTime(caller.enqueued_at);
-        const isLongWait = (caller.wait_seconds || getWaitSeconds(caller.enqueued_at)) > 60;
+        const waitSecs = caller.wait_seconds || 0;
+        const waitTime = `${Math.floor(waitSecs / 60)}:${String(waitSecs % 60).padStart(2, '0')}`;
+        const isLongWait = waitSecs > 60;
         const isAnswering = answeringCallSid === caller.call_sid;
 
         let details = [];
@@ -4738,6 +4740,15 @@ if ('Notification' in window && Notification.permission === 'default') {
 // Start polling
 fetchQueueCallers();
 setInterval(fetchQueueCallers, 5000);
+
+// Tick wait times up every second between polls
+setInterval(() => {
+    if (!window._lastCallers || !window._lastCallers.length) return;
+    window._lastCallers.forEach(c => {
+        if (c.wait_seconds != null) c.wait_seconds++;
+    });
+    renderQueueCallers(window._lastCallers);
+}, 1000);
 </script>
 {% endif %}
 
