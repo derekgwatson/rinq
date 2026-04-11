@@ -4686,6 +4686,8 @@ def get_queued_callers():
         if caller.get('enqueued_at'):
             try:
                 enqueued = datetime.fromisoformat(caller['enqueued_at'])
+                if enqueued.tzinfo is None:
+                    enqueued = enqueued.replace(tzinfo=timezone.utc)
                 wait_seconds = int((now - enqueued).total_seconds())
                 caller['wait_seconds'] = wait_seconds
                 caller['wait_display'] = f"{wait_seconds // 60}:{wait_seconds % 60:02d}"

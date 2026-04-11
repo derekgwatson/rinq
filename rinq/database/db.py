@@ -2778,7 +2778,7 @@ class Database(StatsMixin, CallLogMixin):
         Returns:
             The ID of the new queued_call record
         """
-        now = datetime.now(timezone.utc).isoformat() + 'Z'  # Add Z suffix for JavaScript parsing
+        now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 INSERT INTO queued_calls (
