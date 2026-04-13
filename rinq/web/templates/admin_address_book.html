@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+
+{% block extra_css %}
+.source-badge {
+    display: inline-block;
+    font-size: 0.75em;
+    padding: 2px 7px;
+    border-radius: 10px;
+    font-weight: 500;
+    background: #e9ecef;
+    color: #495057;
+}
+.source-badge.peter {
+    background: #cce5ff;
+    color: #004085;
+}
+.action-icon {
+    cursor: pointer;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+    font-size: 1.1em;
+    background: none;
+    border: none;
+    padding: 2px 6px;
+}
+.action-icon:hover { opacity: 1; }
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <div>
+            <h2 style="margin: 0;">Address Book</h2>
+            <p class="text-muted" style="margin: 5px 0 0 0;">
+                {{ entries|length }} contact{% if entries|length != 1 %}s{% endif %} &middot;
+                Peter-synced contacts are read-only; add manual entries below.
+            </p>
+        </div>
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <a href="{{ url_for('web.admin') }}" class="btn" style="background: #6c757d;">Back to Admin</a>
+            <button class="btn" id="syncBtn" onclick="triggerSync()">Sync from Peter</button>
+        </div>
+    </div>
+
+    <table class="data-table" id="addressTable">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Mobile</th>
+                <th>Section</th>
+                <th>Position</th>
+                <th>Source</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for entry in entries %}
+            <tr id="row-{{ entry.id }}">
+                <td>{{ entry.name }}</td>
+                <td>{{ entry.display_mobile or entry.mobile_e164 or '—' }}</td>
+                <td>{{ entry.section or '—' }}</td>
+                <td>{{ entry.position or '—' }}</td>
+                <td>
+                    <span class="source-badge {{ entry.source }}">{{ entry.source }}</span>
+                </td>
+                <td>
+                    {% if entry.source == 'manual' %}
+                    <button class="action-icon" title="Delete" onclick="deleteEntry({{ entry.id }})">&#x1F5D1;</button>
+                    {% endif %}
+                </td>
+            </tr>
+            {% else %}
+            <tr id="empty-row">
+                <td colspan="6" class="text-muted" style="text-align: center; padding: 30px;">
+                    No contacts yet. Sync from Peter or add one manually.
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <div style="margin-top: 24px; padding-top: 20px; border-top: 1px solid #e9ecef;">
+        <h3 style="margin: 0 0 14px 0; font-size: 1em;">Add manual contact</h3>
+        <form id="addForm" onsubmit="addEntry(event)" style="display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end;">
+            <div>
+                <label style="display: block; font-size: 0.85em; margin-bottom: 4px;">Name *</label>
+                <input type="text" name="name" required placeholder="Fitter name" style="padding: 8px 10px; border: 1px solid #ced4da; border-radius: 4px; min-width: 180px;">
+            </div>
+            <div>
+                <label style="display: block; font-size: 0.85em; margin-bottom: 4px;">Mobile *</label>
+                <input type="text" name="mobile" required placeholder="04xx xxx xxx" style="padding: 8px 10px; border: 1px solid #ced4da; border-radius: 4px; width: 140px;">
+            </div>
+            <div>
+                <label style="display: block; font-size: 0.85em; margin-bottom: 4px;">Section</label>
+                <input type="text" name="section" placeholder="e.g. Fitters" style="padding: 8px 10px; border: 1px solid #ced4da; border-radius: 4px; width: 140px;">
+            </div>
+            <div>
+                <label style="display: block; font-size: 0.85em; margin-bottom: 4px;">Position</label>
+                <input type="text" name="position" placeholder="e.g. Installer" style="padding: 8px 10px; border: 1px solid #ced4da; border-radius: 4px; width: 140px;">
+            </div>
+            <button type="submit" class="btn">Add Contact</button>
+        </form>
+        <p id="formError" style="color: #dc3545; margin: 8px 0 0 0; display: none;"></p>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function deleteEntry(id) {
+    if (!confirm('Delete this contact?')) return;
+    fetch('/api/address-book/' + id, {method: 'DELETE'})
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                const row = document.getElementById('row-' + id);
+                if (row) row.remove();
+            } else {
+                alert(data.error || 'Delete failed');
+            }
+        });
+}
+
+function addEntry(e) {
+    e.preventDefault();
+    const form = e.target;
+    const errEl = document.getElementById('formError');
+    errEl.style.display = 'none';
+
+    const body = {
+        name: form.name.value.trim(),
+        mobile: form.mobile.value.trim(),
+        section: form.section.value.trim() || null,
+        position: form.position.value.trim() || null,
+    };
+
+    fetch('/api/address-book', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) {
+            errEl.textContent = data.error;
+            errEl.style.display = 'block';
+            return;
+        }
+        // Reload to show new row cleanly
+        window.location.reload();
+    });
+}
+
+function triggerSync() {
+    const btn = document.getElementById('syncBtn');
+    btn.disabled = true;
+    btn.textContent = 'Syncing…';
+    fetch('/api/address-book/sync', {method: 'POST'})
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                window.location.reload();
+            } else {
+                btn.disabled = false;
+                btn.textContent = 'Sync from Peter';
+                alert('Sync failed: ' + (data.error || 'unknown error'));
+            }
+        });
+}
+</script>
+{% endblock %}

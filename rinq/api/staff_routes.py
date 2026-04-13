@@ -487,4 +487,136 @@ def register(bp):
 
         contacts.sort(key=lambda c: c['name'].lower())
 
+        # Merge address book entries (tagged so UI can distinguish them)
+        try:
+            ab_entries = db.get_address_book()
+            for entry in ab_entries:
+                contacts.append({
+                    'name': entry['name'],
+                    'email': None,
+                    'position': entry.get('position', ''),
+                    'section': entry.get('section', ''),
+                    'phone': entry.get('display_mobile', ''),
+                    'mobile': entry.get('display_mobile', ''),
+                    'extension': '',
+                    'has_browser': False,
+                    'has_sip': False,
+                    'is_active_in_tina': False,
+                    'dnd': False,
+                    'source': entry.get('source', 'manual'),
+                })
+        except Exception as e:
+            logger.warning(f"Could not merge address book into contacts: {e}")
+
+        contacts.sort(key=lambda c: c['name'].lower())
+
         return jsonify({"contacts": contacts})
+
+    # =========================================================================
+    # Address Book
+    # =========================================================================
+
+    @bp.route('/address-book', methods=['GET'])
+    @api_or_session_auth
+    def get_address_book():
+        """List all address book entries.
+
+        GET /api/address-book?q=search+term
+        """
+        db = get_db()
+        q = request.args.get('q', '').strip()
+        entries = db.get_address_book(search=q or None)
+        return jsonify({'entries': entries})
+
+    @bp.route('/address-book', methods=['POST'])
+    @api_or_session_auth
+    def create_address_book_entry():
+        """Add a manual address book entry.
+
+        POST /api/address-book
+        Body: {name, mobile, section?, position?}
+        """
+        from rinq.services.address_book_sync import _normalise_mobile
+        db = get_db()
+        data = request.get_json(force=True) or {}
+        name = (data.get('name') or '').strip()
+        mobile = (data.get('mobile') or '').strip()
+        if not name or not mobile:
+            return jsonify({'error': 'name and mobile are required'}), 400
+        mobile_e164 = _normalise_mobile(mobile)
+        if not mobile_e164:
+            return jsonify({'error': f'Unrecognised mobile number: {mobile}'}), 400
+        entry_id = db.upsert_address_book_entry(
+            name=name,
+            display_mobile=mobile,
+            mobile_e164=mobile_e164,
+            section=(data.get('section') or '').strip() or None,
+            position=(data.get('position') or '').strip() or None,
+            source='manual',
+            external_id=None,
+        )
+        return jsonify({'id': entry_id}), 201
+
+    @bp.route('/address-book/<int:entry_id>', methods=['DELETE'])
+    @api_or_session_auth
+    def delete_address_book_entry(entry_id):
+        """Delete an address book entry by id."""
+        db = get_db()
+        deleted = db.delete_address_book_entry(entry_id)
+        if not deleted:
+            return jsonify({'error': 'Not found'}), 404
+        return jsonify({'ok': True})
+
+    @bp.route('/address-book/sync', methods=['POST'])
+    @api_or_session_auth
+    def sync_address_book():
+        """Trigger an address book sync from the configured source.
+
+        When called from a session (admin user), syncs the current tenant only.
+        When called via unix socket (cron, no session), iterates all tenants.
+
+        No-ops gracefully for tenants that have no sync source configured.
+        """
+        from rinq.services.address_book_sync import sync_address_book as _sync
+        from rinq.services.address_book_sync import PeterAddressBookSource
+        from rinq.integrations.watson.staff import WatsonStaffDirectory
+
+        def _sync_tenant(tenant_db):
+            try:
+                source = PeterAddressBookSource(WatsonStaffDirectory())
+                return _sync(tenant_db, source=source)
+            except Exception as e:
+                logger.warning(f"Address book sync not available: {e}")
+                return None
+
+        import os
+        from rinq.config import config as rinq_config
+        from flask import session
+
+        totals = {'added': 0, 'updated': 0, 'removed': 0}
+
+        if session.get('user_id'):
+            # Session request — sync current tenant only
+            tenant_db = get_db()
+            result = _sync_tenant(tenant_db)
+            if result:
+                added, updated, removed = result
+                totals = {'added': added, 'updated': updated, 'removed': removed}
+        else:
+            # Cron / unix-socket — iterate all tenants
+            from rinq.database.master import get_master_db
+            from rinq.database.db import Database
+            master_db = get_master_db()
+            for tenant in master_db.get_tenants():
+                db_dir = os.path.join(rinq_config.tenants_dir, tenant['id'])
+                if not os.path.exists(db_dir):
+                    continue
+                tenant_db = Database(db_path=os.path.join(db_dir, 'rinq.db'))
+                result = _sync_tenant(tenant_db)
+                if result:
+                    added, updated, removed = result
+                    totals['added'] += added
+                    totals['updated'] += updated
+                    totals['removed'] += removed
+
+        return jsonify({'ok': True, **totals})

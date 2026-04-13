@@ -49,6 +49,12 @@ class CallerEnrichmentService:
         customer = self._lookup_customer_by_phone(phone_number)
 
         if not customer:
+            # No CRM record — check address book for a name match by mobile
+            ab_match = self._lookup_address_book(phone_number)
+            if ab_match:
+                result['customer_name'] = ab_match['name']
+                result['priority'] = 'normal'
+                result['priority_reason'] = 'Known contact (address book)'
             return result
 
         result['customer_id'] = customer.get('id')
@@ -134,6 +140,19 @@ class CallerEnrichmentService:
 
         except Exception as e:
             logger.error(f"Error looking up orders: {e}")
+            return None
+
+    def _lookup_address_book(self, phone_number: str) -> dict | None:
+        """Check the tenant address book for this number."""
+        try:
+            from rinq.services.address_book_sync import _normalise_mobile
+            e164 = _normalise_mobile(phone_number)
+            if not e164:
+                return None
+            db = get_db()
+            return db.get_address_book_by_mobile(e164)
+        except Exception as e:
+            logger.debug(f"Address book lookup failed for {phone_number}: {e}")
             return None
 
     def _lookup_call_history(self, phone_number: str) -> dict:

@@ -704,6 +704,17 @@ def get_number():
     return render_template('get_number.html', current_user=get_current_user())
 
 
+@web_bp.route('/admin/address-book')
+@admin_required
+def admin_address_book():
+    """View and manage the tenant address book."""
+    db = get_db()
+    entries = db.get_address_book()
+    return render_template('admin_address_book.html',
+                           current_user=get_current_user(),
+                           entries=entries)
+
+
 @web_bp.route('/admin/phone-numbers')
 @admin_required
 def admin_phone_numbers():

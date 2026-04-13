@@ -3542,6 +3542,100 @@ class Database(StatsMixin, CallLogMixin):
             """, (key, value, now, updated_by))
             conn.commit()
 
+    # =========================================================================
+    # Address Book
+    # =========================================================================
+
+    def get_address_book(self, search: str = None) -> list[dict]:
+        """Return all address book entries, optionally filtered by name/section."""
+        with self._get_conn() as conn:
+            if search:
+                pattern = f"%{search}%"
+                rows = conn.execute("""
+                    SELECT * FROM address_book
+                    WHERE name LIKE ? OR section LIKE ? OR position LIKE ?
+                    ORDER BY name COLLATE NOCASE
+                """, (pattern, pattern, pattern)).fetchall()
+            else:
+                rows = conn.execute("""
+                    SELECT * FROM address_book
+                    ORDER BY name COLLATE NOCASE
+                """).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_address_book_by_mobile(self, mobile_e164: str) -> dict | None:
+        """Look up an address book entry by normalised E.164 mobile number."""
+        with self._get_conn() as conn:
+            row = conn.execute("""
+                SELECT * FROM address_book WHERE mobile_e164 = ?
+            """, (mobile_e164,)).fetchone()
+            return dict(row) if row else None
+
+    def get_address_book_by_source_id(self, source: str, external_id: str) -> dict | None:
+        """Look up an address book entry by source + external_id."""
+        with self._get_conn() as conn:
+            row = conn.execute("""
+                SELECT * FROM address_book WHERE source = ? AND external_id = ?
+            """, (source, external_id)).fetchone()
+            return dict(row) if row else None
+
+    def upsert_address_book_entry(self, name: str, display_mobile: str,
+                                  mobile_e164: str, section: str = None,
+                                  position: str = None, source: str = 'manual',
+                                  external_id: str = None) -> int:
+        """Insert or update an address book entry. Returns the row id."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            cursor = conn.execute("""
+                INSERT INTO address_book
+                    (name, display_mobile, mobile_e164, section, position,
+                     source, external_id, synced_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source, external_id) DO UPDATE SET
+                    name         = excluded.name,
+                    display_mobile = excluded.display_mobile,
+                    mobile_e164  = excluded.mobile_e164,
+                    section      = excluded.section,
+                    position     = excluded.position,
+                    synced_at    = excluded.synced_at,
+                    updated_at   = excluded.updated_at
+            """, (name, display_mobile, mobile_e164, section, position,
+                  source, external_id, now, now))
+            conn.commit()
+            return cursor.lastrowid
+
+    def delete_address_book_entry(self, entry_id: int) -> bool:
+        """Delete an address book entry by id. Returns True if a row was deleted."""
+        with self._get_conn() as conn:
+            cursor = conn.execute(
+                "DELETE FROM address_book WHERE id = ?", (entry_id,)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def delete_address_book_by_source(self, source: str,
+                                      keep_external_ids: list[str] = None) -> int:
+        """Remove synced entries that are no longer in the source.
+
+        Deletes all rows with the given source whose external_id is NOT in
+        keep_external_ids. Used by the sync service to soft-prune removed
+        contacts. Returns number of rows deleted.
+        """
+        with self._get_conn() as conn:
+            if keep_external_ids:
+                placeholders = ','.join('?' * len(keep_external_ids))
+                cursor = conn.execute(f"""
+                    DELETE FROM address_book
+                    WHERE source = ? AND external_id NOT IN ({placeholders})
+                """, [source] + keep_external_ids)
+            else:
+                cursor = conn.execute(
+                    "DELETE FROM address_book WHERE source = ?", (source,)
+                )
+            conn.commit()
+            return cursor.rowcount
+
+
 def get_db() -> Database:
     """Get the tenant-scoped database for the current request."""
     from rinq.tenant.context import get_tenant_db

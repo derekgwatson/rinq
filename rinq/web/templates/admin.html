@@ -88,6 +88,12 @@
 {% block content %}
 <div class="card">
     <div class="admin-grid">
+        <a href="{{ url_for('web.admin_address_book') }}" class="admin-card">
+            <h3>Address Book</h3>
+            <p class="text-muted" style="margin: 0;">
+                External contacts · Reps, fitters &amp; suppliers
+            </p>
+        </a>
         <a href="{{ url_for('web.admin_staff') }}" class="admin-card">
             <h3>Staff</h3>
             <p class="text-muted" style="margin: 0;">
