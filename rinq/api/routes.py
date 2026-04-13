@@ -4155,15 +4155,28 @@ def voice_outbound():
         # Use a unique conference name for this call
         conference_name = f"hold_room_{answer_call_sid}"
 
-        # Get the queued call to verify it exists
-        queued_call = db.get_queued_call_by_sid(answer_call_sid)
-        if not queued_call:
+        # Atomically claim the call before doing anything visible to Twilio.
+        # Without this, two agents clicking Answer within the ring window
+        # both redirect the same customer and both join the same conference.
+        claimed = db.claim_queued_call(answer_call_sid, answered_by=staff_email)
+        if not claimed:
+            logger.info(f"Queue answer: agent {staff_email} lost race for {answer_call_sid}")
             twiml = '''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say>Sorry, that caller is no longer in the queue.</Say>
+    <Say>This call has already been answered by another agent.</Say>
     <Hangup/>
 </Response>'''
             return Response(twiml, mimetype='application/xml')
+
+        # We won the race — cancel any parallel ring legs (SIP/mobile) so
+        # the other agents' phones stop ringing immediately.
+        import threading
+        def _cancel_others(sid=answer_call_sid):
+            _cancel_agent_calls(sid)
+        threading.Thread(target=_cancel_others, daemon=True).start()
+
+        # Fetch queued call details for participant enrichment below.
+        queued_call = db.get_queued_call_by_sid(answer_call_sid)
 
         # Redirect the caller from the queue to the conference
         # This pulls them out of the Twilio queue and into our conference
@@ -4185,10 +4198,6 @@ def voice_outbound():
     <Hangup/>
 </Response>'''
             return Response(twiml, mimetype='application/xml')
-
-        # Mark the call as being answered and store the conference name
-        # Use staff_email (properly converted) not from_identity (raw Twilio format)
-        db.update_queued_call_status(answer_call_sid, 'answered', answered_by=staff_email)
 
         # Update call_log with agent who answered
         db.update_call_log(answer_call_sid, {
