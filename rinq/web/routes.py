@@ -287,6 +287,7 @@ def update_settings():
         'show_in_pam': request.form.get('show_in_pam') == '1',
         'forward_to': forward_to,
         'forward_mode': request.form.get('forward_mode', 'always'),
+        'hide_mobile': request.form.get('hide_mobile') == '1',
     }
 
     db.update_staff_extension(user.email, data, f'session:{user.email}')

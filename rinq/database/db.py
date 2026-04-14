@@ -2409,6 +2409,7 @@ class Database(StatsMixin, CallLogMixin):
                 SET show_in_pam = ?,
                     forward_to = ?,
                     forward_mode = ?,
+                    hide_mobile = ?,
                     updated_at = ?,
                     updated_by = ?
                 WHERE email = ?
@@ -2416,6 +2417,7 @@ class Database(StatsMixin, CallLogMixin):
                 1 if data.get('show_in_pam') else 0,
                 data.get('forward_to'),
                 data.get('forward_mode', 'always'),
+                1 if data.get('hide_mobile') else 0,
                 now,
                 updated_by,
                 email.lower()

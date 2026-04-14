@@ -433,9 +433,12 @@ def register(bp):
                 ext = extensions.get(email, {})
                 ring_settings = db.get_user_ring_settings(email) if ext else {}
 
+                hide_mobile = bool(ext.get('hide_mobile'))
+                mobile = '' if hide_mobile else staff.get('phone_mobile', '')
+
                 # Phone: assignment > mobile > fixed line > extension
                 phone = (assignments.get(email, '')
-                         or staff.get('phone_mobile', '')
+                         or mobile
                          or staff.get('phone_fixed', '')
                          or ext.get('extension', ''))
 
@@ -470,7 +473,8 @@ def register(bp):
                         continue
 
                 ring_settings = db.get_user_ring_settings(email)
-                phone = assignments.get(email, '') or ext.get('forward_to', '') or ext.get('extension', '')
+                forward_to = '' if ext.get('hide_mobile') else (ext.get('forward_to') or '')
+                phone = assignments.get(email, '') or forward_to or ext.get('extension', '')
 
                 contacts.append({
                     'name': name,
