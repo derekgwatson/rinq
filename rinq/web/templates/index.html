@@ -252,7 +252,6 @@
                     <input type="text" name="extension" id="extInput" value="{{ staff_ext.extension }}"
                            maxlength="4" pattern="[1-9]\d{3}" title="4-digit extension (cannot start with 0)"
                            style="width: 80px; text-align: center; font-size: 1.1em; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px;">
-                    <input type="hidden" name="show_in_pam" value="{{ '1' if staff_ext.show_in_pam else '0' }}">
                     <input type="hidden" name="forward_to" value="{{ staff_ext.forward_to or '' }}">
                     <input type="hidden" name="forward_mode" value="{{ staff_ext.forward_mode or 'always' }}">
                     <input type="hidden" name="hide_mobile" value="{{ '1' if staff_ext.hide_mobile else '0' }}">
@@ -284,19 +283,6 @@
         <div class="card" style="margin-top: 20px;">
             <h2>Settings</h2>
             <form method="post" action="{{ url_for('web.update_settings') }}">
-                <div class="setting-row">
-                    <div>
-                        <div class="setting-label">Show in staff directory</div>
-                        <div class="setting-description">Display your extension number so colleagues can reach you</div>
-                    </div>
-                    <label class="toggle-switch">
-                        <input type="checkbox" name="show_in_pam" value="1"
-                               {% if staff_ext.show_in_pam %}checked{% endif %}
-                               onchange="this.form.submit()">
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-
                 <div class="setting-row">
                     <div>
                         <div class="setting-label">Hide my mobile number</div>

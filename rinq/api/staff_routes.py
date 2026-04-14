@@ -491,10 +491,20 @@ def register(bp):
 
         contacts.sort(key=lambda c: c['name'].lower())
 
-        # Merge address book entries (tagged so UI can distinguish them)
+        # Merge address book entries (tagged so UI can distinguish them).
+        # Skip entries whose email matches a staff member with hide_mobile set —
+        # the directory should respect that flag across both sources.
+        hidden_mobile_emails = {
+            (ext.get('email') or '').lower()
+            for ext in extensions.values()
+            if ext.get('hide_mobile')
+        }
         try:
             ab_entries = db.get_address_book()
             for entry in ab_entries:
+                entry_email = (entry.get('email') or '').lower()
+                if entry_email and entry_email in hidden_mobile_emails:
+                    continue
                 contacts.append({
                     'name': entry['name'],
                     'email': None,

@@ -83,6 +83,10 @@ class PeterAddressBookSource(AddressBookSource):
             # Prefer section name; fall back to position label
             section = person.get('section') or None
             position = person.get('position') or None
+            email = (person.get('google_primary_email')
+                     or person.get('work_email')
+                     or person.get('email')
+                     or None)
 
             entries.append({
                 'external_id': external_id,
@@ -90,6 +94,7 @@ class PeterAddressBookSource(AddressBookSource):
                 'mobile': mobile,
                 'section': section,
                 'position': position,
+                'email': email,
             })
         return entries
 
@@ -139,6 +144,7 @@ def sync_address_book(db, source: AddressBookSource = None) -> tuple[int, int, i
             position=entry.get('position'),
             source=source_name,
             external_id=external_id,
+            email=entry.get('email'),
         )
         if existing:
             updated += 1

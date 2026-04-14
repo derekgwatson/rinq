@@ -284,7 +284,6 @@ def update_settings():
                 return redirect(url_for('web.index'))
 
     data = {
-        'show_in_pam': request.form.get('show_in_pam') == '1',
         'forward_to': forward_to,
         'forward_mode': request.form.get('forward_mode', 'always'),
         'hide_mobile': request.form.get('hide_mobile') == '1',
@@ -417,7 +416,6 @@ def admin_staff():
                 # Set mobile forwarding for sync-created staff who don't have it yet
                 if existing and existing.get('created_by') == 'system:sync' and peter_mobile and not existing.get('forward_to'):
                     db.update_staff_extension(email, {
-                        'show_in_pam': existing.get('show_in_pam', False),
                         'forward_to': peter_mobile,
                         'forward_mode': 'always',
                     }, 'system:sync')

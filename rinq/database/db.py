@@ -2406,15 +2406,13 @@ class Database(StatsMixin, CallLogMixin):
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE staff_extensions
-                SET show_in_pam = ?,
-                    forward_to = ?,
+                SET forward_to = ?,
                     forward_mode = ?,
                     hide_mobile = ?,
                     updated_at = ?,
                     updated_by = ?
                 WHERE email = ?
             """, (
-                1 if data.get('show_in_pam') else 0,
                 data.get('forward_to'),
                 data.get('forward_mode', 'always'),
                 1 if data.get('hide_mobile') else 0,
@@ -3584,25 +3582,28 @@ class Database(StatsMixin, CallLogMixin):
     def upsert_address_book_entry(self, name: str, display_mobile: str,
                                   mobile_e164: str, section: str = None,
                                   position: str = None, source: str = 'manual',
-                                  external_id: str = None) -> int:
+                                  external_id: str = None,
+                                  email: str = None) -> int:
         """Insert or update an address book entry. Returns the row id."""
         now = datetime.now(timezone.utc).isoformat()
+        email_lc = email.lower() if email else None
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 INSERT INTO address_book
                     (name, display_mobile, mobile_e164, section, position,
-                     source, external_id, synced_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     source, external_id, email, synced_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source, external_id) DO UPDATE SET
                     name         = excluded.name,
                     display_mobile = excluded.display_mobile,
                     mobile_e164  = excluded.mobile_e164,
                     section      = excluded.section,
                     position     = excluded.position,
+                    email        = excluded.email,
                     synced_at    = excluded.synced_at,
                     updated_at   = excluded.updated_at
             """, (name, display_mobile, mobile_e164, section, position,
-                  source, external_id, now, now))
+                  source, external_id, email_lc, now, now))
             conn.commit()
             return cursor.lastrowid
 
