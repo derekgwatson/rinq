@@ -158,6 +158,8 @@ Cron jobs hit the gunicorn unix socket directly (no API key needed):
 22. **Twilio SDK `call._from` not `call.from_`** — SDK 9.10.4 uses `_from` (leading underscore) for the from field. Use `getattr(call, '_from', None)`
 23. **Conference recording via TwiML** — use `record="record-from-start"` on the Conference noun, NOT the REST API. The SDK's `conference.recordings` has no `create()` method
 24. **Permissions model** — two levels: admin and everyone else. Domain-level Google OAuth controls login access. The `reports_to` field in `staff_extensions` determines visibility (recordings, reports) — you see your own data plus anyone who reports to you. Admins see everything. Admin management is on the `/admin` page. Only decorators are `login_required` and `admin_required` (no `manager_required`)
+25. **`show_in_pam` is legacy / Peter-only** — the `staff_extensions.show_in_pam` column controls visibility in Peter's PAM directory (`/staff-phones` API), NOT Rinq's `/api/contacts` list. The home-page Settings card no longer surfaces it. Don't bind UI to it; use `hide_mobile` for Rinq directory behaviour
+26. **`/api/contacts` merges two sources** — staff source (Peter `/api/staff` if reachable, else local `staff_extensions`) PLUS the `address_book` table populated by the daily Peter sync. Staff entries are deduped against address book by `email`; staff take precedence and are enriched with section/position/display_mobile from the address book copy when missing. `address_book.email` was added in migration 069 specifically to enable this dedup
 
 ## Testing
 

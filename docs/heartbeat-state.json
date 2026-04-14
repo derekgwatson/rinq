@@ -1,0 +1,61 @@
+{
+  "_description": "System health snapshot for Rinq. Updated by memory-updater agent at end of sessions.",
+  "_last_updated": "2026-04-14",
+  "_last_updated_by": "memory-updater",
+  "_notes": "2026-04-14: Contacts directory dedup + hide_mobile flag. Migrations 068 (staff_extensions.hide_mobile) and 069 (address_book.email). Legacy show_in_pam toggle removed from home page. Manual address-book sync needed after deploy or wait for 2am cron.",
+  "repo": {
+    "branch": "main",
+    "remote": "dezgo/rinq",
+    "status": "clean (untracked .claude/ only)",
+    "recent_commits": [
+      "4076d33 Enrich staff contact with address book mobile when the staff source has none",
+      "1ce55af Dedupe staff against their address book copy and drop redundant phone fallback",
+      "835c32a Apply hide_mobile to address book entries and drop show_in_pam toggle",
+      "18de640 Add hide_mobile setting so staff can hide their number in the directory"
+    ]
+  },
+  "migrations": {
+    "latest": 69,
+    "notes": "068 adds staff_extensions.hide_mobile INTEGER DEFAULT 0. 069 adds address_book.email TEXT (NULL on existing rows until next sync run)."
+  },
+  "tenants": {
+    "watson": {
+      "domain": "tina.watsonblinds.com.au",
+      "twilio_account": "master (ACe458...)",
+      "phone_numbers": 8,
+      "notes": "Production. Address book synced from Peter daily 2am."
+    },
+    "derek": {
+      "domain": "rinq.cc",
+      "twilio_account": "subaccount (AC9a44...)",
+      "phone_numbers": 1,
+      "notes": "Personal/test. Address book sync no-ops (no Peter)."
+    }
+  },
+  "tests": {
+    "automated": "none",
+    "manual_runsheet": "/admin/test-runsheet",
+    "notes": "Today's changes verified by Derek in the Watson tenant."
+  },
+  "pending_operations": [
+    "2026-04-14: After deploy, trigger manual address book sync once to backfill address_book.email on existing rows (otherwise 2am cron handles it): curl -s -X POST --unix-socket /var/www/rinq/rinq.sock http://localhost/api/address-book/sync"
+  ],
+  "known_issues": [
+    "phone.html 5,101 lines with 109 inline JS functions — refactor deferred, fits with frontend feature work",
+    "api/routes.py 5,123 lines — deeper service extraction (RingService, CallRoutingService, VoicemailService) deferred until automated tests exist",
+    "database/db.py 3,528 lines — more mixin extractions possible (recordings, staff, participants, queues)",
+    "transfer_service.py has ~400 lines of duplication between queue-based and universal transfer methods",
+    "7 bare except clauses in transfer_service.py — should at minimum log at debug",
+    "No automated tests — all testing via /admin/test-runsheet",
+    "DND + empty queue hangs up instead of falling through to voicemail",
+    "Internal caller ID shows extension number, not agent name",
+    "Transfer modal doesn't auto-close when target answers",
+    "Call-ended vs not-answered distinction wrong for conference hangups",
+    "'On call' status lingers ~5-10s after transfer (Twilio cache lag)",
+    "Voicemail offered even when no destination configured",
+    "Per-tenant Twilio config: creds still in .env, should move to tenant-only",
+    "Watson tenant uses master Twilio account, should migrate to subaccount",
+    "Static files (ringback, hold music) not in git — copied manually during deployment",
+    "show_in_pam is a legacy Peter-only flag — removed from home-page UI 2026-04-14 but column still exists and is read by /staff-phones"
+  ]
+}
