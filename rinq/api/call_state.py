@@ -82,9 +82,10 @@ def get_call_state(agent_call_sid: str, caller_email: str = None) -> dict:
             'consult_participants': [],  # all participants are in the main conference now
         }
 
-        # Flag the transfer target in the main participants list so the UI
-        # can render their card with the cancel-transfer action.
-        if consult_call_sid:
+        # Flag the transfer target for warm transfers only — the cancel action
+        # only makes sense when the customer is on hold and Agent 1 can abort.
+        # Blind transfers are already committed; no card action is needed.
+        if consult_call_sid and transfer_state.get('transfer_type') == 'warm':
             for p in result['participants']:
                 if p['call_sid'] == consult_call_sid:
                     p['isTransferTarget'] = True
