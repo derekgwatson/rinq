@@ -5132,9 +5132,18 @@ async function pollCallState() {
                 window._sawMultipleParticipants = true;
             }
             if (window._sawMultipleParticipants && state.participants.length <= 1) {
-                console.log('Last participant in conference — hanging up');
+                // Intentionally NOT calling hangupCall() here. This is cleanup
+                // after the other party has already left — posting to
+                // /api/voice/hangup would log "Server-side hangup by <user>"
+                // and be indistinguishable from a real user click, making
+                // drop investigations much harder. Just disconnect our
+                // Twilio Device leg and let endCall() reset the UI.
+                console.log('Last participant in conference — cleaning up');
                 window._sawMultipleParticipants = false;
-                hangupCall();
+                if (currentCall && typeof currentCall.disconnect === 'function') {
+                    try { currentCall.disconnect(); } catch (e) {}
+                }
+                endCall();
             }
         }
     } catch (e) {
