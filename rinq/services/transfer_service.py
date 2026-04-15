@@ -330,7 +330,7 @@ class TransferService:
 
             # Conference-first blind transfer: put customer in a new conference,
             # call the target into it via REST API
-            caller_id = (queued_call.get('called_number') if queued_call else None) or get_twilio_config('twilio_default_caller_id')
+            fallback_caller_id = (queued_call.get('called_number') if queued_call else None) or get_twilio_config('twilio_default_caller_id')
             new_conference = f"call_{call_sid}_xfer"
             conference_join_url = f"{self.base_url}/api/voice/conference/join?room={new_conference}&role=agent"
 
@@ -345,13 +345,17 @@ class TransferService:
             else:
                 target_to = target_e164
 
-            # Use the customer's number as caller ID so the receiving agent
-            # sees who the customer is
-            customer_number = None
-            call_log = self.db.get_call_log_field(call_sid, 'from_number')
-            if call_log and call_log.startswith('+'):
-                customer_number = call_log
-            transfer_from = customer_number or caller_id or get_twilio_config('twilio_default_caller_id')
+            # Agent 2 should see the customer's number, so they know who they're
+            # about to pick up. Customer's number lives in from_number for
+            # inbound calls, to_number for outbound. Only use it when the
+            # target is a browser/SIP device — for PSTN destinations Twilio
+            # requires a verified/owned number, so fall back in that case.
+            customer_field = 'to_number' if self.db.get_call_log_field(call_sid, 'direction') == 'outbound' else 'from_number'
+            customer_number = self.db.get_call_log_field(call_sid, customer_field)
+            if not (customer_number and customer_number.startswith('+')):
+                customer_number = None
+            target_is_client_or_sip = target_to.startswith('client:') or target_to.startswith('sip:')
+            transfer_from = customer_number if (customer_number and target_is_client_or_sip) else fallback_caller_id
 
             # Call the target into the new conference
             status_callback_url = (
@@ -519,11 +523,21 @@ class TransferService:
                 f"?conference={consult_conference}&original_call={call_sid}"
             )
 
-            caller_id = (queued_call.get('called_number') if queued_call else None) or get_twilio_config('twilio_default_caller_id')
+            fallback_caller_id = (queued_call.get('called_number') if queued_call else None) or get_twilio_config('twilio_default_caller_id')
+            # Same rationale as blind_transfer: the target agent should see
+            # the customer's actual number on their device, not our main line.
+            # Only safe for Client/SIP destinations — PSTN requires a
+            # verified/owned number as from_.
+            customer_field = 'to_number' if self.db.get_call_log_field(call_sid, 'direction') == 'outbound' else 'from_number'
+            customer_number = self.db.get_call_log_field(call_sid, customer_field)
+            if not (customer_number and customer_number.startswith('+')):
+                customer_number = None
+            target_is_client_or_sip = target_to.startswith('client:') or target_to.startswith('sip:')
+            consult_from = customer_number if (customer_number and target_is_client_or_sip) else fallback_caller_id
 
             consult_call = self.twilio.client.calls.create(
                 to=target_to,
-                from_=caller_id,
+                from_=consult_from,
                 url=consult_twiml_url,
                 status_callback=f"{self.base_url}/api/voice/transfer/consult-status?original_call={call_sid}",
                 status_callback_event=['initiated', 'ringing', 'answered', 'completed', 'busy', 'no-answer', 'failed', 'canceled']
