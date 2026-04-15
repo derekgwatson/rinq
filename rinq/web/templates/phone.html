@@ -287,7 +287,7 @@
 
 /* Phone Container */
 .phone-container {
-    max-width: 900px;
+    max-width: 1100px;
     margin: 0 auto;
 }
 
@@ -503,7 +503,70 @@
 
 /* Phone controls - the actual phone panel */
 .phone-controls {
-    flex: 0 0 400px;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.phone-layout {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+}
+
+.phone-panel {
+    flex: 0 0 360px;
+}
+
+.phone-sidebar {
+    flex: 0 0 240px;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    padding: 16px;
+    font-size: 0.85em;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    min-height: 200px;
+}
+
+.sidebar-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    flex-shrink: 0;
+}
+
+.sidebar-title {
+    font-weight: 600;
+    color: #6c757d;
+    font-size: 0.75em;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+#sidebarIdle {
+    color: #adb5bd;
+    font-size: 0.85em;
+    text-align: center;
+    padding: 30px 0;
+    flex: 1;
+}
+
+.sidebar-consulting-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #e9ecef;
+    flex-shrink: 0;
+}
+
+.sidebar-consulting-actions .btn-transfer-action {
+    flex: 1;
+    padding: 8px 10px;
+    font-size: 0.82em;
 }
 
 /* Responsive: stack on smaller screens */
@@ -523,7 +586,21 @@
     .phone-controls {
         flex: none;
         width: 100%;
-        max-width: 400px;
+        max-width: 620px;
+    }
+
+    .phone-layout {
+        flex-direction: column;
+    }
+
+    .phone-panel {
+        flex: none;
+        width: 100%;
+    }
+
+    .phone-sidebar {
+        flex: none;
+        width: 100%;
     }
 }
 
@@ -2003,6 +2080,7 @@
 
         <!-- Phone Controls -->
         <div class="phone-controls">
+        <div class="phone-layout">
             <div class="phone-panel">
                 <div class="phone-status status-offline" id="phoneStatus">
                     Offline
@@ -2141,9 +2219,28 @@
                 </div>
             </div>
         </div>
-            </div>
-        </div>
-    </div>
+            </div><!-- /phone-panel -->
+
+            <!-- Call sidebar — always visible -->
+            <div class="phone-sidebar" id="phoneSidebar">
+                <div class="sidebar-header">
+                    <span class="sidebar-title" id="sidebarTitle">In this call</span>
+                    <button class="conf-btn-record" id="confBtnRecord" onclick="toggleRecording()" title="Toggle recording">
+                        <span id="confRecordIcon">⏺</span>
+                        <span id="confRecordText">Record</span>
+                    </button>
+                </div>
+                <div id="sidebarIdle">No active call</div>
+                <div id="conferencePanelList"></div>
+                <div class="sidebar-consulting-actions" id="sidebarConsultingActions" style="display:none">
+                    <button class="btn-transfer-action btn-transfer-cancel" onclick="cancelTransfer()">Go back</button>
+                    <button class="btn-transfer-action btn-transfer-complete" id="btnCompleteTransfer" onclick="completeTransfer()">Hand off</button>
+                </div>
+            </div><!-- /phone-sidebar -->
+
+        </div><!-- /phone-layout -->
+        </div><!-- /phone-controls -->
+    </div><!-- /phone-workspace -->
 
 
     <!-- Help Section -->
@@ -2264,21 +2361,6 @@
     </div>
 </div>
 
-<!-- Floating call state panel — always on top during active calls -->
-<div id="conferencePanel" style="display: none; position: fixed; bottom: 20px; right: 20px; width: 300px; background: white; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.15); padding: 12px 14px; font-size: 0.85em; z-index: 9999; border: 1px solid #e9ecef;">
-    <div class="conf-panel-header">
-        <span class="conf-panel-title">In this call</span>
-        <div class="conf-panel-actions">
-            <button class="conf-btn-record" id="confBtnRecord" onclick="toggleRecording()" title="Toggle recording">
-                <span id="confRecordIcon">⏺</span>
-                <span id="confRecordText">Record</span>
-            </button>
-            <span class="conf-drag-handle">&#x2630;</span>
-        </div>
-    </div>
-    <div id="conferencePanelList"></div>
-</div>
-
 <!-- Add to Call modal -->
 <div class="add-to-call-modal" id="addToCallModal">
     <div class="add-to-call-content">
@@ -2295,26 +2377,6 @@
 
 {% block extra_js %}
 <script>
-// Make the conference panel draggable
-(function() {
-    const panel = document.getElementById('conferencePanel');
-    let isDragging = false, offsetX, offsetY;
-    panel.addEventListener('mousedown', function(e) {
-        isDragging = true;
-        offsetX = e.clientX - panel.getBoundingClientRect().left;
-        offsetY = e.clientY - panel.getBoundingClientRect().top;
-        panel.style.transition = 'none';
-    });
-    document.addEventListener('mousemove', function(e) {
-        if (!isDragging) return;
-        panel.style.left = (e.clientX - offsetX) + 'px';
-        panel.style.top = (e.clientY - offsetY) + 'px';
-        panel.style.right = 'auto';
-        panel.style.bottom = 'auto';
-    });
-    document.addEventListener('mouseup', function() { isDragging = false; });
-})();
-
 // Shared AudioContext for all sounds (ringtone, queue alerts)
 const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
@@ -3198,7 +3260,12 @@ function endCall() {
     callInfo.classList.remove('active');
     incomingCall.classList.remove('active');
     contextPane.classList.remove('has-call');
-    document.getElementById('conferencePanel').style.display = 'none';
+    const _ecList = document.getElementById('conferencePanelList');
+    const _ecIdle = document.getElementById('sidebarIdle');
+    const _ecConsult = document.getElementById('sidebarConsultingActions');
+    if (_ecList) _ecList.innerHTML = '';
+    if (_ecIdle) _ecIdle.style.display = '';
+    if (_ecConsult) _ecConsult.style.display = 'none';
     closeTransferModal();
     updateDisplay();
     updateMuteButton();
@@ -4331,15 +4398,11 @@ async function startTransfer() {
                     startCallStatePolling(1000);  // Poll faster to catch target joining
                     startTransferStatusPolling();
                 } else {
-                    const subtitle = document.getElementById('consultingSubtitle');
+                    // Warm transfer started — close modal.
+                    // The sidebar shows the ringing card and Go back / Hand off buttons.
                     const completeBtn = document.getElementById('btnCompleteTransfer');
-                    subtitle.textContent = `Ringing ${targetName}...`;
-                    completeBtn.textContent = 'Complete Transfer';
-
-                    transferTargetSelection.style.display = 'none';
-                    transferConsulting.style.display = 'block';
-                    transferActions.style.display = 'none';
-                    consultingActions.style.display = 'flex';
+                    if (completeBtn) completeBtn.textContent = 'Hand off';
+                    transferModal.classList.remove('active');
 
                     // Poll faster to catch target answering, and detect failures
                     startCallStatePolling(1000);
@@ -5175,13 +5238,17 @@ function stopCallStatePolling() {
         callStateInterval = null;
     }
     lastCallState = null;
-    document.getElementById('conferencePanel').style.display = 'none';
+    const _scpIdle = document.getElementById('sidebarIdle');
+    if (_scpIdle) _scpIdle.style.display = '';
+    const _scpList = document.getElementById('conferencePanelList');
+    if (_scpList) _scpList.innerHTML = '';
 }
 
 async function pollCallState() {
     const callSid = currentCall ? currentCall.parameters.CallSid : null;
     if (!callSid) {
-        document.getElementById('conferencePanel').style.display = 'none';
+        const _pIdle = document.getElementById('sidebarIdle');
+        if (_pIdle) _pIdle.style.display = '';
         return;
     }
     try {
@@ -5292,47 +5359,74 @@ const _cardMuted = {};
 const _cardHeld = {};
 
 function renderCallStatePanel(state) {
-    const panel = document.getElementById('conferencePanel');
     const list = document.getElementById('conferencePanelList');
+    const sidebarIdle = document.getElementById('sidebarIdle');
+    const consultingActions = document.getElementById('sidebarConsultingActions');
 
     if (!state.in_call) {
-        panel.style.display = 'none';
+        if (list) list.innerHTML = '';
+        if (sidebarIdle) sidebarIdle.style.display = '';
+        if (consultingActions) consultingActions.style.display = 'none';
         return;
     }
+
+    if (sidebarIdle) sidebarIdle.style.display = 'none';
 
     // My own call SID — used to identify "me" in the participant list
     const myCallSid = currentCall ? currentCall.parameters?.CallSid : null;
 
-    // Build participant list:
-    //   1. Main conference participants
-    //   2. Ringing card if a warm transfer is pending
     const allParticipants = [...(state.participants || [])];
     const transfer = state.transfer;
-    let ringingCard = null;
+    let extraCard = null;
 
-    if (transfer && transfer.status === 'pending' && transfer.type === 'warm') {
-        // Show a ringing card for the transfer target
-        ringingCard = {
-            call_sid: null,
-            name: transfer.target_name || 'Ringing…',
-            role: 'agent',
-            ringing: true,
-        };
+    if (transfer && transfer.type === 'warm') {
+        if (transfer.status === 'pending') {
+            // Still ringing — show a ringing card for the target
+            extraCard = {
+                call_sid: null,
+                name: transfer.target_name || 'Ringing…',
+                role: 'agent',
+                ringing: true,
+            };
+        } else if (transfer.status === 'consulting') {
+            // Target answered — find them in consult_participants by excluding
+            // SIDs already present in the main conference
+            const mainSids = new Set(allParticipants.map(p => p.call_sid).filter(Boolean));
+            const targetEntry = (transfer.consult_participants || []).find(
+                cp => cp.call_sid && !mainSids.has(cp.call_sid)
+            );
+            if (targetEntry) {
+                extraCard = {
+                    call_sid: targetEntry.call_sid,
+                    name: targetEntry.name || transfer.target_name || 'Consulting…',
+                    role: 'agent',
+                    ringing: false,
+                };
+            } else {
+                // consult_participants not yet populated — show ringing still
+                extraCard = {
+                    call_sid: null,
+                    name: transfer.target_name || 'Ringing…',
+                    role: 'agent',
+                    ringing: true,
+                };
+            }
+        }
     }
 
-    if (allParticipants.length === 0 && !ringingCard) {
-        panel.style.display = 'none';
-        return;
+    // Show/hide Go back / Hand off buttons during warm transfer
+    const isWarmActive = transfer && transfer.type === 'warm' &&
+        ['pending', 'consulting'].includes(transfer.status);
+    if (consultingActions) {
+        consultingActions.style.display = isWarmActive ? 'flex' : 'none';
     }
 
     const addingToCall = window._addToCallPending;
-
     const cards = allParticipants.map(p => renderParticipantCard(p, myCallSid));
-    if (ringingCard) cards.push(renderParticipantCard(ringingCard, myCallSid));
+    if (extraCard) cards.push(renderParticipantCard(extraCard, myCallSid));
     cards.push(renderAddCard(addingToCall));
 
-    panel.style.display = '';
-    list.innerHTML = cards.join('');
+    if (list) list.innerHTML = cards.join('');
 }
 
 function renderParticipantCard(p, myCallSid) {
@@ -5621,21 +5715,21 @@ function resolveInternalCaller(from) {
     var _panelSavedDisplay = null;
 
     function showDemoPanel() {
-        var panel = document.getElementById('conferencePanel');
-        var list  = document.getElementById('conferencePanelList');
-        if (!panel || !list) return;
+        var list = document.getElementById('conferencePanelList');
+        var idle = document.getElementById('sidebarIdle');
+        if (!list) return;
         _panelSavedHTML    = list.innerHTML;
-        _panelSavedDisplay = panel.style.display;
+        _panelSavedDisplay = idle ? idle.style.display : null;
         list.innerHTML     = DEMO_PANEL_HTML;
-        panel.style.display = '';
+        if (idle) idle.style.display = 'none';
     }
 
     function hideDemoPanel() {
-        var panel = document.getElementById('conferencePanel');
-        var list  = document.getElementById('conferencePanelList');
-        if (!panel || !list) return;
-        if (_panelSavedHTML    !== null) list.innerHTML     = _panelSavedHTML;
-        if (_panelSavedDisplay !== null) panel.style.display = _panelSavedDisplay;
+        var list = document.getElementById('conferencePanelList');
+        var idle = document.getElementById('sidebarIdle');
+        if (!list) return;
+        if (_panelSavedHTML    !== null) list.innerHTML = _panelSavedHTML;
+        if (_panelSavedDisplay !== null && idle) idle.style.display = _panelSavedDisplay;
         _panelSavedHTML    = null;
         _panelSavedDisplay = null;
     }
@@ -5677,32 +5771,32 @@ function resolveInternalCaller(from) {
         },
         {
             v: 1,
-            element: '#conferencePanel',
+            element: '#phoneSidebar',
             showDemoOnEnter: true,
             popover: {
-                title: 'The "In this call" panel',
-                description: 'During any call, this panel appears in the bottom-right corner showing everyone in the conference.',
-                side: 'left', align: 'end',
+                title: 'The "In this call" sidebar',
+                description: 'During any call, this sidebar shows everyone in the conference — always visible to the right of the softphone.',
+                side: 'left', align: 'start',
             }
         },
         {
             v: 1,
-            element: '#conferencePanel',
+            element: '#phoneSidebar',
             showDemoOnEnter: false,
             popover: {
                 title: 'Per-participant controls',
                 description: 'Each card has its own <strong>Mute</strong>, <strong>Hold</strong>, and <strong>Remove (✕)</strong> buttons. Changes apply instantly — muting one person doesn\'t affect anyone else.',
-                side: 'left', align: 'end',
+                side: 'left', align: 'start',
             }
         },
         {
             v: 1,
-            element: '#conferencePanel',
+            element: '#phoneSidebar',
             showDemoOnEnter: false,
             popover: {
                 title: 'Add to Call',
                 description: 'The <strong>+ Add to Call</strong> card brings another person into the conference. This replaces the old "3-Way" option — just click it and pick a contact.',
-                side: 'left', align: 'end',
+                side: 'left', align: 'start',
             }
         },
         {
@@ -5711,8 +5805,8 @@ function resolveInternalCaller(from) {
             showDemoOnEnter: false,
             popover: {
                 title: 'Recording',
-                description: 'The Record button moved to the panel header. It\'s always visible while you\'re in a call.',
-                side: 'left', align: 'end',
+                description: 'The Record button lives in the sidebar header. It\'s always within reach during a call.',
+                side: 'left', align: 'start',
             }
         },
         {
