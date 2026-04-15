@@ -3344,12 +3344,12 @@ document.addEventListener('keydown', (e) => {
     } else if (e.key === 'Enter' && phoneNumber) {
         e.preventDefault();
         if (currentCall) {
-            hangupCall();
+            if (confirm('End the current call?')) hangupCall();
         } else {
             makeCall();
         }
     } else if (e.key === 'Escape' && currentCall) {
-        hangupCall();
+        if (confirm('End the current call?')) hangupCall();
     }
 });
 
