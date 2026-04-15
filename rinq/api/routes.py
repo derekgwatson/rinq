@@ -287,14 +287,18 @@ def _handle_participant_left(call_sid: str, db=None):
 # SIP helpers — delegated to services/sip.py
 from rinq.services.sip import get_sip_domain as _get_sip_domain_impl, get_sip_uri_for_user as _get_sip_uri_for_user
 
-def _cancel_agent_calls(customer_call_sid: str, except_call_sid: str = None):
+def _cancel_agent_calls(customer_call_sid: str, except_call_sid: str = None, db=None):
     """Cancel all pending agent calls for a customer, optionally excluding one.
 
     Args:
         customer_call_sid: The customer's call SID
         except_call_sid: Optional agent call SID to NOT cancel (the one that answered)
+        db: Tenant DB handle. Required when called from a background thread —
+            capture `db = get_db()` in the request before spawning and pass it
+            in. Defaults to get_db() for callers still in request context.
     """
-    db = get_db()
+    if db is None:
+        db = get_db()
     agent_sids = db.pop_ring_attempts(customer_call_sid)
     if not agent_sids:
         logger.info(f"No agent calls found to cancel for {customer_call_sid}")
@@ -1668,11 +1672,10 @@ def queue_leave(queue_id):
         # Caller hung up while waiting - cancel any ringing agent calls
         logger.info(f"Caller hung up - cancelling agent calls for {call_sid}")
         import threading
-        threading.Thread(
-            target=_cancel_agent_calls,
-            args=(call_sid,),
-            daemon=True
-        ).start()
+        get_twilio_service().capture_for_thread()
+        def cancel_calls(_db=db, _sid=call_sid):
+            _cancel_agent_calls(_sid, db=_db)
+        threading.Thread(target=cancel_calls, daemon=True).start()
 
         db.update_queued_call_status(call_sid, 'abandoned')
         db.update_call_log(call_sid, {
@@ -1689,11 +1692,10 @@ def queue_leave(queue_id):
     elif queue_result in ('bridged', 'redirected', 'leave'):
         # Cancel any remaining ringing agent calls
         import threading
-        threading.Thread(
-            target=_cancel_agent_calls,
-            args=(call_sid,),
-            daemon=True
-        ).start()
+        get_twilio_service().capture_for_thread()
+        def cancel_calls(_db=db, _sid=call_sid):
+            _cancel_agent_calls(_sid, db=_db)
+        threading.Thread(target=cancel_calls, daemon=True).start()
 
         queued_call = db.get_queued_call_by_sid(call_sid)
         was_answered = queued_call and queued_call.get('answered_by')
@@ -2077,8 +2079,9 @@ def queue_agent_answer(queue_id):
 
     # Cancel other agent calls since this one won
     import threading
-    def cancel_others():
-        _cancel_agent_calls(customer_call_sid, except_call_sid=agent_call_sid)
+    get_twilio_service().capture_for_thread()
+    def cancel_others(_db=db, _sid=customer_call_sid, _except=agent_call_sid):
+        _cancel_agent_calls(_sid, except_call_sid=_except, db=_db)
     threading.Thread(target=cancel_others, daemon=True).start()
 
     # Conference-based answer: same pattern as browser queue answer.
@@ -2196,8 +2199,9 @@ def queue_agent_ring_status(queue_id):
 
     # Cancel all other ringing agent calls
     import threading
-    def cancel_all():
-        _cancel_agent_calls(customer_call_sid)
+    get_twilio_service().capture_for_thread()
+    def cancel_all(_db=db, _sid=customer_call_sid):
+        _cancel_agent_calls(_sid, db=_db)
     threading.Thread(target=cancel_all, daemon=True).start()
 
     # Check if customer is still in queue
@@ -3156,8 +3160,9 @@ def queue_escape(queue_id):
 
         # Cancel any auto-ring calls for this customer
         import threading
-        def cancel_calls():
-            _cancel_agent_calls(call_sid)
+        get_twilio_service().capture_for_thread()
+        def cancel_calls(_db=db, _sid=call_sid):
+            _cancel_agent_calls(_sid, db=_db)
         threading.Thread(target=cancel_calls, daemon=True).start()
 
         # Update queued call status
@@ -3186,8 +3191,9 @@ def queue_escape(queue_id):
 
         # Cancel any auto-ring calls for this customer
         import threading
-        def cancel_calls():
-            _cancel_agent_calls(call_sid)
+        get_twilio_service().capture_for_thread()
+        def cancel_calls(_db=db, _sid=call_sid):
+            _cancel_agent_calls(_sid, db=_db)
         threading.Thread(target=cancel_calls, daemon=True).start()
 
         # Get caller name from queued call data
@@ -4171,8 +4177,9 @@ def voice_outbound():
         # We won the race — cancel any parallel ring legs (SIP/mobile) so
         # the other agents' phones stop ringing immediately.
         import threading
-        def _cancel_others(sid=answer_call_sid):
-            _cancel_agent_calls(sid)
+        get_twilio_service().capture_for_thread()
+        def _cancel_others(_db=db, _sid=answer_call_sid):
+            _cancel_agent_calls(_sid, db=_db)
         threading.Thread(target=_cancel_others, daemon=True).start()
 
         # Fetch queued call details for participant enrichment below.
