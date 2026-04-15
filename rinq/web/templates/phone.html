@@ -2236,7 +2236,6 @@
                 <div id="sidebarIdle">No active call</div>
                 <div id="conferencePanelList"></div>
                 <div class="sidebar-consulting-actions" id="sidebarConsultingActions" style="display:none">
-                    <button class="btn-transfer-action btn-transfer-cancel" onclick="cancelTransfer()">Go back</button>
                     <button class="btn-transfer-action btn-transfer-complete" id="btnCompleteTransfer" onclick="completeTransfer()">Hand off</button>
                 </div>
             </div><!-- /phone-sidebar -->
@@ -5384,16 +5383,14 @@ function renderCallStatePanel(state) {
 
     if (transfer && transfer.type === 'warm') {
         if (transfer.status === 'pending') {
-            // Still ringing — show a ringing card for the target
             extraCard = {
                 call_sid: null,
                 name: transfer.target_name || 'Ringing…',
                 role: 'agent',
                 ringing: true,
+                isTransferTarget: true,
             };
         } else if (transfer.status === 'consulting') {
-            // Target answered — find them in consult_participants by excluding
-            // SIDs already present in the main conference
             const mainSids = new Set(allParticipants.map(p => p.call_sid).filter(Boolean));
             const targetEntry = (transfer.consult_participants || []).find(
                 cp => cp.call_sid && !mainSids.has(cp.call_sid)
@@ -5404,14 +5401,15 @@ function renderCallStatePanel(state) {
                     name: targetEntry.name || transfer.target_name || 'Consulting…',
                     role: 'agent',
                     ringing: false,
+                    isTransferTarget: true,
                 };
             } else {
-                // consult_participants not yet populated — show ringing still
                 extraCard = {
                     call_sid: null,
                     name: transfer.target_name || 'Ringing…',
                     role: 'agent',
                     ringing: true,
+                    isTransferTarget: true,
                 };
             }
         }
@@ -5458,9 +5456,9 @@ function renderParticipantCard(p, myCallSid) {
     const nameLabel = escapeHtml(p.name) + (p.role === 'customer' ? ' <span style="font-size:0.8em;color:#95a5a6">(customer)</span>' : '');
 
     let actions = '';
-    if (p.ringing) {
-        // Can only cancel a ringing transfer
-        actions = `<button class="conf-card-btn kick" onclick="cancelTransfer()" title="Cancel">✕</button>`;
+    if (p.isTransferTarget) {
+        // Transfer target (ringing or consulting) — ✕ cancels the transfer
+        actions = `<button class="conf-card-btn kick" onclick="cancelTransfer()" title="Remove from call">✕</button>`;
     } else if (isMe) {
         // Self: only mute (client-side)
         const muteTitle = isMutedState ? 'Unmute' : 'Mute';
