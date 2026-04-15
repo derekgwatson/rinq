@@ -4458,6 +4458,9 @@ async function completeTransfer() {
         if (response.ok && data.success) {
             stopTransferStatusPolling();
             closeTransferModal();
+            // Clear the customer SID before endCall so call-ended reports our
+            // own agent SID, not the customer's. The customer is still live.
+            currentQueueCallerSid = null;
             endCall();
         } else {
             if (data.caller_disconnected) {
