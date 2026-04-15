@@ -822,19 +822,29 @@ class TransferService:
             consult_conference = transfer_state.get('transfer_consult_conference')
             is_three_way = transfer_state.get('transfer_type') == 'three_way'
 
-            # Remove the target from the consult conference (kicks their leg cleanly
-            # without triggering after-dial TwiML callbacks that could end the main conf).
-            if consult_call_sid and consult_conference:
-                try:
-                    consult_confs = twilio_list(self.twilio.client.conferences,
-                        friendly_name=consult_conference, status='in-progress', limit=1)
-                    if consult_confs:
-                        self.twilio.client.conferences(consult_confs[0].sid).participants(
-                            consult_call_sid
-                        ).delete()
-                    self.db.remove_participant(consult_call_sid)
-                except Exception as e:
-                    logger.warning(f"Could not remove consult participant: {e}")
+            # End or remove the transfer target:
+            # - Pending (still ringing): cancel the outbound call directly — they haven't
+            #   joined any conference yet so there's no participant to kick.
+            # - Consulting (answered): kick from conference cleanly without triggering
+            #   after-dial TwiML callbacks that could cascade and end the main conference.
+            current_status = transfer_state['transfer_status']
+            if consult_call_sid:
+                if current_status == 'pending':
+                    try:
+                        self.twilio.client.calls(consult_call_sid).update(status='completed')
+                    except Exception as e:
+                        logger.warning(f"Could not cancel ringing consult call: {e}")
+                elif current_status == 'consulting' and consult_conference:
+                    try:
+                        consult_confs = twilio_list(self.twilio.client.conferences,
+                            friendly_name=consult_conference, status='in-progress', limit=1)
+                        if consult_confs:
+                            self.twilio.client.conferences(consult_confs[0].sid).participants(
+                                consult_call_sid
+                            ).delete()
+                        self.db.remove_participant(consult_call_sid)
+                    except Exception as e:
+                        logger.warning(f"Could not remove consult participant: {e}")
 
             if not is_three_way:
                 # Warm transfer: redirect Agent 1 back to the main conference
