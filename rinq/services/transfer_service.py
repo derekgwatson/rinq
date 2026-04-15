@@ -57,10 +57,21 @@ class TransferService:
         self._base_url = config.webhook_base_url
 
     def _build_extension_dial_twiml(self, extension: str, caller_id: str,
-                                     transferred_by: str = None) -> str | None:
+                                     transferred_by: str = None,
+                                     customer_number: str = None) -> str | None:
         """Build TwiML to dial a staff member by extension.
 
         Returns TwiML string or None if extension not found.
+
+        Args:
+            extension: The extension to dial.
+            caller_id: Caller ID for the <Dial>. Must be a verified/owned
+                number since the ring group may include PSTN mobile forward
+                destinations.
+            transferred_by: Optional email of the agent initiating the transfer.
+            customer_number: Optional customer phone number. When set, it is
+                surfaced on agent 2's browser display via the callerName
+                custom parameter so they see who the customer is.
         """
         ext_record = self.db.get_staff_extension_by_ext(extension)
         if not ext_record:
@@ -70,14 +81,21 @@ class TransferService:
         targets = []
 
         # Browser softphone — include callerName param so the receiving
-        # agent sees who is transferring the call
+        # agent sees the customer they're about to pick up (preferred),
+        # otherwise at least who is transferring the call.
         identity = email.replace('@', '_at_').replace('.', '_')
-        if transferred_by:
+        if customer_number:
+            caller_label = f'Transfer: {customer_number}'
+        elif transferred_by:
             caller_name = transferred_by.split('@')[0].replace('.', ' ').replace('_', ' ').title()
+            caller_label = f'Transfer: {caller_name}'
+        else:
+            caller_label = None
+        if caller_label:
             targets.append(
                 f'<Client>'
                 f'<Identity>{identity}</Identity>'
-                f'<Parameter name="callerName" value="Transfer: {caller_name}" />'
+                f'<Parameter name="callerName" value="{xml_escape(caller_label)}" />'
                 f'</Client>'
             )
         else:
@@ -193,10 +211,13 @@ class TransferService:
                 limit=1
             )
 
+            customer_display_number = None
             if child_calls:
                 # Outbound: redirect the child (customer), end the agent
                 customer_call_sid = child_calls[0].sid
                 agent_call_sid = call_sid
+                # The child's "to" is the number we dialled — i.e. the customer
+                customer_display_number = getattr(child_calls[0], 'to', None)
                 logger.info(f"Outbound transfer: agent={call_sid}, customer={customer_call_sid}")
             else:
                 # Inbound: call_sid is the agent (child). Find the parent (customer).
@@ -206,6 +227,12 @@ class TransferService:
                 if parent_sid:
                     customer_call_sid = parent_sid
                     agent_call_sid = call_sid
+                    # The parent's "from" is the customer who called in
+                    try:
+                        parent_call = self.twilio.client.calls(parent_sid).fetch()
+                        customer_display_number = getattr(parent_call, '_from', None)
+                    except Exception as e:
+                        logger.warning(f"Could not fetch parent call for customer ID: {e}")
                     logger.info(f"Inbound transfer: agent={call_sid}, customer={parent_sid}")
                 else:
                     # No parent, no children — redirect the call itself
@@ -221,7 +248,7 @@ class TransferService:
                 f"&customer_call_sid={quote(customer_call_sid, safe='')}"
             )
             if is_ext:
-                twiml = self._build_extension_dial_twiml(target, from_number, transferred_by)
+                twiml = self._build_extension_dial_twiml(target, from_number, transferred_by, customer_number=customer_display_number)
                 if not twiml:
                     return {'success': False, 'error': f'Extension {target} not found'}
                 # Inject dial action into the TwiML
