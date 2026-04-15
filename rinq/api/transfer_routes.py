@@ -464,24 +464,40 @@ def register(bp):
             from rinq.api.routes import _handle_participant_left
             _handle_participant_left(consult_call_sid, db)
 
-        # "completed" with duration > 0 means the target answered and the call
-        # ended normally — this is a successful transfer, not a failure.
+        # Fetch transfer state up front — we need it to distinguish a real
+        # successful transfer (warm_transfer_complete() already ran and
+        # marked transfer_status='completed') from a mid-consult hangup
+        # that never went through the Complete Transfer button.
+        if source == 'call_log':
+            transfer_state = db.get_transfer_state_log(original_call)
+        else:
+            transfer_state = db.get_transfer_state(original_call)
+        transfer_status_db = transfer_state.get('transfer_status') if transfer_state else None
+
+        # Success path: warm_transfer_complete() redirected the consult_call
+        # into the main conference (via target-join), marked the DB complete,
+        # and eventually the customer↔target conversation ended. That's when
+        # we see 'completed' with duration > 0 AND transfer_status already
+        # 'completed'. Nothing to do.
         call_duration = int(request.form.get('CallDuration', '0') or '0')
-        if call_status == 'completed' and call_duration > 0:
+        if (call_status == 'completed' and call_duration > 0
+                and transfer_status_db == 'completed'):
             logger.info(f"Transfer consult call ended normally for {original_call} (duration={call_duration}s)")
-            if source == 'call_log':
-                db.complete_transfer_log(original_call)
-            else:
-                db.complete_transfer(original_call)
             return '', 200
 
         if call_status in ('completed', 'busy', 'no-answer', 'failed', 'canceled'):
-            logger.info(f"Consultation call failed ({call_status}) for transfer {original_call} (source={source})")
-
-            if source == 'call_log':
-                transfer_state = db.get_transfer_state_log(original_call)
+            # 'completed' with duration but transfer_status != 'completed' means
+            # someone hung up mid-consult without clicking Complete Transfer.
+            # The customer is now orphaned on hold in the main conference —
+            # salvage by running the same rejoin flow used for failed consults.
+            if call_status == 'completed' and call_duration > 0:
+                logger.warning(
+                    f"Transfer consult ended mid-consult for {original_call} "
+                    f"(duration={call_duration}s, transfer_status={transfer_status_db}) "
+                    "— customer was not explicitly transferred, attempting rejoin"
+                )
             else:
-                transfer_state = db.get_transfer_state(original_call)
+                logger.info(f"Consultation call failed ({call_status}) for transfer {original_call} (source={source})")
 
             if transfer_state:
                 transfer_type = transfer_state.get('transfer_type')
