@@ -5576,7 +5576,8 @@ function populateAddToCallList() {
 
     let html = '';
     const renderContact = (c) => {
-        const target = c.extension ? `sip:${escapeHtml(c.extension)}` : escapeHtml(c.phone || '');
+        // Use the same target format as the transfer modal: extension > phone > email
+        const target = escapeHtml(c.extension || c.phone || c.email || '');
         const name = escapeHtml(c.name || target);
         const sub = c.extension ? `ext ${c.extension}` : (c.phone || '');
         return `<div class="target-item" style="cursor:pointer;" onclick="startAddToCall('${target}', '${name}')">
