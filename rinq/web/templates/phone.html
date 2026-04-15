@@ -3254,7 +3254,11 @@ async function stopRecording() {
 
         if (response.ok && data.success) {
             isRecording = false;
-            currentRecordingSid = null;
+            // Intentionally keep currentRecordingSid — the button's "Resume"
+            // label is gated on `currentRecordingSid != null`, so clearing
+            // it here would make the button flip straight back to "Record"
+            // after a pause. The SID is reset on call end (resetRecordingState
+            // and the new-call reset), which is when we actually want it gone.
             updateRecordButton();
             console.log('Recording stopped');
             return true;
