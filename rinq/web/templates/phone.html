@@ -5443,11 +5443,15 @@ function renderParticipantCard(p, myCallSid) {
         actions = `<button class="conf-card-btn kick" onclick="cancelTransfer()" title="Remove from call">✕</button>`;
     } else if (isMe) {
         // Self: only mute (client-side)
-        const muteTitle = isMutedState ? 'Unmute' : 'Mute';
+        const muteTitle = isMutedState ? 'Unmute — others will hear you again' : 'Mute yourself — others won\'t hear you';
         const muteClass = isMutedState ? 'conf-card-btn active' : 'conf-card-btn';
         actions = `<button class="${muteClass}" onclick="toggleMute()" title="${muteTitle}">🎤</button>`;
     } else if (p.call_sid) {
-        const muteTitle = isMutedState ? 'Unmute' : 'Mute';
+        const muteTitle = isMutedState
+            ? 'Unmute — allow them to speak again'
+            : (p.role === 'customer'
+                ? 'Mute caller — silences their mic so no one hears them'
+                : 'Mute — silences their mic so no one hears them');
         const muteClass = isMutedState ? 'conf-card-btn active' : 'conf-card-btn';
         const holdTitle = isHeldState ? 'Unhold' : 'Hold';
         const holdClass = isHeldState ? 'conf-card-btn active' : 'conf-card-btn';
