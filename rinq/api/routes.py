@@ -2266,10 +2266,10 @@ def queue_agent_answer(queue_id):
     db.add_participant(conference_name, customer_call_sid, 'customer',
                        name=customer_name, phone_number=customer_number)
 
-    # Agent joins the conference — brief message gives redirect time
+    # Agent joins the conference — brief pause gives redirect time
     twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say>Connecting.</Say>
+    <Pause length="1"/>
     <Dial>
         <Conference endConferenceOnExit="true" startConferenceOnEnter="true">{xml_escape(conference_name)}</Conference>
     </Dial>
@@ -2306,9 +2306,17 @@ def queue_agent_ring_status(queue_id):
 
     logger.info(f"Agent ring status: {agent_call_sid} -> {call_status} (customer: {customer_call_sid})")
 
-    # Look up reverse mapping from DB and clean up
-    call_info = db.get_ring_attempt_metadata(agent_call_sid)
-    db.remove_ring_attempt_by_sid(agent_call_sid)
+    # Only remove the ring attempt once the call reaches a terminal state.
+    # Intermediate callbacks (initiated, ringing, in-progress) arrive before
+    # _cancel_agent_calls has had a chance to pop the SIDs for cancellation —
+    # removing early would leave other agents' phones ringing after one answers.
+    terminal_statuses = {'completed', 'failed', 'no-answer', 'busy', 'canceled'}
+    if call_status in terminal_statuses:
+        call_info = db.get_ring_attempt_metadata(agent_call_sid)
+        db.remove_ring_attempt_by_sid(agent_call_sid)
+    else:
+        call_info = db.get_ring_attempt_metadata(agent_call_sid)
+
     if not call_info:
         logger.debug(f"No tracking info for agent call {agent_call_sid}")
         return Response('OK', status=200)
@@ -4393,12 +4401,12 @@ def voice_outbound():
         )
 
         # Return TwiML for agent to join the same conference.
-        # Brief message gives the caller redirect time to complete —
+        # Brief pause gives the caller redirect time to complete —
         # without it the agent joins the conference before the caller
         # arrives and hears hold music until the redirect finishes.
         twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say>Connecting.</Say>
+    <Pause length="1"/>
     <Dial>
         <Conference endConferenceOnExit="true" startConferenceOnEnter="true">{xml_escape(conference_name)}</Conference>
     </Dial>
