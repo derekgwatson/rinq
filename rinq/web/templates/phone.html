@@ -5304,8 +5304,12 @@ async function pollCallState() {
             window._addToCallPending = false;
         }
 
-        // Update customer call SID if we didn't have it
-        if (state.customer_call_sid && !currentQueueCallerSid) {
+        // Update customer call SID if we didn't have it.
+        // Guard against outbound calls: currentOutboundCallSid being set means
+        // this is a plain outbound call, not a queue call — don't hijack
+        // currentQueueCallerSid or endCall() will fire voice/call-ended with
+        // the customer's SID instead of the agent's SID, leaving talk_seconds NULL.
+        if (state.customer_call_sid && !currentQueueCallerSid && !currentOutboundCallSid) {
             currentQueueCallerSid = state.customer_call_sid;
         }
 
