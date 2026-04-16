@@ -284,6 +284,121 @@ def _handle_participant_left(call_sid: str, db=None):
     # The frontend handles auto-hangup via poll (sawMultipleParticipants).
 
 
+def _credit_conference_participants(conference_name: str, main_call_sid: str, db=None):
+    """Credit talk time to every agent who participated in a conference.
+
+    Called when a conference ends (customer leg completed). Walks call_participants
+    and ensures each agent has a call_log entry with talk_seconds equal to their
+    actual time in the conference — regardless of how they joined (warm transfer,
+    blind transfer, added to call, etc.).
+
+    - Primary agent (agent_email on the main call_log entry): talk_seconds is
+      corrected to their actual conference time, which may be shorter than the
+      full call if they transferred out mid-call.
+    - Additional agents: a new call_log entry is created linked via parent_call_sid,
+      with call_type='transfer' and their conference time as talk_seconds.
+    """
+    if db is None:
+        db = get_db()
+    try:
+        participants = db.get_participants(conference_name, active_only=False)
+        agents = [p for p in participants if p['role'] != 'customer' and p.get('email')]
+        if not agents:
+            return
+
+        now_str = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+
+        with db._get_conn() as conn:
+            main = conn.execute(
+                "SELECT * FROM call_log WHERE call_sid = ?", (main_call_sid,)
+            ).fetchone()
+        if not main:
+            return
+        main = dict(main)
+        primary_email = main.get('agent_email')
+
+        credited = []
+        for p in agents:
+            joined = p.get('joined_at')
+            left = p.get('left_at') or now_str
+            if not joined:
+                continue
+            try:
+                talk_secs = max(0, int(
+                    (datetime.fromisoformat(left) - datetime.fromisoformat(joined)).total_seconds()
+                ))
+            except (ValueError, TypeError):
+                continue
+
+            if p['email'] == primary_email:
+                # Correct the primary agent's talk time to their actual conference time
+                with db._get_conn() as conn:
+                    conn.execute(
+                        """UPDATE call_log
+                           SET talk_seconds = ?,
+                               total_seconds = COALESCE(ring_seconds, 0) + ?,
+                               updated_at = ?
+                           WHERE call_sid = ?""",
+                        (talk_secs, talk_secs, now_str, main_call_sid)
+                    )
+                    conn.commit()
+                credited.append(p['email'])
+            else:
+                # Secondary agent — ensure they have a call_log entry
+                with db._get_conn() as conn:
+                    existing = conn.execute(
+                        "SELECT id FROM call_log WHERE call_sid = ?", (p['call_sid'],)
+                    ).fetchone()
+
+                if existing:
+                    with db._get_conn() as conn:
+                        conn.execute(
+                            """UPDATE call_log
+                               SET talk_seconds = ?, total_seconds = ?,
+                                   ended_at = COALESCE(ended_at, ?),
+                                   status = CASE WHEN status = 'ringing' THEN 'answered' ELSE status END,
+                                   updated_at = ?
+                               WHERE call_sid = ?""",
+                            (talk_secs, talk_secs, left, now_str, p['call_sid'])
+                        )
+                        conn.commit()
+                else:
+                    db.log_call({
+                        'call_sid': p['call_sid'],
+                        'parent_call_sid': main_call_sid,
+                        'direction': main.get('direction'),
+                        'call_type': 'transfer',
+                        'from_number': main.get('from_number'),
+                        'to_number': main.get('to_number'),
+                        'phone_number_id': main.get('phone_number_id'),
+                        'queue_id': main.get('queue_id'),
+                        'queue_name': main.get('queue_name'),
+                        'status': 'answered',
+                        'agent_email': p['email'],
+                        'customer_id': main.get('customer_id'),
+                        'customer_name': main.get('customer_name'),
+                        'customer_email': main.get('customer_email'),
+                        'conference_name': conference_name,
+                        'started_at': joined,
+                    })
+                    with db._get_conn() as conn:
+                        conn.execute(
+                            """UPDATE call_log
+                               SET answered_at = ?, ended_at = ?,
+                                   talk_seconds = ?, ring_seconds = 0, total_seconds = ?,
+                                   updated_at = ?
+                               WHERE call_sid = ?""",
+                            (joined, left, talk_secs, talk_secs, now_str, p['call_sid'])
+                        )
+                        conn.commit()
+                credited.append(p['email'])
+
+        if credited:
+            logger.info(f"Credited conference participants for {conference_name}: {credited}")
+    except Exception as e:
+        logger.warning(f"Could not credit conference participants for {conference_name}: {e}")
+
+
 # SIP helpers — delegated to services/sip.py
 from rinq.services.sip import get_sip_domain as _get_sip_domain_impl, get_sip_uri_for_user as _get_sip_uri_for_user
 
@@ -1917,6 +2032,12 @@ def call_status_callback():
             agent_email=None,  # Already set during call routing
             talk_seconds=duration if call_status == 'completed' else 0,
         )
+
+        # Credit all agents who were in the conference with their actual talk time.
+        # Must run after complete_call so the primary agent's entry exists.
+        if call_status == 'completed':
+            conf = db.get_call_log_field(call_sid, 'conference_name') or f'hold_room_{call_sid}'
+            _credit_conference_participants(conf, call_sid, db)
 
         # Mark participant as left and end lone calls
         _handle_participant_left(call_sid, db)
@@ -3934,6 +4055,13 @@ def voice_call_ended():
 
     db = get_db()
     db.complete_call(call_sid=call_sid, status='answered')
+
+    # Credit all conference participants with their actual talk time.
+    # For outbound calls this corrects the primary agent's time if they
+    # transferred mid-call, and creates entries for any additional agents.
+    conf = db.get_call_log_field(call_sid, 'conference_name') or f'call_{call_sid}'
+    _credit_conference_participants(conf, call_sid, db)
+
     _handle_participant_left(call_sid, db)
     logger.info(f"Call ended (browser signal): {call_sid}")
     return jsonify({"success": True})
