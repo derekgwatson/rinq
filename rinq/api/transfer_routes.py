@@ -524,9 +524,9 @@ def register(bp):
                     _unhold_and_rejoin_agent(conference_name, consult_conference)
 
             if source == 'call_log':
-                db.fail_transfer_log(original_call, f"Consultation call: {call_status}")
+                db.fail_transfer_log(original_call, call_status)
             else:
-                db.fail_transfer(original_call, f"Consultation call: {call_status}")
+                db.fail_transfer(original_call, call_status)
 
             db.log_activity(
                 action="call_transfer_failed",

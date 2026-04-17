@@ -4287,6 +4287,22 @@ function showTransferError(msg) {
     setTimeout(() => { el.style.display = 'none'; }, 8000);
 }
 
+function formatTransferFailure(reason, targetName) {
+    const tail = " You're back with the caller.";
+    switch (reason) {
+        case 'busy':
+            return `${targetName} is busy — try again or pick someone else.${tail}`;
+        case 'no-answer':
+            return `${targetName} didn't answer — they may be away from their desk.${tail}`;
+        case 'failed':
+            return `Couldn't reach ${targetName} — they may be offline or signed out.${tail}`;
+        case 'canceled':
+            return `Transfer canceled.${tail}`;
+        default:
+            return `Couldn't complete the transfer to ${targetName}.${tail}`;
+    }
+}
+
 function openTransferModal() {
     if (!currentCall) return;
 
@@ -4557,7 +4573,9 @@ function startTransferStatusPolling() {
                     closeTransferModal();
 
                     if (status === 'failed') {
-                        showTransferError('Transfer target did not answer. You are reconnected with the caller.');
+                        const reason = data.transfer && data.transfer.transfer_failure_reason;
+                        const targetName = (data.transfer && data.transfer.transfer_target_name) || 'them';
+                        showTransferError(formatTransferFailure(reason, targetName));
                     }
                 }
             }

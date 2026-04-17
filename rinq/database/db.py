@@ -3447,7 +3447,8 @@ class Database(StatsMixin, CallLogMixin):
                         transfer_target = ?, transfer_target_name = ?,
                         transferred_by = ?, transferred_at = ?,
                         transfer_consult_call_sid = NULL,
-                        transfer_consult_conference = NULL
+                        transfer_consult_conference = NULL,
+                        transfer_failure_reason = NULL
                     WHERE call_sid = ?
                 """, params)
             conn.commit()
@@ -3494,10 +3495,18 @@ class Database(StatsMixin, CallLogMixin):
 
     def fail_transfer(self, call_sid: str, reason: str = None,
                       source: str = 'queued_calls') -> None:
-        """Mark a transfer as failed."""
+        """Mark a transfer as failed and record the reason.
+
+        `reason` is typically the Twilio CallStatus value (busy, no-answer,
+        failed, canceled) so the UI can show an agent-friendly explanation.
+        """
         with self._get_conn() as conn:
             for table in self._transfer_tables(source):
-                conn.execute(f"UPDATE {table} SET transfer_status = 'failed' WHERE call_sid = ?", (call_sid,))
+                conn.execute(
+                    f"UPDATE {table} SET transfer_status = 'failed', "
+                    f"transfer_failure_reason = ? WHERE call_sid = ?",
+                    (reason, call_sid)
+                )
             conn.commit()
 
     def update_transfer_status(self, call_sid: str, status: str,
@@ -3516,7 +3525,7 @@ class Database(StatsMixin, CallLogMixin):
         _TRANSFER_COLS = """transfer_status, transfer_type, transfer_target,
                        transfer_target_name, transfer_consult_call_sid,
                        transfer_consult_conference, transferred_by, transferred_at,
-                       conference_name"""
+                       transfer_failure_reason, conference_name"""
         with self._get_conn() as conn:
             for table in self._transfer_tables(source):
                 row = conn.execute(f"""
