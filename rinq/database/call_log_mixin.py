@@ -458,6 +458,7 @@ class CallLogMixin:
                     SUM(CASE WHEN direction = 'inbound' THEN COALESCE(talk_seconds, 0) ELSE 0 END) as inbound_duration_seconds,
                     SUM(CASE WHEN direction = 'outbound' THEN COALESCE(talk_seconds, 0) ELSE 0 END) as outbound_duration_seconds,
                     AVG(CASE WHEN talk_seconds > 0 THEN talk_seconds END) as avg_duration_seconds,
+                    AVG(CASE WHEN direction = 'inbound' AND talk_seconds > 0 THEN talk_seconds END) as inbound_avg_duration_seconds,
                     AVG(CASE WHEN direction = 'outbound' AND talk_seconds > 0 THEN talk_seconds END) as outbound_avg_duration_seconds
                 FROM call_log WHERE {real_call_where}
                 GROUP BY agent_email ORDER BY total_calls DESC

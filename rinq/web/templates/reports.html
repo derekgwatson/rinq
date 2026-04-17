@@ -702,6 +702,7 @@
             <th>Agent</th>
             <th>Calls</th>
             <th>Talk Time</th>
+            <th>Avg Duration</th>
         </tr>
     </thead>
     <tbody>
@@ -723,6 +724,7 @@
                 </div>
             </td>
             <td>{{ format_duration(agent.inbound_duration_seconds or 0) }}</td>
+            <td>{{ format_duration(agent.inbound_avg_duration_seconds or 0) }}</td>
         </tr>
         {% endfor %}
     </tbody>
@@ -745,13 +747,23 @@
         </tr>
     </thead>
     <tbody>
+        {% set max_outbound = outbound_agents | map(attribute='outbound_calls') | max %}
         {% for agent in outbound_agents | sort(attribute='outbound_calls', reverse=true) %}
         <tr>
             <td>
                 <div class="agent-name">{{ agent.display_name }}</div>
                 <div class="agent-email">{{ agent.agent_email }}</div>
             </td>
-            <td><strong>{{ agent.outbound_calls }}</strong></td>
+            <td>
+                <div class="bar-container">
+                    <span class="bar-value">{{ agent.outbound_calls }}</span>
+                    <div class="bar-track">
+                        {% if max_outbound > 0 %}
+                        <div class="bar-fill answered" style="width: {{ (agent.outbound_calls / max_outbound * 100) | round(1) }}%;"></div>
+                        {% endif %}
+                    </div>
+                </div>
+            </td>
             <td>{{ format_duration(agent.outbound_duration_seconds or 0) }}</td>
             <td>{{ format_duration(agent.outbound_avg_duration_seconds or 0) }}</td>
         </tr>
