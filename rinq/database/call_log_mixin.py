@@ -348,22 +348,22 @@ class CallLogMixin:
                     COUNT(*) as total_calls,
                     SUM(CASE WHEN direction = 'inbound' THEN 1 ELSE 0 END) as inbound_calls,
                     SUM(CASE WHEN direction = 'outbound' THEN 1 ELSE 0 END) as outbound_calls,
-                    SUM(CASE WHEN status IN ('answered', 'completed') THEN 1 ELSE 0 END) as answered_calls,
+                    SUM(CASE WHEN status IN ('answered', 'completed', 'transferred') THEN 1 ELSE 0 END) as answered_calls,
                     SUM(CASE WHEN status IN ('abandoned', 'missed') THEN 1 ELSE 0 END) as abandoned_calls,
                     SUM(CASE WHEN status = 'voicemail' THEN 1 ELSE 0 END) as timeout_calls,
                     SUM(COALESCE(talk_seconds, 0)) as total_duration_seconds,
                     SUM(COALESCE(ring_seconds, 0)) as total_wait_seconds,
-                    AVG(CASE WHEN status IN ('answered', 'completed') THEN talk_seconds END) as avg_duration_seconds,
-                    AVG(CASE WHEN status IN ('answered', 'completed') THEN ring_seconds END) as avg_answered_wait_seconds,
-                    MAX(CASE WHEN status IN ('answered', 'completed') THEN ring_seconds END) as max_answered_wait_seconds,
+                    AVG(CASE WHEN status IN ('answered', 'completed', 'transferred') THEN talk_seconds END) as avg_duration_seconds,
+                    AVG(CASE WHEN status IN ('answered', 'completed', 'transferred') THEN ring_seconds END) as avg_answered_wait_seconds,
+                    MAX(CASE WHEN status IN ('answered', 'completed', 'transferred') THEN ring_seconds END) as max_answered_wait_seconds,
                     AVG(CASE WHEN status IN ('abandoned', 'missed') THEN ring_seconds END) as avg_abandoned_wait_seconds,
                     MAX(CASE WHEN status IN ('abandoned', 'missed') THEN ring_seconds END) as max_abandoned_wait_seconds,
                     AVG(ring_seconds) as avg_wait_seconds,
-                    SUM(CASE WHEN status IN ('answered', 'completed') AND direction = 'inbound' AND ring_seconds <= 15 THEN 1 ELSE 0 END) as within_15s,
-                    SUM(CASE WHEN status IN ('answered', 'completed') AND direction = 'inbound' AND ring_seconds > 15 AND ring_seconds <= 30 THEN 1 ELSE 0 END) as within_30s,
-                    SUM(CASE WHEN status IN ('answered', 'completed') AND direction = 'inbound' AND ring_seconds > 30 AND ring_seconds <= 60 THEN 1 ELSE 0 END) as within_60s,
-                    SUM(CASE WHEN status IN ('answered', 'completed') AND direction = 'inbound' AND ring_seconds > 60 AND ring_seconds <= 90 THEN 1 ELSE 0 END) as within_90s,
-                    SUM(CASE WHEN status IN ('answered', 'completed') AND direction = 'inbound' AND ring_seconds > 90 THEN 1 ELSE 0 END) as over_90s
+                    SUM(CASE WHEN status IN ('answered', 'completed', 'transferred') AND direction = 'inbound' AND ring_seconds <= 15 THEN 1 ELSE 0 END) as within_15s,
+                    SUM(CASE WHEN status IN ('answered', 'completed', 'transferred') AND direction = 'inbound' AND ring_seconds > 15 AND ring_seconds <= 30 THEN 1 ELSE 0 END) as within_30s,
+                    SUM(CASE WHEN status IN ('answered', 'completed', 'transferred') AND direction = 'inbound' AND ring_seconds > 30 AND ring_seconds <= 60 THEN 1 ELSE 0 END) as within_60s,
+                    SUM(CASE WHEN status IN ('answered', 'completed', 'transferred') AND direction = 'inbound' AND ring_seconds > 60 AND ring_seconds <= 90 THEN 1 ELSE 0 END) as within_90s,
+                    SUM(CASE WHEN status IN ('answered', 'completed', 'transferred') AND direction = 'inbound' AND ring_seconds > 90 THEN 1 ELSE 0 END) as over_90s
                 FROM call_log WHERE {where}
             """, params).fetchone()
             total = row['total_calls'] or 0
@@ -451,8 +451,8 @@ class CallLogMixin:
                 SELECT agent_email, COUNT(*) as total_calls,
                     SUM(CASE WHEN direction = 'inbound' THEN 1 ELSE 0 END) as inbound_calls,
                     SUM(CASE WHEN direction = 'outbound' THEN 1 ELSE 0 END) as outbound_calls,
-                    SUM(CASE WHEN status IN ('answered', 'completed') THEN 1 ELSE 0 END) as answered_calls,
-                    SUM(CASE WHEN direction = 'inbound' AND status IN ('answered', 'completed') THEN 1 ELSE 0 END) as inbound_answered,
+                    SUM(CASE WHEN status IN ('answered', 'completed', 'transferred') THEN 1 ELSE 0 END) as answered_calls,
+                    SUM(CASE WHEN direction = 'inbound' AND status IN ('answered', 'completed', 'transferred') THEN 1 ELSE 0 END) as inbound_answered,
                     SUM(CASE WHEN direction = 'inbound' AND status IN ('abandoned', 'missed') THEN 1 ELSE 0 END) as missed_calls,
                     SUM(COALESCE(talk_seconds, 0)) as total_duration_seconds,
                     SUM(CASE WHEN direction = 'inbound' THEN COALESCE(talk_seconds, 0) ELSE 0 END) as inbound_duration_seconds,
@@ -520,7 +520,7 @@ class CallLogMixin:
             rows = conn.execute(f"""
                 SELECT CAST((strftime('%H', started_at) + {tz_offset_hours}) % 24 AS INTEGER) as hour,
                     COUNT(*) as total_calls,
-                    SUM(CASE WHEN status IN ('answered', 'completed') THEN 1 ELSE 0 END) as answered_calls,
+                    SUM(CASE WHEN status IN ('answered', 'completed', 'transferred') THEN 1 ELSE 0 END) as answered_calls,
                     SUM(CASE WHEN status IN ('abandoned', 'missed') THEN 1 ELSE 0 END) as abandoned_calls,
                     SUM(CASE WHEN status = 'voicemail' THEN 1 ELSE 0 END) as timeout_calls
                 FROM call_log WHERE {where} GROUP BY hour ORDER BY hour
