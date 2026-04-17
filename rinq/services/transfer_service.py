@@ -196,6 +196,9 @@ class TransferService:
             is_ext = _is_extension(target)
             if is_ext:
                 target_e164 = target  # Keep as extension for logging
+                ext_record = self.db.get_staff_extension_by_ext(target.strip())
+                if ext_record and ext_record.get('dnd_enabled'):
+                    return {'success': False, 'error': f'{target_name} is on Do Not Disturb', 'on_dnd': True}
             else:
                 target_e164 = self.twilio._format_phone_number(target)
 
@@ -366,6 +369,9 @@ class TransferService:
                 if not ext_record:
                     self.db.fail_transfer(call_sid, f'Extension {target} not found')
                     return {'success': False, 'error': f'Extension {target} not found'}
+                if ext_record.get('dnd_enabled'):
+                    self.db.fail_transfer(call_sid, 'dnd')
+                    return {'success': False, 'error': f'{target_name} is on Do Not Disturb', 'on_dnd': True}
                 from rinq.api.identity import email_to_browser_identity as _email_to_browser_identity
                 target_to = f"client:{_email_to_browser_identity(ext_record['email'])}"
             else:
@@ -507,6 +513,12 @@ class TransferService:
                 if not ext_record:
                     self.db.fail_transfer(call_sid, f'Extension {target} not found')
                     return {'success': False, 'error': f'Extension {target} not found'}
+                # Refuse up-front if the target has DND on, rather than letting
+                # the consult ring and come back "busy" — clearer for the agent
+                # and doesn't interrupt the target.
+                if ext_record.get('dnd_enabled'):
+                    self.db.fail_transfer(call_sid, 'dnd')
+                    return {'success': False, 'error': f'{target_name} is on Do Not Disturb', 'on_dnd': True}
                 from rinq.api.identity import email_to_browser_identity as _email_to_browser_identity
                 browser_identity = _email_to_browser_identity(ext_record['email'])
                 target_to = f"client:{browser_identity}"

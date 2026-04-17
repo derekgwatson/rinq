@@ -929,6 +929,32 @@
     margin-top: 10px;
 }
 
+.call-notice {
+    margin-top: 12px;
+    padding: 10px 14px;
+    background: #fff4e5;
+    color: #7a4b00;
+    border: 1px solid #ffd591;
+    border-radius: 6px;
+    font-size: 0.9em;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.call-notice-dismiss {
+    background: transparent;
+    border: none;
+    color: inherit;
+    font-size: 1.3em;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 4px;
+    opacity: 0.6;
+}
+.call-notice-dismiss:hover { opacity: 1; }
+
 .btn-mute {
     background: #7f8c8d;
     color: white;
@@ -2151,6 +2177,10 @@
                     <span>Transfer</span>
                 </button>
             </div>
+            <div class="call-notice" id="callNotice" style="display: none;">
+                <span id="callNoticeText"></span>
+                <button class="call-notice-dismiss" onclick="clearCallNotice()" aria-label="Dismiss">&times;</button>
+            </div>
         </div>
 
         <!-- Tab Switcher -->
@@ -3326,6 +3356,7 @@ function endCall() {
     if (_ecIdle) _ecIdle.style.display = '';
     if (_ecConsult) _ecConsult.style.display = 'none';
     closeTransferModal();
+    clearCallNotice();
     updateDisplay();
     updateMuteButton();
     updateHoldButton();
@@ -4306,9 +4337,28 @@ function showTransferError(msg) {
     setTimeout(() => { el.style.display = 'none'; }, 8000);
 }
 
+// Persistent notice that lives on the main call UI (not inside the
+// transfer modal, which closes on failure and hides its contents).
+// Used when a warm transfer fails so the agent sees what happened
+// until they act — the inline modal toast was being missed.
+function showCallNotice(msg) {
+    const el = document.getElementById('callNotice');
+    const text = document.getElementById('callNoticeText');
+    if (!el || !text) return;
+    text.textContent = msg;
+    el.style.display = 'flex';
+}
+
+function clearCallNotice() {
+    const el = document.getElementById('callNotice');
+    if (el) el.style.display = 'none';
+}
+
 function formatTransferFailure(reason, targetName) {
     const tail = " You're back with the caller.";
     switch (reason) {
+        case 'dnd':
+            return `${targetName} is on Do Not Disturb.${tail}`;
         case 'busy':
             return `${targetName} is busy — try again or pick someone else.${tail}`;
         case 'no-answer':
@@ -4390,6 +4440,7 @@ async function startTransfer() {
 
     btnStartTransfer.disabled = true;
     btnStartTransfer.textContent = 'Starting transfer...';
+    clearCallNotice();
 
     try {
         if (transferType === 'blind') {
@@ -4427,6 +4478,11 @@ async function startTransfer() {
             if (response.ok && data.success) {
                 closeTransferModal();
                 endCall();
+            } else if (data.on_dnd) {
+                closeTransferModal();
+                showCallNotice(data.error + " You're back with the caller.");
+                btnStartTransfer.disabled = false;
+                btnStartTransfer.textContent = 'Transfer';
             } else {
                 showTransferError(data.error || 'Transfer failed');
                 btnStartTransfer.disabled = false;
@@ -4483,6 +4539,11 @@ async function startTransfer() {
                     startCallStatePolling(1000);
                     startTransferStatusPolling();
                 }
+            } else if (data.on_dnd) {
+                closeTransferModal();
+                showCallNotice(data.error + " You're back with the caller.");
+                btnStartTransfer.disabled = false;
+                btnStartTransfer.textContent = 'Transfer';
             } else {
                 showTransferError(data.error || 'Transfer failed');
                 btnStartTransfer.disabled = false;
@@ -4594,7 +4655,7 @@ function startTransferStatusPolling() {
                     if (status === 'failed') {
                         const reason = data.transfer && data.transfer.transfer_failure_reason;
                         const targetName = (data.transfer && data.transfer.transfer_target_name) || 'them';
-                        showTransferError(formatTransferFailure(reason, targetName));
+                        showCallNotice(formatTransferFailure(reason, targetName));
                     }
                 }
             }
