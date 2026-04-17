@@ -189,10 +189,16 @@ def _get_browser_identity(user):
 
 @web_bp.route('/manifest.json')
 def manifest():
-    """Dynamic PWA manifest — uses product_name from config."""
+    """Dynamic PWA manifest — uses the tenant's product_name so the pinned
+    app on a Chromebox/desktop shows the tenant brand (e.g. "Tina Phone"),
+    not the default "Rinq Phone"."""
+    from flask import g
+    tenant = getattr(g, 'tenant', None)
+    product_name = (tenant.get('product_name') if tenant and tenant.get('product_name')
+                    else config.product_name)
     manifest_data = {
-        "name": f"{config.product_name} Phone",
-        "short_name": "Phone",
+        "name": f"{product_name} Phone",
+        "short_name": product_name,
         "description": config.description,
         "start_url": "/phone",
         "scope": "/phone",
