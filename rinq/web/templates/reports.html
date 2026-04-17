@@ -145,12 +145,20 @@
 .agent-table {
     width: 100%;
     border-collapse: collapse;
+    table-layout: fixed;
 }
+
+.agent-table th:nth-child(1) { width: 35%; }
+.agent-table th:nth-child(2) { width: 35%; }
+.agent-table th:nth-child(3) { width: 15%; }
+.agent-table th:nth-child(4) { width: 15%; }
 
 .agent-table th, .agent-table td {
     padding: 12px 15px;
     text-align: left;
     border-bottom: 1px solid #e9ecef;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .agent-table th {
