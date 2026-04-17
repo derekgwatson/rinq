@@ -3264,6 +3264,17 @@ function rejectCall() {
 }
 
 function endCall() {
+    // If the browser device disconnects mid warm-transfer consult, the
+    // customer is still live on the server (held in the main conference).
+    // Clear customer-side SIDs so /voice/call-ended below reports our own
+    // browser leg SID instead of killing the customer. The server-side
+    // consult-status callback handles unhold/rejoin.
+    if (isConsulting) {
+        currentQueueCallerSid = null;
+        currentTransferKey = null;
+        isConsulting = false;
+        consultCallSid = null;
+    }
     autoRecordAttempted = false;
     // Notify server that the call has ended so call_log gets ended_at set.
     // This is the single point all call endings pass through on the client.
