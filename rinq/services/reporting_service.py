@@ -231,11 +231,13 @@ class ReportingService:
             'hourly_records': hourly_result['records_created'],
         }
 
-    def format_duration(self, seconds: int) -> str:
-        """Format seconds as HH:MM:SS or MM:SS."""
+    def format_duration(self, seconds) -> str:
+        """Format seconds as HH:MM:SS or MM:SS. Accepts int, float, or None
+        (SQL AVG() returns a float)."""
         if seconds is None or seconds == 0:
             return '00:00'
 
+        seconds = int(seconds)
         hours = seconds // 3600
         minutes = (seconds % 3600) // 60
         secs = seconds % 60
