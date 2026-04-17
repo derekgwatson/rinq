@@ -213,10 +213,10 @@
 {% set max_calls = by_calls[0].answered_calls if by_calls else 1 %}
 {% set max_time = by_talk_time[0].total_duration_seconds if by_talk_time else 1 %}
 
-<!-- Most Calls Answered -->
+<!-- Most Calls Handled (inbound + outbound, connected) -->
 <div class="section-header">
     <span class="emoji">📞</span>
-    <h3>Most Calls Answered</h3>
+    <h3>Most Calls Handled</h3>
 </div>
 <div class="leaderboard-table">
     <table>

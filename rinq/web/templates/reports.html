@@ -716,11 +716,11 @@
             <td><strong>{{ agent.inbound_calls }}</strong></td>
             <td>
                 <div class="bar-container">
-                    <span class="bar-value">{{ agent.inbound_answered or agent.answered_calls }}</span>
+                    <span class="bar-value">{{ agent.inbound_answered or 0 }}</span>
                     <div class="bar-track">
                         {% set max_inbound = inbound_agents | map(attribute='inbound_calls') | max %}
                         {% if max_inbound > 0 %}
-                        <div class="bar-fill answered" style="width: {{ ((agent.inbound_answered or agent.answered_calls) / max_inbound * 100) | round(1) }}%;"></div>
+                        <div class="bar-fill answered" style="width: {{ ((agent.inbound_answered or 0) / max_inbound * 100) | round(1) }}%;"></div>
                         {% endif %}
                     </div>
                 </div>
