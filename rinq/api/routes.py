@@ -5299,47 +5299,6 @@ def get_conference_participants():
     return jsonify({"participants": result})
 
 
-@api_bp.route('/voice/participant/mute', methods=['POST'])
-@api_or_session_auth
-def participant_mute():
-    """Mute or unmute a specific conference participant.
-
-    Request body:
-        call_sid: The participant's call SID
-        muted: true to mute, false to unmute
-
-    Returns:
-        {"success": true} or {"error": "..."}
-    """
-    db = get_db()
-    data = request.get_json() or {}
-    call_sid = data.get('call_sid')
-    muted = data.get('muted')
-
-    if not call_sid or muted is None:
-        return jsonify({"error": "call_sid and muted required"}), 400
-
-    conference_name = db.get_call_conference(call_sid)
-    if not conference_name:
-        participant = db.get_participant_by_sid(call_sid)
-        if participant:
-            conference_name = participant['conference_name']
-    if not conference_name:
-        return jsonify({"error": "Could not find conference for participant"}), 404
-
-    twilio_service = get_twilio_service()
-    try:
-        conferences = twilio_list(twilio_service.client.conferences,
-            friendly_name=conference_name, status='in-progress', limit=1)
-        if not conferences:
-            return jsonify({"error": "Conference not active"}), 404
-        twilio_service.client.conferences(conferences[0].sid).participants(call_sid).update(muted=bool(muted))
-        return jsonify({"success": True})
-    except Exception as e:
-        logger.exception(f"Error muting participant {call_sid}")
-        return jsonify({"error": str(e)}), 500
-
-
 @api_bp.route('/voice/participant/hold', methods=['POST'])
 @api_or_session_auth
 def participant_hold():

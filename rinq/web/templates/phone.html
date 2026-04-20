@@ -2631,7 +2631,6 @@ function resetCallState() {
     window._sawMultipleParticipants = false;
     window._addToCallPending = false;
     // Clear optimistic per-card state
-    Object.keys(_cardMuted).forEach(k => delete _cardMuted[k]);
     Object.keys(_cardHeld).forEach(k => delete _cardHeld[k]);
     // Call state polling
     if (typeof callStateInterval !== 'undefined' && callStateInterval) {
@@ -5535,8 +5534,7 @@ async function pollCallState() {
     }
 }
 
-// Track optimistic mute/hold state per call SID so cards reflect immediate feedback
-const _cardMuted = {};
+// Track optimistic hold state per call SID so cards reflect immediate feedback
 const _cardHeld = {};
 
 function renderCallStatePanel(state) {
@@ -5593,7 +5591,7 @@ function renderCallStatePanel(state) {
 
 function renderParticipantCard(p, myCallSid) {
     const isMe = p.call_sid && p.call_sid === myCallSid;
-    const isMutedState = isMe ? isMuted : (_cardMuted[p.call_sid] ?? p.muted);
+    const isMutedState = isMe ? isMuted : p.muted;
     const isHeldState = _cardHeld[p.call_sid] ?? p.hold;
 
     let cardClass = 'conf-participant-card';
@@ -5626,17 +5624,10 @@ function renderParticipantCard(p, myCallSid) {
         const muteClass = isMutedState ? 'conf-card-btn active' : 'conf-card-btn';
         actions = `<button class="${muteClass}" onclick="toggleMute()" title="${muteTitle}">🎤</button>`;
     } else if (p.call_sid) {
-        const muteTitle = isMutedState
-            ? 'Unmute — allow them to speak again'
-            : (p.role === 'customer'
-                ? 'Mute caller — silences their mic so no one hears them'
-                : 'Mute — silences their mic so no one hears them');
-        const muteClass = isMutedState ? 'conf-card-btn active' : 'conf-card-btn';
         const holdTitle = isHeldState ? 'Unhold' : 'Hold';
         const holdClass = isHeldState ? 'conf-card-btn active' : 'conf-card-btn';
         const sidAttr = escapeHtml(p.call_sid);
-        actions = `<button class="${muteClass}" onclick="participantMute('${sidAttr}', ${isMutedState})" title="${muteTitle}">🎤</button>` +
-                  `<button class="${holdClass}" onclick="participantHold('${sidAttr}', ${isHeldState})" title="${holdTitle}">⏸</button>` +
+        actions = `<button class="${holdClass}" onclick="participantHold('${sidAttr}', ${isHeldState})" title="${holdTitle}">⏸</button>` +
                   `<button class="conf-card-btn kick" onclick="participantKick('${sidAttr}')" title="Remove">✕</button>`;
     }
 
@@ -5661,30 +5652,6 @@ function renderAddCard(adding) {
 // ============================================
 // Per-participant card actions
 // ============================================
-
-async function participantMute(callSid, currentlyMuted) {
-    const newMuted = !currentlyMuted;
-    _cardMuted[callSid] = newMuted;
-    // Optimistically re-render
-    if (lastCallState) renderCallStatePanel(lastCallState);
-
-    try {
-        const resp = await fetch('/api/voice/participant/mute', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ call_sid: callSid, muted: newMuted })
-        });
-        if (!resp.ok) {
-            // Revert on failure
-            _cardMuted[callSid] = currentlyMuted;
-            if (lastCallState) renderCallStatePanel(lastCallState);
-        }
-    } catch (e) {
-        _cardMuted[callSid] = currentlyMuted;
-        if (lastCallState) renderCallStatePanel(lastCallState);
-    }
-}
 
 async function participantHold(callSid, currentlyHeld) {
     const newHeld = !currentlyHeld;
