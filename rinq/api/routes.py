@@ -4133,8 +4133,13 @@ def voice_hangup():
     user = get_current_user()
     db = get_db()
 
-    # If there's a hold conference, end it and hang up the other party
+    customer_call_sid = data.get('customer_call_sid')
+
+    # Find the conference — try agent SID first, then customer SID as fallback
+    # (customer SID is the primary key for queue calls so it's more reliable)
     conference_name = db.get_call_conference(call_sid)
+    if not conference_name and customer_call_sid:
+        conference_name = db.get_call_conference(customer_call_sid)
     if not conference_name:
         # Try known patterns (same fallback as unhold)
         for pattern in [f"hold_{call_sid}", f"hold_room_{call_sid}"]:

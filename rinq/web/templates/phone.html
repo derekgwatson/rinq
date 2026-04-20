@@ -3306,11 +3306,13 @@ function hangupCall() {
     // Server-side hangup as fallback — ensures Twilio terminates
     // both legs even if the browser-side disconnect doesn't propagate
     if (callSid) {
+        const hangupBody = {call_sid: callSid};
+        if (currentQueueCallerSid) hangupBody.customer_call_sid = currentQueueCallerSid;
         fetch(`/api/voice/hangup`, {
             method: 'POST',
             credentials: 'same-origin',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({call_sid: callSid})
+            body: JSON.stringify(hangupBody)
         }).catch(err => console.error('Server-side hangup failed:', err));
     }
 
