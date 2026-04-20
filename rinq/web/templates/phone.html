@@ -5664,17 +5664,11 @@ function renderParticipantCard(p, myCallSid) {
     if (p.isTransferTarget) {
         // Transfer target (ringing or consulting) — ✕ cancels the transfer
         actions = `<button class="conf-card-btn kick" onclick="cancelTransfer()" title="Remove from call">✕</button>`;
-    } else if (isMe) {
-        // Self: only mute (client-side)
-        const muteTitle = isMutedState ? 'Unmute — others will hear you again' : 'Mute yourself — others won\'t hear you';
-        const muteClass = isMutedState ? 'conf-card-btn active' : 'conf-card-btn';
-        actions = `<button class="${muteClass}" onclick="toggleMute()" title="${muteTitle}">🎤</button>`;
-    } else if (p.call_sid) {
-        const holdTitle = isHeldState ? 'Unhold' : 'Hold';
-        const holdClass = isHeldState ? 'conf-card-btn active' : 'conf-card-btn';
+    } else if (!isMe && p.call_sid) {
+        // Other participants: only kick. Self-mute and hold-customer live
+        // on the main call controls above the dialpad.
         const sidAttr = escapeHtml(p.call_sid);
-        actions = `<button class="${holdClass}" onclick="participantHold('${sidAttr}', ${isHeldState})" title="${holdTitle}">⏸</button>` +
-                  `<button class="conf-card-btn kick" onclick="participantKick('${sidAttr}')" title="Remove">✕</button>`;
+        actions = `<button class="conf-card-btn kick" onclick="participantKick('${sidAttr}')" title="Remove">✕</button>`;
     }
 
     return `<div class="${cardClass}">
@@ -5698,41 +5692,6 @@ function renderAddCard(adding) {
 // ============================================
 // Per-participant card actions
 // ============================================
-
-async function participantHold(callSid, currentlyHeld) {
-    const newHeld = !currentlyHeld;
-    _cardHeld[callSid] = newHeld;
-    // Keep the Hold button in sync when holding the customer via their card
-    if (callSid === currentQueueCallerSid) {
-        isOnHold = newHeld;
-        updateHoldButton();
-    }
-    if (lastCallState) renderCallStatePanel(lastCallState);
-
-    try {
-        const resp = await fetch('/api/voice/participant/hold', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ call_sid: callSid, hold: newHeld })
-        });
-        if (!resp.ok) {
-            _cardHeld[callSid] = currentlyHeld;
-            if (callSid === currentQueueCallerSid) {
-                isOnHold = currentlyHeld;
-                updateHoldButton();
-            }
-            if (lastCallState) renderCallStatePanel(lastCallState);
-        }
-    } catch (e) {
-        _cardHeld[callSid] = currentlyHeld;
-        if (callSid === currentQueueCallerSid) {
-            isOnHold = currentlyHeld;
-            updateHoldButton();
-        }
-        if (lastCallState) renderCallStatePanel(lastCallState);
-    }
-}
 
 async function participantKick(callSid) {
     if (!confirm('Remove this person from the call?')) return;

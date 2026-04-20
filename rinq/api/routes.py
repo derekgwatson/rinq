@@ -5299,50 +5299,6 @@ def get_conference_participants():
     return jsonify({"participants": result})
 
 
-@api_bp.route('/voice/participant/hold', methods=['POST'])
-@api_or_session_auth
-def participant_hold():
-    """Hold or unhold a specific conference participant.
-
-    Request body:
-        call_sid: The participant's call SID
-        hold: true to hold, false to unhold
-
-    Returns:
-        {"success": true} or {"error": "..."}
-    """
-    db = get_db()
-    data = request.get_json() or {}
-    call_sid = data.get('call_sid')
-    hold = data.get('hold')
-
-    if not call_sid or hold is None:
-        return jsonify({"error": "call_sid and hold required"}), 400
-
-    conference_name = db.get_call_conference(call_sid)
-    if not conference_name:
-        participant = db.get_participant_by_sid(call_sid)
-        if participant:
-            conference_name = participant['conference_name']
-    if not conference_name:
-        return jsonify({"error": "Could not find conference for participant"}), 404
-
-    twilio_service = get_twilio_service()
-    hold_url = f"{config.webhook_base_url}/api/voice/hold-music"
-    try:
-        conferences = twilio_list(twilio_service.client.conferences,
-            friendly_name=conference_name, status='in-progress', limit=1)
-        if not conferences:
-            return jsonify({"error": "Conference not active"}), 404
-        update_kwargs = {'hold': bool(hold)}
-        if hold:
-            update_kwargs['hold_url'] = hold_url
-        twilio_service.client.conferences(conferences[0].sid).participants(call_sid).update(**update_kwargs)
-        return jsonify({"success": True})
-    except Exception as e:
-        logger.exception(f"Error holding participant {call_sid}")
-        return jsonify({"error": str(e)}), 500
-
 
 @api_bp.route('/voice/participant/kick', methods=['POST'])
 @api_or_session_auth
