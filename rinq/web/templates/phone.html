@@ -2197,7 +2197,11 @@
         <div class="call-info" id="callInfo">
             <div class="call-duration" id="callDuration">00:00</div>
             <div class="call-number" id="callNumber"></div>
-            <div class="call-controls">
+            <div class="call-controls" id="callControls">
+                <button class="btn-mute" id="btnMute" onclick="toggleMute()">
+                    <span id="muteIcon">🎤</span>
+                    <span id="muteText">Mute</span>
+                </button>
                 <button class="btn-hold" id="btnHold" onclick="toggleHold()">
                     <span id="holdIcon">⏸</span>
                     <span id="holdText">Hold</span>
@@ -2206,6 +2210,10 @@
                     <span>🔀</span>
                     <span>Transfer</span>
                 </button>
+            </div>
+            <div class="call-controls call-controls-consulting" id="callControlsConsulting" style="display:none;">
+                <button class="btn-transfer-action btn-transfer-cancel" onclick="cancelTransfer()">← Go back</button>
+                <button class="btn-transfer-action btn-transfer-complete" id="btnHandoff" onclick="completeTransfer()">✓ Hand off</button>
             </div>
             <div class="call-notice" id="callNotice" style="display: none;">
                 <span id="callNoticeText"></span>
@@ -2311,9 +2319,6 @@
                 </div>
                 <div id="sidebarIdle">No active call</div>
                 <div id="conferencePanelList"></div>
-                <div class="sidebar-consulting-actions" id="sidebarConsultingActions" style="display:none">
-                    <button class="btn-transfer-action btn-transfer-complete" id="btnCompleteTransfer" onclick="completeTransfer()">Hand off</button>
-                </div>
             </div><!-- /phone-sidebar -->
 
         </div><!-- /phone-layout -->
@@ -2644,6 +2649,9 @@ const phoneDisplay = document.getElementById('phoneDisplay');
 const phoneStatus = document.getElementById('phoneStatus');
 const btnCall = document.getElementById('btnCall');
 const btnHangup = document.getElementById('btnHangup');
+const btnMute = document.getElementById('btnMute');
+const muteIcon = document.getElementById('muteIcon');
+const muteText = document.getElementById('muteText');
 const btnHold = document.getElementById('btnHold');
 const holdIcon = document.getElementById('holdIcon');
 const holdText = document.getElementById('holdText');
@@ -3382,10 +3390,15 @@ function endCall() {
     contextPane.classList.remove('has-call');
     const _ecList = document.getElementById('conferencePanelList');
     const _ecIdle = document.getElementById('sidebarIdle');
-    const _ecConsult = document.getElementById('sidebarConsultingActions');
+    const _ecCallControls = document.getElementById('callControls');
+    const _ecCallControlsConsult = document.getElementById('callControlsConsulting');
     if (_ecList) _ecList.innerHTML = '';
     if (_ecIdle) _ecIdle.style.display = '';
-    if (_ecConsult) _ecConsult.style.display = 'none';
+    if (_ecCallControls) _ecCallControls.style.display = '';
+    if (_ecCallControlsConsult) _ecCallControlsConsult.style.display = 'none';
+    // Reset mute state visually
+    isMuted = false;
+    updateMuteButton();
     closeTransferModal();
     clearCallNotice();
     updateDisplay();
@@ -3423,7 +3436,21 @@ function toggleMute() {
 
     isMuted = !isMuted;
     currentCall.mute(isMuted);
+    updateMuteButton();
     if (lastCallState) renderCallStatePanel(lastCallState);
+}
+
+function updateMuteButton() {
+    if (!btnMute) return;
+    if (isMuted) {
+        btnMute.classList.add('muted');
+        if (muteIcon) muteIcon.textContent = '🔇';
+        if (muteText) muteText.textContent = 'Unmute';
+    } else {
+        btnMute.classList.remove('muted');
+        if (muteIcon) muteIcon.textContent = '🎤';
+        if (muteText) muteText.textContent = 'Mute';
+    }
 }
 
 // toggleHold kept for internal use (e.g. auto-hold on transfer)
@@ -4559,10 +4586,9 @@ async function startTransfer() {
                     startCallStatePolling(1000);  // Poll faster to catch target joining
                     startTransferStatusPolling();
                 } else {
-                    // Warm transfer started — close modal.
-                    // The sidebar shows the ringing card and Go back / Hand off buttons.
-                    const completeBtn = document.getElementById('btnCompleteTransfer');
-                    if (completeBtn) completeBtn.textContent = 'Hand off';
+                    // Warm transfer started — close modal. The main call
+                    // controls swap to Go back / Hand off via renderCallStatePanel
+                    // when the server reports transfer.status=pending|consulting.
                     transferModal.classList.remove('active');
 
                     // Poll faster to catch target answering, and detect failures
@@ -4595,10 +4621,14 @@ async function completeTransfer() {
         return;
     }
 
-    // Immediate feedback
-    const completeBtn = document.getElementById('btnCompleteTransfer');
-    completeBtn.disabled = true;
-    completeBtn.textContent = 'Completing...';
+    // Immediate feedback — prefer the main-panel Hand off button, fall back
+    // to the modal's btnCompleteTransfer (used when modal is still visible).
+    const completeBtn = document.getElementById('btnHandoff')
+        || document.getElementById('btnCompleteTransfer');
+    if (completeBtn) {
+        completeBtn.disabled = true;
+        completeBtn.textContent = 'Completing...';
+    }
 
     try {
         const body = { call_type: currentTransferCallType };
@@ -4640,14 +4670,18 @@ async function completeTransfer() {
                 currentTransferKey = null;
             } else {
                 showCallNotice(data.error || 'Failed to complete transfer');
-                completeBtn.disabled = false;
-                completeBtn.textContent = 'Hand off';
+                if (completeBtn) {
+                    completeBtn.disabled = false;
+                    completeBtn.textContent = '✓ Hand off';
+                }
             }
         }
     } catch (error) {
         showCallNotice('Error completing transfer: ' + error.message);
-        completeBtn.disabled = false;
-        completeBtn.textContent = 'Hand off';
+        if (completeBtn) {
+            completeBtn.disabled = false;
+            completeBtn.textContent = '✓ Hand off';
+        }
     }
 }
 
@@ -5540,12 +5574,14 @@ const _cardHeld = {};
 function renderCallStatePanel(state) {
     const list = document.getElementById('conferencePanelList');
     const sidebarIdle = document.getElementById('sidebarIdle');
-    const consultingActions = document.getElementById('sidebarConsultingActions');
+    const callControls = document.getElementById('callControls');
+    const callControlsConsulting = document.getElementById('callControlsConsulting');
 
     if (!state.in_call) {
         if (list) list.innerHTML = '';
         if (sidebarIdle) sidebarIdle.style.display = '';
-        if (consultingActions) consultingActions.style.display = 'none';
+        if (callControls) callControls.style.display = '';
+        if (callControlsConsulting) callControlsConsulting.style.display = 'none';
         return;
     }
 
@@ -5574,12 +5610,12 @@ function renderCallStatePanel(state) {
         }
     }
 
-    // Show/hide Go back / Hand off buttons during warm transfer
+    // Swap the main call controls for Go back / Hand off during warm transfer.
+    // Server-authoritative: only when transfer.status is pending or consulting.
     const isWarmActive = transfer && transfer.type === 'warm' &&
         ['pending', 'consulting'].includes(transfer.status);
-    if (consultingActions) {
-        consultingActions.style.display = isWarmActive ? 'flex' : 'none';
-    }
+    if (callControls) callControls.style.display = isWarmActive ? 'none' : '';
+    if (callControlsConsulting) callControlsConsulting.style.display = isWarmActive ? 'flex' : 'none';
 
     const addingToCall = window._addToCallPending;
     const cards = allParticipants.map(p => renderParticipantCard(p, myCallSid));
