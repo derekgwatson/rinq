@@ -282,7 +282,11 @@
 
         <div class="card" style="margin-top: 20px;">
             <h2>Settings</h2>
+
+            <!-- Hide mobile toggle: separate form so it doesn't affect forwarding state -->
             <form method="post" action="{{ url_for('web.update_settings') }}">
+                <input type="hidden" name="forward_to" value="{{ staff_ext.forward_to or '' }}">
+                <input type="hidden" name="forward_mode" value="{{ staff_ext.forward_mode or 'always' }}">
                 <div class="setting-row">
                     <div>
                         <div class="setting-label">Hide my mobile number</div>
@@ -295,30 +299,70 @@
                         <span class="toggle-slider"></span>
                     </label>
                 </div>
+            </form>
 
-                <div class="forward-fields">
-                    <h3 style="margin: 0 0 15px 0; font-size: 1em;">Call Forwarding</h3>
-                    <div class="forward-row">
-                        <div class="form-group">
-                            <label for="forward_to">Forward to mobile</label>
-                            <input type="tel" name="forward_to" id="forward_to"
-                                   value="{{ staff_ext.forward_to or '' }}"
-                                   placeholder="04XX XXX XXX">
+            <!-- Call Forwarding: separate form -->
+            <div class="forward-fields">
+                <h3 style="margin: 0 0 12px 0; font-size: 1em;">Call Forwarding</h3>
+
+                {% if staff_ext.forward_to %}
+                <!-- Active forwarding — show status with Remove/Change actions -->
+                <div id="forwardActive">
+                    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 10px 14px; background: #f0f7f0; border: 1px solid #c3e0c3; border-radius: 6px;">
+                        <div>
+                            <span style="font-weight: 600;">{{ staff_ext.forward_to }}</span>
+                            <span class="text-muted" style="margin-left: 8px; font-size: 0.9em;">&mdash;
+                                {% if staff_ext.forward_mode == 'no_answer' %}if no answer (20s){% else %}always{% endif %}
+                            </span>
                         </div>
-                        <div class="form-group">
-                            <label for="forward_mode">When to forward</label>
-                            <select name="forward_mode" id="forward_mode">
-                                <option value="always" {% if staff_ext.forward_mode == 'always' %}selected{% endif %}>Always</option>
-                                <option value="no_answer" {% if staff_ext.forward_mode == 'no_answer' %}selected{% endif %}>If no answer (20s)</option>
-                            </select>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <button type="button" onclick="document.getElementById('forwardActive').style.display='none'; document.getElementById('forwardEdit').style.display='block';"
+                                    style="background: none; border: 1px solid #aaa; border-radius: 4px; padding: 4px 10px; font-size: 0.85em; cursor: pointer; color: #555;">Change</button>
+                            <form method="post" action="{{ url_for('web.update_settings') }}" style="margin: 0;">
+                                <input type="hidden" name="forward_to" value="">
+                                <input type="hidden" name="forward_mode" value="{{ staff_ext.forward_mode or 'always' }}">
+                                <input type="hidden" name="hide_mobile" value="{{ '1' if staff_ext.hide_mobile else '0' }}">
+                                <button type="submit" style="background: #dc3545; color: white; border: none; border-radius: 4px; padding: 4px 10px; font-size: 0.85em; cursor: pointer;">Remove</button>
+                            </form>
                         </div>
                     </div>
-                    <p class="text-muted" style="margin-top: 10px; font-size: 0.85em;">
-                        Australian mobile numbers only. Leave empty to disable forwarding.
-                    </p>
-                    <button type="submit" class="btn" style="margin-top: 10px;">Save Forwarding</button>
                 </div>
-            </form>
+                <!-- Edit form hidden by default when forwarding is active -->
+                <div id="forwardEdit" style="display: none; margin-top: 12px;">
+                {% else %}
+                <!-- No forwarding set — show add form directly -->
+                <div id="forwardEdit">
+                {% endif %}
+                    <form method="post" action="{{ url_for('web.update_settings') }}">
+                        <input type="hidden" name="hide_mobile" value="{{ '1' if staff_ext.hide_mobile else '0' }}">
+                        <div class="forward-row">
+                            <div class="form-group">
+                                <label for="forward_to">Forward to mobile</label>
+                                <input type="tel" name="forward_to" id="forward_to"
+                                       value="{{ staff_ext.forward_to or '' }}"
+                                       placeholder="04XX XXX XXX">
+                            </div>
+                            <div class="form-group">
+                                <label for="forward_mode">When to forward</label>
+                                <select name="forward_mode" id="forward_mode">
+                                    <option value="always" {% if staff_ext.forward_mode == 'always' %}selected{% endif %}>Always</option>
+                                    <option value="no_answer" {% if staff_ext.forward_mode == 'no_answer' %}selected{% endif %}>If no answer (20s)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <p class="text-muted" style="margin-top: 10px; font-size: 0.85em;">
+                            Australian mobile numbers only. Leave empty to disable forwarding.
+                        </p>
+                        <div style="display: flex; gap: 8px; margin-top: 10px; align-items: center;">
+                            <button type="submit" class="btn">Save Forwarding</button>
+                            {% if staff_ext.forward_to %}
+                            <button type="button" onclick="document.getElementById('forwardEdit').style.display='none'; document.getElementById('forwardActive').style.display='block';"
+                                    style="background: none; border: none; cursor: pointer; color: #999; font-size: 0.9em;">Cancel</button>
+                            {% endif %}
+                        </div>
+                    </form>
+                </div>
+            </div>
         </div>
     </div>
 
