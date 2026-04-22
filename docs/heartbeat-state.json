@@ -1,24 +1,25 @@
 {
-  "_description": "System health snapshot for Rinq. Updated by memory-updater agent at end of sessions.",
-  "_last_updated": "2026-04-20",
-  "_last_updated_by": "memory-updater",
-  "_notes": "2026-04-20: Eleven commits. Warm-transfer handoff correctness (endConferenceOnExit restore + server-side forced participant removal). Server-authoritative consult-UI morph; Agent 2 no longer sees Go back/Hand off. Removed participant-card mute/hold (moderator features don't fit phone UX). Whisper voicemail transcription inline with Zendesk attachment (OPENAI_API_KEY). Loud mute/hold warning banners after Hazel's accidental-mute incident. Hotfix for toggleMute crash referencing removed #btnMute DOM.",
+  "_description": "System health snapshot for Rinq. Updated at end of sessions.",
+  "_last_updated": "2026-04-22",
+  "_last_updated_by": "wrap-up",
+  "_notes": "2026-04-22: Three commits. Prominent outbound outcome banner after Sandrene missed 'Number busy' (visibility bug — pipeline already wired, just a 4s flash). Mabel email integration replaces Resend on Watson; WatsonMabelEmailService relays via Watson's GWS SMTP so no Workspace credentials in Rinq. GitHub repo transferred dezgo/rinq → derekgwatson/rinq; deploy key + SSH_PRIVATE_KEY secret both survived the user-to-user transfer.",
   "repo": {
     "branch": "main",
-    "remote": "dezgo/rinq",
+    "remote": "derekgwatson/rinq",
     "status": "clean",
+    "local_origin": "git@github-work:derekgwatson/rinq.git",
+    "server_origin": "git@github.com:derekgwatson/rinq.git",
     "recent_commits": [
+      "c4bd888 chore: verify new remote after github transfer",
+      "3587d0e feat: route email through Mabel (bot-team) to sidestep Resend quota",
+      "dc7724e feat: prominent banner when outbound call ends busy/no-answer/failed",
+      "43fb681 fix: make call forwarding removal explicit with one-click Remove button",
+      "9e99f5f docs: session log 2026-04-20 (handoff fixes, consult UI, Whisper)",
       "b01cafe feat: hold warning banner mirrors mute banner",
       "a544e52 feat: unmissable mute warning banner",
       "9116f0c docs: document OPENAI_API_KEY in .env.example",
       "211231c feat: optional Whisper voicemail transcription",
-      "cd92e80 refactor: remove mute/hold from participant cards",
-      "2bb0342 fix: only show consult controls to initiating agent",
-      "50a490a fix: forcibly remove initiating agent from conference on handoff",
-      "1bf4608 feat: morph call controls row between idle and consult states",
-      "d802f57 fix: end conference when post-handoff party hangs up",
-      "24fdac1 refactor: remove mute-other-participant feature",
-      "f55f398 fix: toggleMute crash referencing removed DOM"
+      "cd92e80 refactor: remove mute/hold from participant cards"
     ]
   },
   "migrations": {
@@ -40,6 +41,12 @@
     }
   },
   "integrations": {
+    "email": {
+      "active_provider": "mabel",
+      "activation": "WATSON_MABEL_URL in .env (auto-detected), overridable via RINQ_EMAIL_PROVIDER",
+      "fallback": "Resend when RESEND_API_KEY set and no Mabel URL",
+      "notes": "Mabel relays via Watson's Google Workspace SMTP. Global provider, not per-tenant (per-tenant deferred pending IP-ownership discussion)."
+    },
     "whisper": {
       "status": "optional",
       "activation": "OPENAI_API_KEY in .env",
@@ -50,15 +57,16 @@
   "tests": {
     "automated": "none",
     "manual_runsheet": "/admin/test-runsheet",
-    "notes": "Manual test focus for 2026-04-20 changes: warm transfer handoff (initiating agent actually leaves, customer can't be kicked by Agent 2), consult-UI morph (Agent 1 sees Go back/Hand off, Agent 2 sees normal controls), mute/hold warning banners, Whisper transcript appearing in Zendesk ticket body."
+    "notes": "Manual test focus for 2026-04-22 changes: outbound call to a busy/non-answering number should show prominent amber outcome banner above dialpad that persists after hangup; next Watson voicemail delivery should appear in the recordings group inbox sent from mabel.bot@watsonblinds.com.au."
   },
   "pending_operations": [
-    "2026-04-20: Audit blind transfer + 3-way extension flows for endConferenceOnExit restore bug.",
-    "2026-04-20: Monitor for more accidental-mute reports; consider Mute button placement if banner insufficient.",
-    "2026-04-17: Sandrene to uninstall + re-pin Chromebox app to pick up 'Tina Phone' manifest name.",
-    "2026-04-17: Clean up draftcal friendly_name ('Watson Blinds') and audit other users.",
-    "2026-04-16: Watson team to record and upload Voicemail Escape audio in Audio Manager.",
-    "2026-04-16: Add ELEVENLABS_API_KEY to /var/www/rinq/.env if ElevenLabs TTS needed."
+    "Per-tenant email provider selection: deferred pending IP-ownership discussion for multi-tenant model",
+    "2026-04-20: Audit blind transfer + 3-way extension flows for endConferenceOnExit restore bug",
+    "2026-04-20: Monitor for more accidental-mute reports; consider Mute button placement if banner insufficient",
+    "2026-04-17: Sandrene to uninstall + re-pin Chromebox app to pick up 'Tina Phone' manifest name",
+    "2026-04-17: Clean up draftcal friendly_name ('Watson Blinds') and audit other users",
+    "2026-04-16: Watson team to record and upload Voicemail Escape audio in Audio Manager",
+    "2026-04-16: Add ELEVENLABS_API_KEY to /var/www/rinq/.env if ElevenLabs TTS needed"
   ],
   "known_issues": [
     "Queue-answer early-click race (user clicks Answer before queue poll refreshes) — falls back to 'Caller no longer in queue' error",
@@ -66,7 +74,7 @@
     "Whisper hallucinates on silence (e.g. 'Thanks for watching') — short/silent voicemails may get nonsense transcripts",
     "Missed-call attribution on inbound agent table — impossible without ring_attempts (purges after 24h); Missed column dropped from UI",
     "Consult-status callback runs _unhold_and_rejoin_agent salvage even after clean Cancel (transfer_status='cancelled') — noisy but harmless",
-    "phone.html ~5,100 lines with 109 inline JS functions — refactor deferred",
+    "phone.html ~5,200 lines with 109 inline JS functions — refactor deferred",
     "api/routes.py ~5,100 lines — deeper service extraction deferred until automated tests exist",
     "database/db.py 3,528 lines — more mixin extractions possible (recordings, staff, participants, queues)",
     "transfer_service.py has ~400 lines of duplication between queue-based and universal transfer methods",
@@ -80,6 +88,7 @@
     "Voicemail offered even when no destination configured",
     "Per-tenant Twilio config: creds still in .env, should move to tenant-only",
     "Per-tenant OpenAI API key: global key only for now",
+    "Per-tenant email provider: global only for now (deferred pending IP-ownership discussion)",
     "Watson tenant uses master Twilio account, should migrate to subaccount",
     "Static files (ringback, hold music) not in git — copied manually during deployment",
     "show_in_pam is a legacy Peter-only flag — column still exists and is read by /staff-phones",

@@ -10,7 +10,7 @@ Watson Blinds is running in production through Rinq as of 2026-04-03. Multi-tena
 - **Softphone** — browser-based calling via Twilio Client
 - **Call recording** — local storage + Google Drive upload
 - **Voicemail** — with Zendesk ticket creation (native API)
-- **Email** — via Resend for recording archives
+- **Email** — via Mabel (bot-team) using Watson's Google Workspace SMTP; Resend fallback
 - **Caller enrichment** — customer/order lookup from Watson CRM (Clara/Otto)
 - **Transfers** — blind, warm, 3-way
 - **Reports** — call stats, leaderboard
