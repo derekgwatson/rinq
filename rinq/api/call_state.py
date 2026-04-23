@@ -72,30 +72,32 @@ def get_call_state(agent_call_sid: str, caller_email: str = None) -> dict:
         if not transfer_state:
             transfer_state = db.get_transfer_state_log(customer_sid)
 
-    if transfer_state and transfer_state.get('transfer_status') in ('pending', 'consulting'):
+    if transfer_state and transfer_state.get('transfer_status') in ('pending', 'consulting', 'failed'):
+        transfer_status = transfer_state.get('transfer_status')
         consult_call_sid = transfer_state.get('transfer_consult_call_sid')
 
         result['transfer'] = {
-            'status': transfer_state['transfer_status'],
+            'status': transfer_status,
             'type': transfer_state.get('transfer_type'),
             'target_name': transfer_state.get('transfer_target_name'),
             'consult_call_sid': consult_call_sid,
             'consult_participants': [],  # all participants are in the main conference now
         }
 
-        # Flag the transfer target for warm transfers only — the cancel action
-        # only makes sense when the customer is on hold and Agent 1 can abort.
-        # Blind transfers are already committed; no card action is needed.
-        if consult_call_sid and transfer_state.get('transfer_type') == 'warm':
-            for p in result['participants']:
-                if p['call_sid'] == consult_call_sid:
-                    p['isTransferTarget'] = True
+        if transfer_status in ('pending', 'consulting'):
+            # Flag the transfer target for warm transfers only — the cancel action
+            # only makes sense when the customer is on hold and Agent 1 can abort.
+            # Blind transfers are already committed; no card action is needed.
+            if consult_call_sid and transfer_state.get('transfer_type') == 'warm':
+                for p in result['participants']:
+                    if p['call_sid'] == consult_call_sid:
+                        p['isTransferTarget'] = True
 
-        # Mark customer as on hold during a warm transfer
-        if transfer_state.get('transfer_type') == 'warm':
-            for p in result['participants']:
-                if p['role'] == 'customer':
-                    p['hold'] = True
+            # Mark customer as on hold during a warm transfer
+            if transfer_state.get('transfer_type') == 'warm':
+                for p in result['participants']:
+                    if p['role'] == 'customer':
+                        p['hold'] = True
 
     # Also find customer_call_sid from child_sid if not set
     if not result.get('customer_call_sid'):

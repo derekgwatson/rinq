@@ -5625,13 +5625,17 @@ async function pollCallState() {
                 btnStartTransfer.disabled = false;
                 btnStartTransfer.textContent = 'Transfer';
 
-                showTransferError('Transfer target did not answer. You are reconnected with the caller.');
+                const msg = consultTargetAnswered
+                    ? `${state.transfer.target_name || 'Transfer target'} ended the call — you're back with the customer.`
+                    : 'Transfer target did not answer — you are back with the caller.';
+                showTransferError(msg);
+                startCallStatePolling();  // Back to normal interval
             }
         }
 
         // Stop ringback when target joins
         // 3-way: 3+ participants in main conference
-        // Warm: 2+ participants in consult conference (agent + target)
+        // Warm: target appears in participants list
         if (isConsulting && transferType === 'three_way'
             && state.participants && state.participants.length >= 3) {
             stopTransferStatusPolling();
@@ -5649,7 +5653,7 @@ async function pollCallState() {
             const targetName = consultingTargetName.textContent || 'the target';
             document.getElementById('consultingSubtitle').textContent =
                 `Connected with ${targetName}. Complete the transfer or cancel to return to the caller.`;
-            startCallStatePolling();  // Revert to normal 3s interval
+            // Keep 1s poll throughout consult so we catch the target hanging up quickly
         }
 
         // Last one in conference — everyone else left, auto-hangup
