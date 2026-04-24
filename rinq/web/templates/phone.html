@@ -4737,6 +4737,9 @@ async function completeTransfer() {
         completeBtn.textContent = 'Completing...';
     }
 
+    const abortController = new AbortController();
+    const abortTimeout = setTimeout(() => abortController.abort(), 8000);
+
     try {
         const body = { call_type: currentTransferCallType };
         if (currentTransferCallType === 'queue') {
@@ -4755,9 +4758,11 @@ async function completeTransfer() {
             method: 'POST',
             credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
+            body: JSON.stringify(body),
+            signal: abortController.signal,
         });
 
+        clearTimeout(abortTimeout);
         const data = await response.json();
         console.log('Complete transfer response:', JSON.stringify(data));
 
@@ -4797,7 +4802,11 @@ async function completeTransfer() {
             }
         }
     } catch (error) {
-        showCallNotice('Error completing transfer: ' + error.message);
+        clearTimeout(abortTimeout);
+        const msg = error.name === 'AbortError'
+            ? 'Hand off timed out — please try again.'
+            : 'Error completing transfer: ' + error.message;
+        showCallNotice(msg);
         if (completeBtn) {
             completeBtn.disabled = false;
             completeBtn.textContent = '✓ Hand off';
