@@ -542,16 +542,12 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
                 ring_settings = db.get_user_ring_settings(user_email)
 
                 # SIP devices (desk phone, Zoiper, etc.)
-                # Browser is handled via Twilio Client push notifications, not here
                 if ring_settings.get('ring_sip', True) and sip_domain:
                     user = db.get_user_by_email(user_email)
                     sip_uri = f"sip:{user['username']}@{sip_domain}" if user and user.get('username') else None
 
                     if sip_uri:
                         try:
-                            # For SIP (internal to Twilio), we can use the customer's
-                            # number so the agent sees who's calling on their desk phone
-                            # and mobile softphone (Zoiper)
                             call = service.client.calls.create(
                                 to=sip_uri,
                                 from_=customer_caller_id,
@@ -563,7 +559,6 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
                             logger.info(f"Initiated SIP call to {sip_uri} for queue {queue_name}: {call.sid}")
                             db.stamp_sip_activity(user_email)
                             agent_call_sids.append(call.sid)
-                            # Store reverse mapping metadata for rejection handling
                             metadata_by_sid[call.sid] = json.dumps({
                                 'customer_call_sid': customer_call_sid,
                                 'queue_id': queue_id,
@@ -573,6 +568,30 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
                             calls_initiated += 1
                         except Exception as e:
                             logger.error(f"Failed to call SIP device for {user_email}: {e}")
+
+                # Browser softphone (Twilio Client)
+                if ring_settings.get('ring_browser', True):
+                    identity = _email_to_browser_identity(user_email)
+                    try:
+                        call = service.client.calls.create(
+                            to=f"client:{identity}",
+                            from_=customer_caller_id,
+                            url=answer_url,
+                            timeout=30,
+                            status_callback=status_callback_url,
+                            status_callback_event=['initiated', 'ringing', 'answered', 'completed']
+                        )
+                        logger.info(f"Initiated browser ring for {user_email} (queue {queue_name}): {call.sid}")
+                        agent_call_sids.append(call.sid)
+                        metadata_by_sid[call.sid] = json.dumps({
+                            'customer_call_sid': customer_call_sid,
+                            'queue_id': queue_id,
+                            'user_email': user_email,
+                            'device_type': 'browser'
+                        })
+                        calls_initiated += 1
+                    except Exception as e:
+                        logger.error(f"Failed to ring browser for {user_email}: {e}")
 
             # Store agent call SIDs in DB for cancellation (shared across workers)
             if agent_call_sids:
@@ -593,7 +612,7 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
             db.log_activity(
                 action="agents_ringing",
                 target=f"queue_{queue_id}",
-                details=f"Initiated {calls_initiated} outbound SIP calls for queue {queue_name}",
+                details=f"Initiated {calls_initiated} outbound calls (SIP + browser) for queue {queue_name}",
                 performed_by="system"
             )
 
