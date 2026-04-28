@@ -314,19 +314,14 @@
     </div>
 
     {% if config.git_hash %}
+    <style>
+        @media (display-mode: standalone) { #versionBadge { display: none; } }
+    </style>
     <div id="versionBadge" style="
         position: fixed; bottom: 8px; right: 12px;
         font-size: 0.7em; color: rgba(255,255,255,0.5);
         font-family: monospace; pointer-events: none;
-        display: none;
     ">{{ config.git_hash }}</div>
-    <script>
-    (function() {
-        const badge = document.getElementById('versionBadge');
-        const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
-        if (!isStandalone && badge) badge.style.display = '';
-    })();
-    </script>
     {% endif %}
 
     <!-- Two-click delete confirmation handler -->

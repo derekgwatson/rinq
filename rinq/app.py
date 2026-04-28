@@ -181,7 +181,8 @@ def health():
     return jsonify({
         'status': 'healthy',
         'bot': config.name,
-        'version': config.version
+        'version': config.version,
+        'git_hash': config.git_hash,
     })
 
 
