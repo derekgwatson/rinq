@@ -1555,8 +1555,8 @@ def reports():
     team_label = None
     staff_dir = get_staff_directory()
 
-    if user.is_admin:
-        # Admins see all staff
+    if user.is_manager:
+        # Admins and managers see all staff
         if staff_dir:
             try:
                 staff_list = staff_dir.get_active_staff()
@@ -1766,10 +1766,9 @@ def recordings():
 
     # Build the list of staff emails this user can see recordings for
     from rinq.integrations import get_staff_directory
-    is_admin = user.is_admin
 
-    if is_admin and filter_staff != 'mine':
-        # Admins see all recordings
+    if user.is_manager and filter_staff != 'mine':
+        # Admins and managers see all recordings
         staff_emails = None
     elif filter_staff == 'mine':
         staff_emails = [user.email]
@@ -1784,7 +1783,7 @@ def recordings():
             except Exception as e:
                 logger.warning(f"Failed to get reportees for {user.email}: {e}")
 
-    has_reportees = is_admin or (staff_emails and len(staff_emails) > 1)
+    has_reportees = user.is_manager or (staff_emails and len(staff_emails) > 1)
     recordings_list = db.get_recording_log(
         limit=100,
         call_type=filter_type,
