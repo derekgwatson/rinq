@@ -3,6 +3,7 @@ Configuration loader for Rinq.
 """
 
 import os
+import subprocess
 from pathlib import Path
 import yaml
 from dotenv import load_dotenv
@@ -32,6 +33,7 @@ class Config:
         self.description = config["description"]
         self.version = config["version"]
         self.personality = config.get("personality", "")
+        self.git_hash = self._read_git_hash()
 
         # Data paths
         data_dir = os.environ.get("RINQ_DATA_DIR", str(self.base_dir.parent / "data"))
@@ -75,6 +77,17 @@ class Config:
         recordings = config.get("recordings", {})
         self.recordings_group_email = recordings.get("group_email", "")
         self.recordings_default_enabled = recordings.get("default_enabled", True)
+
+    def _read_git_hash(self) -> str | None:
+        try:
+            result = subprocess.run(
+                ['git', 'rev-parse', '--short', 'HEAD'],
+                capture_output=True, text=True,
+                cwd=str(self.base_dir.parent)
+            )
+            return result.stdout.strip() if result.returncode == 0 else None
+        except Exception:
+            return None
 
     @property
     def webhook_base_url(self):
