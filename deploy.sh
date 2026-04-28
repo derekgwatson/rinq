@@ -8,6 +8,9 @@ echo "=== Pulling latest code ==="
 git fetch origin main
 git reset --hard origin/main
 
+echo "=== Writing version ==="
+git rev-parse --short HEAD > VERSION
+
 echo "=== Installing dependencies ==="
 source venv/bin/activate
 pip install -q -r requirements.txt

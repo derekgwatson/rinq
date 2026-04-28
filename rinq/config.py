@@ -79,6 +79,12 @@ class Config:
         self.recordings_default_enabled = recordings.get("default_enabled", True)
 
     def _read_git_hash(self) -> str | None:
+        # Prefer VERSION file written by deploy.sh (avoids needing git in PATH)
+        version_file = self.base_dir.parent / 'VERSION'
+        try:
+            return version_file.read_text().strip() or None
+        except Exception:
+            pass
         try:
             result = subprocess.run(
                 ['git', 'rev-parse', '--short', 'HEAD'],
