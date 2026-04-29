@@ -3006,14 +3006,19 @@ async function initPhone() {
             call.on('cancel', () => {
                 stopRingtone();
                 incomingCall.classList.remove('active');
-                currentCall = null;
-                clearCustomerContext();
+                // Only clear currentCall if this ring is still the active call.
+                // If the agent answered a queue call via device.connect() first,
+                // currentCall was already replaced — don't clobber it.
+                if (currentCall === call) {
+                    currentCall = null;
+                    clearCustomerContext();
+                }
                 if (callNotification) callNotification.close();
             });
 
             call.on('disconnect', () => {
                 stopRingtone();
-                endCall();
+                if (currentCall === call) endCall();
                 if (callNotification) callNotification.close();
             });
         });
