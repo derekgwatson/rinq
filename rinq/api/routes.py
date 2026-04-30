@@ -2078,6 +2078,15 @@ def call_status_callback():
             if existing == 'answered':
                 mapped_status = 'completed'
 
+        # Don't upgrade a missed/voicemail call to answered.
+        # inbound_no_answer sets 'missed' before voicemail TwiML plays; when
+        # the voicemail recording ends Twilio fires 'completed' which would
+        # otherwise clobber the accurate missed/voicemail status.
+        if mapped_status == 'answered':
+            existing = db.get_call_log_field(call_sid, 'status')
+            if existing in ('missed', 'voicemail'):
+                mapped_status = existing
+
         # Complete the call in call_log
         db.complete_call(
             call_sid=call_sid,
@@ -3758,6 +3767,10 @@ def voicemail_handler():
             logger.warning(f"Voicemail lookup: call_flow_id={phone_record.get('call_flow_id')} not found")
     else:
         logger.warning(f"Voicemail lookup: phone={to_number}, call_flow_id={phone_record.get('call_flow_id') if phone_record else 'no phone record'}")
+
+    # Stamp call_log status as voicemail now that a recording exists.
+    if call_sid:
+        db.update_call_log(call_sid, {'status': 'voicemail'})
 
     # Log the recording with call_type = 'voicemail'
     # INSERT OR IGNORE handles duplicate Twilio webhooks — if the recording_sid
