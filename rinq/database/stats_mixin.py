@@ -6,6 +6,10 @@ All methods access self._get_conn() from the Database base class.
 
 from datetime import datetime, timezone, timedelta
 
+import pytz
+
+_LOCAL_TZ = pytz.timezone('Australia/Sydney')
+
 
 class StatsMixin:
     """Aggregation, reporting, and hourly distribution queries."""
@@ -558,13 +562,23 @@ class StatsMixin:
             result.sort(key=lambda x: x['answered_calls'], reverse=True)
             return result
 
+    def _today_utc_range(self):
+        """Return (start_utc, end_utc) strings covering today in local time."""
+        today_local = datetime.now(_LOCAL_TZ).date()
+        start = _LOCAL_TZ.localize(datetime.combine(today_local, datetime.min.time()))
+        end = _LOCAL_TZ.localize(datetime.combine(today_local, datetime.max.time().replace(microsecond=0)))
+        return (
+            start.astimezone(pytz.UTC).strftime('%Y-%m-%d %H:%M:%S'),
+            end.astimezone(pytz.UTC).strftime('%Y-%m-%d %H:%M:%S'),
+        )
+
     def get_realtime_queue_stats_today(self) -> list[dict]:
         """Get real-time per-queue statistics for today.
 
         Returns:
             List of dicts with per-queue stats for today
         """
-        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        start_utc, end_utc = self._today_utc_range()
 
         with self._get_conn() as conn:
             rows = conn.execute("""
@@ -578,11 +592,11 @@ class StatsMixin:
                     SUM(COALESCE(wait_seconds, 0)) as total_wait,
                     MAX(wait_seconds) as max_wait
                 FROM queued_calls
-                WHERE DATE(enqueued_at) = ?
+                WHERE enqueued_at BETWEEN ? AND ?
                   AND queue_id IS NOT NULL
                 GROUP BY queue_id, queue_name
                 ORDER BY COUNT(*) DESC
-            """, (today,)).fetchall()
+            """, (start_utc, end_utc)).fetchall()
 
             result = []
             for row in rows:
@@ -609,21 +623,23 @@ class StatsMixin:
         Returns:
             List of 24 dicts with hourly call counts for today
         """
-        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+        start_utc, end_utc = self._today_utc_range()
+        tz_offset_hours = int(datetime.now(_LOCAL_TZ).utcoffset().total_seconds() / 3600)
+        offset_str = f'+{tz_offset_hours} hours' if tz_offset_hours >= 0 else f'{tz_offset_hours} hours'
 
         with self._get_conn() as conn:
-            rows = conn.execute("""
+            rows = conn.execute(f"""
                 SELECT
-                    CAST(strftime('%H', enqueued_at) AS INTEGER) as hour,
+                    CAST(strftime('%H', enqueued_at, '{offset_str}') AS INTEGER) as hour,
                     COUNT(*) as total_calls,
                     SUM(CASE WHEN status = 'answered' THEN 1 ELSE 0 END) as answered_calls,
                     SUM(CASE WHEN status = 'abandoned' THEN 1 ELSE 0 END) as abandoned_calls,
                     SUM(CASE WHEN status = 'timeout' THEN 1 ELSE 0 END) as timeout_calls
                 FROM queued_calls
-                WHERE DATE(enqueued_at) = ?
+                WHERE enqueued_at BETWEEN ? AND ?
                 GROUP BY hour
                 ORDER BY hour
-            """, (today,)).fetchall()
+            """, (start_utc, end_utc)).fetchall()
 
             return self._fill_hourly(rows)
 
