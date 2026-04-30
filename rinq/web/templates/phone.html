@@ -5128,16 +5128,54 @@ async function answerQueueCall(callSid) {
     // Fetch customer context in the background — don't block the call
     fetchCustomerContext(caller.caller_number);
 
+    // Queue calls now ring the browser softphone directly (see backend
+    // _ring_agents_for_queue). If that ring is still pending, accept the
+    // existing inbound leg rather than creating a parallel device.connect —
+    // otherwise the incoming-call dialog stays up alongside the answered
+    // call until it self-cancels.
+    let pendingIncoming = null;
+    try {
+        if (currentCall && typeof currentCall.status === 'function'
+            && currentCall.status() === 'pending') {
+            pendingIncoming = currentCall;
+        }
+    } catch (e) { /* SDK quirk — fall through to connect */ }
+
     answeringCallSid = callSid;
     renderQueueCallers(window._lastCallers || []);
+
+    if (pendingIncoming) {
+        stopRingtone();
+        incomingCall.classList.remove('active');
+        setStatus('Connecting...', 'busy');
+        btnCall.style.display = 'none';
+        btnHangup.style.display = 'inline-block';
+
+        // cancel/disconnect listeners are already wired by device.on('incoming').
+        pendingIncoming.on('accept', () => {
+            setStatus('Connected', 'busy');
+            startCallTimer();
+            callNumber.textContent = caller.customer_name || caller.caller_number || 'Queue Caller';
+            callInfo.classList.add('active');
+            contextPane.classList.add('has-call');
+            answeringCallSid = null;
+            currentQueueCallerSid = callSid;  // Track for hold/unhold/transfer
+            startCallStatePolling();
+            fetchQueueCallers();
+        });
+
+        pendingIncoming.accept();
+        return;
+    }
 
     try {
         setStatus('Connecting...', 'busy');
         btnCall.style.display = 'none';
         btnHangup.style.display = 'inline-block';
 
-        // Use Twilio Device to connect to the queue
-        // The backend will return TwiML that dials into the queue
+        // Fallback: no matching browser ring (ring_browser disabled, ring
+        // missed, already cancelled). Synthesise the call via device.connect
+        // — backend TwiML bridges us into the queue conference.
         currentCall = await device.connect({
             params: {
                 AnswerQueueId: caller.queue_id,
