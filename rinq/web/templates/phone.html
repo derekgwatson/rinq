@@ -4685,11 +4685,11 @@ async function startTransfer() {
                 closeTransferModal();
                 endCall();
             } else if (data.on_dnd) {
-                // DND is a synchronous reject — consult never started, so the
-                // customer was never put on hold by the transfer flow. The
-                // auto-hold from openTransferModal is restored by closeTransferModal.
-                closeTransferModal();
-                showCallNotice(data.error + ".");
+                // DND is a synchronous reject — consult never started. Treat
+                // it like any other transfer failure: keep the modal open so
+                // the agent can pick another target without the customer
+                // coming off the auto-hold.
+                showTransferError(data.error + ".");
                 btnStartTransfer.disabled = false;
                 btnStartTransfer.textContent = 'Transfer';
             } else {
@@ -4756,10 +4756,11 @@ async function startTransfer() {
                     startTransferStatusPolling();
                 }
             } else if (data.on_dnd) {
-                // DND is a synchronous reject — consult never started, so the
-                // customer was never put on hold. Just tell the agent and reset.
-                closeTransferModal();
-                showCallNotice(data.error + ".");
+                // DND is a synchronous reject — consult never started. Treat
+                // it like any other transfer failure: keep the modal open so
+                // the agent can pick another target without the customer
+                // coming off the auto-hold.
+                showTransferError(data.error + ".");
                 btnStartTransfer.disabled = false;
                 btnStartTransfer.textContent = 'Transfer';
             } else {
