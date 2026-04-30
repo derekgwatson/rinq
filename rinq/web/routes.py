@@ -1750,6 +1750,29 @@ def admin_set_user_role():
     return redirect(url_for('web.admin_users'))
 
 
+@web_bp.route('/admin/users/set-recordings-access', methods=['POST'])
+@admin_required
+def admin_set_recordings_access():
+    """Toggle all-recordings access for a user."""
+    from rinq.database.master import get_master_db
+    from rinq.tenant.context import get_current_tenant
+    tenant = get_current_tenant()
+    target_user_id = request.form.get('user_id', '').strip()
+    value = request.form.get('value') == '1'
+
+    if not target_user_id:
+        flash('Invalid request.', 'danger')
+        return redirect(url_for('web.admin_users'))
+
+    master_db = get_master_db()
+    if master_db.set_user_recordings_access(int(target_user_id), tenant['id'], value):
+        flash(f"Recordings access {'granted' if value else 'revoked'}.", 'success')
+    else:
+        flash('User not found in this tenant.', 'danger')
+
+    return redirect(url_for('web.admin_users'))
+
+
 @web_bp.route('/recordings')
 @login_required
 def recordings():
@@ -1768,8 +1791,8 @@ def recordings():
     # Build the list of staff emails this user can see recordings for
     from rinq.integrations import get_staff_directory
 
-    if user.is_manager and filter_staff != 'mine':
-        # Admins and managers see all recordings
+    if user.can_view_all_recordings and filter_staff != 'mine':
+        # Admins, managers, and users with recordings access see all recordings
         staff_emails = None
     elif filter_staff == 'mine':
         staff_emails = [user.email]

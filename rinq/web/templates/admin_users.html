@@ -15,6 +15,7 @@
             <tr style="border-bottom: 2px solid #e9ecef;">
                 <th style="text-align: left; padding: 10px 12px; font-size: 0.85em; color: #666; font-weight: 600;">User</th>
                 <th style="text-align: left; padding: 10px 12px; font-size: 0.85em; color: #666; font-weight: 600;">Current Role</th>
+                <th style="text-align: left; padding: 10px 12px; font-size: 0.85em; color: #666; font-weight: 600;">All Recordings</th>
                 <th style="padding: 10px 12px;"></th>
             </tr>
         </thead>
@@ -32,6 +33,22 @@
                 <span class="badge badge-info">Manager</span>
                 {% else %}
                 <span class="badge">User</span>
+                {% endif %}
+            </td>
+            <td style="padding: 12px;">
+                {% if u.role in ('admin', 'manager') %}
+                <span class="text-muted" style="font-size: 0.85em;">Included</span>
+                {% elif u.id != current_user.id %}
+                <form method="post" action="{{ url_for('web.admin_set_recordings_access') }}" style="display: inline;">
+                    <input type="hidden" name="user_id" value="{{ u.id }}">
+                    {% if u.can_view_all_recordings %}
+                    <input type="hidden" name="value" value="0">
+                    <button type="submit" class="btn btn-small btn-secondary">Revoke</button>
+                    {% else %}
+                    <input type="hidden" name="value" value="1">
+                    <button type="submit" class="btn btn-small">Grant</button>
+                    {% endif %}
+                </form>
                 {% endif %}
             </td>
             <td style="padding: 12px; text-align: right;">
@@ -61,8 +78,9 @@
     <div style="padding: 12px 16px; background: #f8f9fa; border-top: 1px solid #e9ecef; border-radius: 0 0 8px 8px; margin-top: 8px;">
         <p style="margin: 0; font-size: 0.85em; color: #666;">
             <strong>Admin</strong> — full access to all settings.<br>
-            <strong>Manager</strong> — can manage queue pauses and operational controls.<br>
-            <strong>User</strong> — standard access only.
+            <strong>Manager</strong> — can manage queue pauses and operational controls. Includes all-recordings access.<br>
+            <strong>User</strong> — standard access only.<br>
+            <strong>All Recordings</strong> — grants a user access to hear all staff recordings without a manager role.
         </p>
     </div>
 </div>

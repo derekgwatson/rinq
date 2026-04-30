@@ -224,6 +224,19 @@ class MasterDatabase:
         finally:
             conn.close()
 
+    def get_user_tenant_data(self, user_id: int, tenant_id: str):
+        """Return role and permission flags for a user in a tenant, or None."""
+        conn = self._get_conn()
+        try:
+            row = conn.execute("""
+                SELECT role, can_view_all_recordings
+                FROM tenant_users
+                WHERE user_id = ? AND tenant_id = ?
+            """, (user_id, tenant_id)).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
     def set_user_role_in_tenant(self, user_id: int, tenant_id: str, role: str) -> bool:
         conn = self._get_conn()
         try:
@@ -236,11 +249,23 @@ class MasterDatabase:
         finally:
             conn.close()
 
+    def set_user_recordings_access(self, user_id: int, tenant_id: str, value: bool) -> bool:
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute("""
+                UPDATE tenant_users SET can_view_all_recordings = ?
+                WHERE user_id = ? AND tenant_id = ?
+            """, (1 if value else 0, user_id, tenant_id))
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
     def get_tenant_users(self, tenant_id: str):
         conn = self._get_conn()
         try:
             rows = conn.execute("""
-                SELECT u.*, tu.role FROM users u
+                SELECT u.*, tu.role, tu.can_view_all_recordings FROM users u
                 JOIN tenant_users tu ON u.id = tu.user_id
                 WHERE tu.tenant_id = ?
                 ORDER BY u.email

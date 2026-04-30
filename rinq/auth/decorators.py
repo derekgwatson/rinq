@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 class User:
     """User object matching the interface GatewayAuth users provide."""
-    def __init__(self, id, email, name='', picture='', role='user'):
+    def __init__(self, id, email, name='', picture='', role='user', can_view_all_recordings=False):
         self.id = id
         self.email = email
         self.name = name
@@ -27,6 +27,7 @@ class User:
         self.role = role
         self.is_admin = (role == 'admin')
         self.is_manager = (role in ('admin', 'manager'))
+        self.can_view_all_recordings = bool(can_view_all_recordings) or self.is_manager
         self.is_authenticated = True
 
     def __repr__(self):
@@ -44,11 +45,15 @@ def get_current_user():
         return None
 
     role = 'user'
+    can_view_all_recordings = False
     tenant = getattr(g, 'tenant', None)
     if tenant:
         from rinq.database.master import get_master_db
         master_db = get_master_db()
-        role = master_db.get_user_role_in_tenant(user_id, tenant['id']) or 'user'
+        data = master_db.get_user_tenant_data(user_id, tenant['id'])
+        if data:
+            role = data['role'] or 'user'
+            can_view_all_recordings = bool(data.get('can_view_all_recordings'))
 
     user = User(
         id=user_id,
@@ -56,6 +61,7 @@ def get_current_user():
         name=session.get('user_name', ''),
         picture=session.get('user_picture', ''),
         role=role,
+        can_view_all_recordings=can_view_all_recordings,
     )
     g._current_user = user
     return user
