@@ -4658,8 +4658,10 @@ async function startTransfer() {
                 closeTransferModal();
                 endCall();
             } else if (data.on_dnd) {
+                // DND is a synchronous reject — consult never started, so the
+                // customer was never put on hold. Just tell the agent and reset.
                 closeTransferModal();
-                showCallNotice(data.error + " You're back with the caller.");
+                showCallNotice(data.error + ".");
                 btnStartTransfer.disabled = false;
                 btnStartTransfer.textContent = 'Transfer';
             } else {
@@ -4718,8 +4720,10 @@ async function startTransfer() {
                     startTransferStatusPolling();
                 }
             } else if (data.on_dnd) {
+                // DND is a synchronous reject — consult never started, so the
+                // customer was never put on hold. Just tell the agent and reset.
                 closeTransferModal();
-                showCallNotice(data.error + " You're back with the caller.");
+                showCallNotice(data.error + ".");
                 btnStartTransfer.disabled = false;
                 btnStartTransfer.textContent = 'Transfer';
             } else {
@@ -5742,10 +5746,13 @@ function renderCallStatePanel(state) {
     const transfer = state.transfer;
     let extraCard = null;
 
-    if (transfer && transfer.type === 'warm') {
+    if (transfer && transfer.type === 'warm'
+        && ['pending', 'consulting'].includes(transfer.status)) {
         // If the transfer target has joined the conference, the server flags
         // their participant entry with isTransferTarget=true. If they're not
         // in participants yet (still ringing), show a synthetic ringing card.
+        // Only render this while the transfer is actually active — once it's
+        // failed/completed we don't want a stale "ringing…" card lingering.
         const targetInParticipants = allParticipants.some(p => p.isTransferTarget);
         if (!targetInParticipants) {
             extraCard = {
