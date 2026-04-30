@@ -4530,20 +4530,24 @@ function clearCallNotice() {
 }
 
 function formatTransferFailure(reason, targetName) {
-    const tail = " You're back with the caller.";
+    // Ring failures: customer stays on hold, agent can retry another target
+    // or click Cancel to fully resume the call.
+    const ringFailTail = " Caller is still on hold — pick another target or cancel to resume.";
+    // Mid-consult disconnect / cancel: customer has been unholded back to the agent.
+    const resumedTail = " You're back with the caller.";
     switch (reason) {
         case 'dnd':
-            return `${targetName} is on Do Not Disturb.${tail}`;
+            return `${targetName} is on Do Not Disturb.${ringFailTail}`;
         case 'busy':
-            return `${targetName} is busy — try again or pick someone else.${tail}`;
+            return `${targetName} is busy — try again or pick someone else.${ringFailTail}`;
         case 'no-answer':
-            return `${targetName} didn't answer — they may be away from their desk.${tail}`;
+            return `${targetName} didn't answer — they may be away from their desk.${ringFailTail}`;
         case 'failed':
-            return `Couldn't reach ${targetName} — they may be offline or signed out.${tail}`;
+            return `Couldn't reach ${targetName} — they may be offline or signed out.${ringFailTail}`;
         case 'canceled':
-            return `Transfer canceled.${tail}`;
+            return `Transfer canceled.${resumedTail}`;
         default:
-            return `Couldn't complete the transfer to ${targetName}.${tail}`;
+            return `Couldn't complete the transfer to ${targetName}.${resumedTail}`;
     }
 }
 
@@ -5655,7 +5659,7 @@ async function pollCallState() {
 
                 const msg = consultTargetAnswered
                     ? `${state.transfer.target_name || 'Transfer target'} ended the call — you're back with the customer.`
-                    : 'Transfer target did not answer — you are back with the caller.';
+                    : 'Transfer target did not answer — caller is still on hold. Pick another target or cancel to resume.';
                 showTransferError(msg);
                 startCallStatePolling();  // Back to normal interval
             }

@@ -522,7 +522,17 @@ def register(bp):
                         original_call, transfer_state, db
                     )
                 elif not is_three_way and conference_name:
-                    _unhold_and_rejoin_agent(conference_name, consult_conference)
+                    # Only auto-unhold the customer for a mid-consult disconnect
+                    # (target answered, conversation happened, then the consult
+                    # leg dropped without Complete Transfer). For pure ring
+                    # failures (no-answer/busy/failed/canceled), keep the
+                    # customer on hold — the agent can pick another target
+                    # without the customer overhearing the apology dance.
+                    # Cancel button (warm_transfer_cancel) handles the explicit
+                    # "give up and resume" path.
+                    is_mid_consult_disconnect = (call_status == 'completed' and call_duration > 0)
+                    if is_mid_consult_disconnect:
+                        _unhold_and_rejoin_agent(conference_name, consult_conference)
 
             if source == 'call_log':
                 db.fail_transfer_log(original_call, call_status)
