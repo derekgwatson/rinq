@@ -4395,6 +4395,10 @@ let currentTransferCallType = null;
 let currentTransferAgentSid = null;
 let isConsulting = false;
 let consultCallSid = null;
+// Tracks whether opening the transfer modal auto-held the customer.
+// Closing the modal without starting a transfer restores them; starting
+// a transfer hands ownership of the hold state to the transfer flow.
+let _autoHeldOnModalOpen = false;
 
 const transferModal = document.getElementById('transferModal');
 const targetList = document.getElementById('targetList');
@@ -4597,6 +4601,17 @@ function openTransferModal() {
 
     // Show modal
     transferModal.classList.add('active');
+
+    // Auto-hold the customer the moment the modal opens so they don't
+    // overhear the agent searching for / picking a target. The flag is
+    // cleared either on close (we restore them) or on a successful
+    // transfer initiation (the transfer flow takes over the hold state).
+    _autoHeldOnModalOpen = false;
+    if (!isOnHold) {
+        toggleHold().then(() => {
+            _autoHeldOnModalOpen = isOnHold;
+        }).catch(err => console.warn('Auto-hold on transfer modal open failed:', err));
+    }
 }
 
 function closeTransferModal() {
@@ -4607,6 +4622,15 @@ function closeTransferModal() {
         transferRefreshInterval = null;
     }
     stopTransferStatusPolling();
+
+    // Restore the customer if we auto-held them on open and no transfer
+    // flow has taken ownership. Successful transfers clear the flag
+    // before this runs (or close the modal directly without going
+    // through closeTransferModal in the warm/3-way case).
+    if (_autoHeldOnModalOpen && isOnHold) {
+        toggleHold().catch(() => {});
+    }
+    _autoHeldOnModalOpen = false;
 }
 
 async function startTransfer() {
@@ -4655,11 +4679,15 @@ async function startTransfer() {
             const data = await response.json();
 
             if (response.ok && data.success) {
+                // Blind transfer accepted — Twilio is bridging the customer
+                // to the target server-side; our auto-hold no longer applies.
+                _autoHeldOnModalOpen = false;
                 closeTransferModal();
                 endCall();
             } else if (data.on_dnd) {
                 // DND is a synchronous reject — consult never started, so the
-                // customer was never put on hold. Just tell the agent and reset.
+                // customer was never put on hold by the transfer flow. The
+                // auto-hold from openTransferModal is restored by closeTransferModal.
                 closeTransferModal();
                 showCallNotice(data.error + ".");
                 btnStartTransfer.disabled = false;
@@ -4694,6 +4722,11 @@ async function startTransfer() {
             const data = await response.json();
 
             if (response.ok && data.success) {
+                // Transfer flow now owns the customer's hold state — the
+                // server holds them as part of warm_transfer_start, and 3-way
+                // wants them live (handled below). Either way, our auto-hold
+                // bookkeeping should stop tracking.
+                _autoHeldOnModalOpen = false;
                 isConsulting = true;
                 consultCallSid = data.consult_call_sid;
                 currentTransferKey = data.transfer_key || currentQueueCallerSid;
@@ -4706,6 +4739,9 @@ async function startTransfer() {
                     // 3-way: close modal immediately — agent stays on the
                     // call with the customer. Conference panel shows when
                     // target joins. Ringback stops via call state polling.
+                    // 3-way wants the customer live with the agent while the
+                    // target rings, so undo the modal-open auto-hold.
+                    if (isOnHold) toggleHold().catch(() => {});
                     transferModal.classList.remove('active');
                     startCallStatePolling(1000);  // Poll faster to catch target joining
                     startTransferStatusPolling();
