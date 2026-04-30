@@ -534,6 +534,16 @@ def register(bp):
                     if is_mid_consult_disconnect:
                         _unhold_and_rejoin_agent(conference_name, consult_conference)
 
+                    # warm_transfer_start flipped endConferenceOnExit=False on
+                    # all existing participants so the consult target could
+                    # join without killing the conference. The consult never
+                    # joined (or has now left), so restore =True on whoever's
+                    # still in there — otherwise the agent hanging up doesn't
+                    # end the conference and the customer's leg dangles on
+                    # hold music. warm_transfer_complete does this on the
+                    # success path; the failure path was missing it.
+                    _restore_end_conference_on_exit(conference_name)
+
             if source == 'call_log':
                 db.fail_transfer_log(original_call, call_status)
             else:
@@ -596,6 +606,28 @@ def _handle_failed_blind_transfer(original_call, transfer_state, db):
             _redirect_conference_to_voicemail(twilio_service, xfer_conf)
     except Exception as e:
         logger.warning(f"Could not handle failed blind transfer: {e}")
+
+
+def _restore_end_conference_on_exit(conference_name):
+    """Set endConferenceOnExit=True on every participant currently in the
+    conference. Called after a failed warm-transfer consult so the agent
+    hanging up actually ends the conference for the customer."""
+    try:
+        twilio_service = get_twilio_service()
+        conferences = twilio_list(twilio_service.client.conferences,
+            friendly_name=conference_name, status='in-progress', limit=1
+        )
+        if not conferences:
+            return
+        for p in twilio_list(twilio_service.client.conferences(conferences[0].sid).participants):
+            try:
+                twilio_service.client.conferences(conferences[0].sid).participants(p.call_sid).update(
+                    end_conference_on_exit=True
+                )
+            except Exception as e:
+                logger.warning(f"Could not restore endConferenceOnExit for {p.call_sid}: {e}")
+    except Exception as e:
+        logger.warning(f"Could not restore endConferenceOnExit on conference {conference_name}: {e}")
 
 
 def _unhold_and_rejoin_agent(conference_name, consult_conference):
