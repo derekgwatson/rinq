@@ -5690,6 +5690,10 @@ async function pollCallState() {
         });
         if (!res.ok) return;
         const state = await res.json();
+        // Bail if the call ended while the fetch was in flight — otherwise
+        // we'd repopulate the participant panel with stale state right
+        // after endCall() cleared it.
+        if (!currentCall) return;
         lastCallState = state;
 
         // Update conference participant panel
