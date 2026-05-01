@@ -133,6 +133,13 @@
                 · Route calls to queues with schedules
             </p>
         </a>
+        <a href="{{ url_for('web.admin_voicemail_destinations') }}" class="admin-card">
+            <h3>Voicemail Destinations</h3>
+            <p class="text-muted" style="margin: 0;">
+                {{ voicemail_destinations|length }} destination{% if voicemail_destinations|length != 1 %}s{% endif %}
+                · Zendesk tickets or email routing
+            </p>
+        </a>
         <a href="{{ url_for('web.admin_queues') }}" class="admin-card">
             <h3>Queues</h3>
             <p class="text-muted" style="margin: 0;">

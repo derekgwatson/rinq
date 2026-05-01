@@ -251,7 +251,32 @@ def register(bp):
     # =============================================================================
     # Voicemail Destinations Management
     # =============================================================================
-    
+
+    @bp.route('/admin/voicemail-destinations')
+    @admin_required
+    def admin_voicemail_destinations():
+        """Voicemail destinations management page."""
+        from rinq.integrations import get_ticket_service
+        user = get_current_user()
+        db = get_db()
+
+        voicemail_destinations = db.get_voicemail_destinations()
+
+        ticket_service = get_ticket_service()
+        zendesk_groups = []
+        if ticket_service:
+            try:
+                zendesk_groups = ticket_service.get_groups()
+            except Exception as e:
+                logger.warning(f"Failed to load Zendesk groups: {e}")
+
+        return render_template(
+            'admin_voicemail_destinations.html',
+            voicemail_destinations=voicemail_destinations,
+            zendesk_groups=zendesk_groups,
+            current_user=user,
+        )
+
     @bp.route('/admin/voicemail-destination/create', methods=['POST'])
     @admin_required
     def create_voicemail_destination():
@@ -273,19 +298,19 @@ def register(bp):
         # Validate based on routing type
         if not name:
             flash("Name is required", "error")
-            return redirect(url_for('web.admin_call_flows'))
-    
+            return redirect(url_for('web.admin_voicemail_destinations'))
+
         if routing_type == 'zendesk' and not zendesk_group_id:
             flash("Zendesk group is required for Zendesk routing", "error")
-            return redirect(url_for('web.admin_call_flows'))
-    
+            return redirect(url_for('web.admin_voicemail_destinations'))
+
         if routing_type == 'email' and not email:
             flash("Email address is required for Email routing", "error")
-            return redirect(url_for('web.admin_call_flows'))
-    
+            return redirect(url_for('web.admin_voicemail_destinations'))
+
         user = get_current_user()
         db = get_db()
-    
+
         try:
             db.create_voicemail_destination(
                 data={
@@ -311,8 +336,8 @@ def register(bp):
                 flash(f"A destination with email '{email}' already exists", "error")
             else:
                 flash(f"Failed to create voicemail destination: {e}", "error")
-    
-        return redirect(url_for('web.admin_call_flows'))
+
+        return redirect(url_for('web.admin_voicemail_destinations'))
     
     
     @bp.route('/admin/voicemail-destination/<int:destination_id>/update', methods=['POST'])
@@ -336,23 +361,23 @@ def register(bp):
         # Validate based on routing type
         if not name:
             flash("Name is required", "error")
-            return redirect(url_for('web.admin_call_flows'))
-    
+            return redirect(url_for('web.admin_voicemail_destinations'))
+
         if routing_type == 'zendesk' and not zendesk_group_id:
             flash("Zendesk group is required for Zendesk routing", "error")
-            return redirect(url_for('web.admin_call_flows'))
-    
+            return redirect(url_for('web.admin_voicemail_destinations'))
+
         if routing_type == 'email' and not email:
             flash("Email address is required for Email routing", "error")
-            return redirect(url_for('web.admin_call_flows'))
-    
+            return redirect(url_for('web.admin_voicemail_destinations'))
+
         user = get_current_user()
         db = get_db()
-    
+
         destination = db.get_voicemail_destination(destination_id)
         if not destination:
             flash("Voicemail destination not found", "error")
-            return redirect(url_for('web.admin_call_flows'))
+            return redirect(url_for('web.admin_voicemail_destinations'))
     
         try:
             db.update_voicemail_destination(
@@ -377,8 +402,8 @@ def register(bp):
             flash(f"Voicemail destination '{name}' updated", "success")
         except Exception as e:
             flash(f"Failed to update voicemail destination: {e}", "error")
-    
-        return redirect(url_for('web.admin_call_flows'))
+
+        return redirect(url_for('web.admin_voicemail_destinations'))
     
     
     @bp.route('/admin/voicemail-destination/<int:destination_id>/delete', methods=['POST'])
@@ -391,8 +416,8 @@ def register(bp):
         destination = db.get_voicemail_destination(destination_id)
         if not destination:
             flash("Voicemail destination not found", "error")
-            return redirect(url_for('web.admin_call_flows'))
-    
+            return redirect(url_for('web.admin_voicemail_destinations'))
+
         try:
             deleted = db.delete_voicemail_destination(destination_id)
             if deleted:
@@ -407,8 +432,8 @@ def register(bp):
                 flash(f"Cannot delete '{destination['name']}' - it is still in use by call flows", "error")
         except Exception as e:
             flash(f"Failed to delete voicemail destination: {e}", "error")
-    
-        return redirect(url_for('web.admin_call_flows'))
+
+        return redirect(url_for('web.admin_voicemail_destinations'))
     
     
     @bp.route('/admin/phone/<sid>/section', methods=['POST'])

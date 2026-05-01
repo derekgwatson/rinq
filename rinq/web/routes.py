@@ -368,6 +368,7 @@ def admin():
                          verified_caller_ids_count=len(db.get_verified_caller_ids(active_only=False)),
                          queues=db.get_queues(),
                          call_flows=db.get_call_flows(),
+                         voicemail_destinations=db.get_voicemail_destinations(),
                          schedules=db.get_schedules(),
                          audio_files=db.get_audio_files(),
                          holiday_templates=db.get_holiday_templates(),
