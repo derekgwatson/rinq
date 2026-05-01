@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git push:*)",
+      "Bash(find:*)",
+      "Bash(git pull:*)",
+      "Bash(python:*)",
+      "Read(//c/Users/Derek/Documents/Coding/Python_Scripts/bot-team/peter/**)",
+      "Read(//c/Users/Derek/Documents/Coding/bot-team/**)",
+      "Read(//tmp/**)",
+      "WebSearch",
+      "WebFetch(domain:www.twilio.com)",
+      "WebFetch(domain:help.twilio.com)",
+      "Bash(git rebase:*)",
+      "Bash(grep:*)",
+      "Bash(ssh do-personal:*)",
+      "Bash(pip show *)",
+      "Bash(pip install *)",
+      "Read(//var/www/rinq/data/**)",
+      "Read(//opt/rinq/data/**)",
+      "Read(//c/Users/Derek/data/**)",
+      "Read(//c//**)",
+      "Bash(git commit -m ' *)",
+      "Bash(gh run *)",
+      "Bash(ssh *)",
+      "Bash(git commit *)",
+      "Bash(python3 *)"
+    ]
+  }
+}

@@ -545,7 +545,7 @@ a.flow-node:hover::after {
                                 <div class="flow-arrow"></div>
                                 <div class="flow-node" style="background: {% if selected_voicemail_dest %}#3498db{% else %}#95a5a6{% endif %}; color: white;">
                                     {% if selected_voicemail_dest %}
-                                    <h3>{% if selected_voicemail_dest.routing_type == 'zendesk' %}🎫 Zendesk Ticket{% else %}📧 Email{% endif %}</h3>
+                                    <h3>{% if selected_voicemail_dest.routing_type == 'ticket' %}🎫 Ticket{% else %}📧 Email{% endif %}</h3>
                                     <p>{{ selected_voicemail_dest.name }}</p>
                                     {% else %}
                                     <h3>📧 Route to</h3>
@@ -680,7 +680,7 @@ a.flow-node:hover::after {
                         <div class="flow-arrow"></div>
                         <div class="flow-node" style="background: {% if selected_voicemail_dest %}#3498db{% else %}#95a5a6{% endif %}; color: white;">
                             {% if selected_voicemail_dest %}
-                            <h3>{% if selected_voicemail_dest.routing_type == 'zendesk' %}🎫 Zendesk Ticket{% else %}📧 Email{% endif %}</h3>
+                            <h3>{% if selected_voicemail_dest.routing_type == 'ticket' %}🎫 Ticket{% else %}📧 Email{% endif %}</h3>
                             <p>{{ selected_voicemail_dest.name }}</p>
                             {% else %}
                             <h3>📧 Route to</h3>

@@ -86,9 +86,9 @@
                         {% set vm_dest = namespace(name=None, type=None, detail=None) %}
                         {% for dest in voicemail_destinations if dest.id == flow.voicemail_destination_id %}
                             {% set vm_dest.name = dest.name %}
-                            {% if dest.routing_type == 'zendesk' or dest.zendesk_group_id %}
-                                {% set vm_dest.type = 'Zendesk' %}
-                                {% for g in zendesk_groups if g.id == dest.zendesk_group_id %}
+                            {% if dest.routing_type == 'ticket' or dest.ticket_group_id %}
+                                {% set vm_dest.type = 'Ticket' %}
+                                {% for g in ticket_groups if g.id == dest.ticket_group_id %}
                                     {% set vm_dest.detail = g.name %}
                                 {% endfor %}
                             {% else %}

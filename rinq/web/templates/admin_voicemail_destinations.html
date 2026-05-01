@@ -4,7 +4,7 @@
 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
     <div>
         <h2 style="margin: 0;">Voicemail Destinations</h2>
-        <p class="text-muted" style="margin: 5px 0 0 0;">Configure where voicemail recordings are routed — Zendesk ticket or email.</p>
+        <p class="text-muted" style="margin: 5px 0 0 0;">Configure where voicemail recordings are routed — support ticket or email.</p>
     </div>
     <a href="{{ url_for('web.admin') }}" class="btn btn-secondary">← Back to Admin</a>
 </div>
@@ -17,15 +17,15 @@
             <div style="display: flex; justify-content: space-between; align-items: flex-start;">
                 <div style="flex: 1;">
                     <h4 style="margin: 0 0 8px 0;">{{ dest.name }}</h4>
-                    {% if dest.routing_type == 'zendesk' or dest.zendesk_group_id %}
-                    {% set group_name = namespace(value='Group #' ~ dest.zendesk_group_id) %}
-                    {% for g in zendesk_groups %}
-                        {% if g.id == dest.zendesk_group_id %}
+                    {% if dest.routing_type == 'ticket' or dest.ticket_group_id %}
+                    {% set group_name = namespace(value='Group #' ~ dest.ticket_group_id) %}
+                    {% for g in ticket_groups %}
+                        {% if g.id == dest.ticket_group_id %}
                             {% set group_name.value = g.name %}
                         {% endif %}
                     {% endfor %}
                     <p style="margin: 0;">
-                        <span class="badge badge-info">Zendesk Ticket</span>
+                        <span class="badge badge-info">Ticket</span>
                         <span style="margin-left: 8px; color: #495057;">{{ group_name.value }}</span>
                     </p>
                     {% else %}
@@ -58,22 +58,22 @@
                             <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em;">Routing Type</label>
                             <select name="routing_type" id="edit_routing_type_{{ dest.id }}" onchange="toggleRoutingFields('edit', {{ dest.id }})"
                                     style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
-                                <option value="zendesk" {% if dest.routing_type == 'zendesk' or dest.zendesk_group_id %}selected{% endif %}>Zendesk Ticket</option>
-                                <option value="email" {% if dest.routing_type == 'email' and not dest.zendesk_group_id %}selected{% endif %}>Email</option>
+                                <option value="ticket" {% if dest.routing_type == 'ticket' or dest.ticket_group_id %}selected{% endif %}>Ticket</option>
+                                <option value="email" {% if dest.routing_type == 'email' and not dest.ticket_group_id %}selected{% endif %}>Email</option>
                             </select>
                         </div>
                     </div>
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
-                        <div id="edit_zendesk_field_{{ dest.id }}" {% if dest.routing_type == 'email' and not dest.zendesk_group_id %}style="display: none;"{% endif %}>
-                            <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em;">Zendesk Group</label>
-                            <select name="zendesk_group_id" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
+                        <div id="edit_ticket_field_{{ dest.id }}" {% if dest.routing_type == 'email' and not dest.ticket_group_id %}style="display: none;"{% endif %}>
+                            <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em;">Group</label>
+                            <select name="ticket_group_id" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
                                 <option value="">-- Select group --</option>
-                                {% for group in zendesk_groups %}
-                                <option value="{{ group.id }}" {% if dest.zendesk_group_id == group.id %}selected{% endif %}>{{ group.name }}</option>
+                                {% for group in ticket_groups %}
+                                <option value="{{ group.id }}" {% if dest.ticket_group_id == group.id %}selected{% endif %}>{{ group.name }}</option>
                                 {% endfor %}
                             </select>
                         </div>
-                        <div id="edit_email_field_{{ dest.id }}" {% if dest.routing_type != 'email' or dest.zendesk_group_id %}style="display: none;"{% endif %}>
+                        <div id="edit_email_field_{{ dest.id }}" {% if dest.routing_type != 'email' or dest.ticket_group_id %}style="display: none;"{% endif %}>
                             <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em;">Email Address</label>
                             <input type="email" name="email" value="{{ dest.email or '' }}" placeholder="support@example.com"
                                    style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
@@ -109,15 +109,15 @@
                 <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.85em;">Routing Type</label>
                 <select name="routing_type" id="create_routing_type" onchange="toggleRoutingFields('create')"
                         style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-                    <option value="zendesk" selected>Zendesk Ticket</option>
+                    <option value="ticket" selected>Ticket</option>
                     <option value="email">Email</option>
                 </select>
             </div>
-            <div id="create_zendesk_field">
-                <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.85em;">Zendesk Group</label>
-                <select name="zendesk_group_id" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+            <div id="create_ticket_field">
+                <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.85em;">Group</label>
+                <select name="ticket_group_id" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
                     <option value="">-- Select group --</option>
-                    {% for group in zendesk_groups %}
+                    {% for group in ticket_groups %}
                     <option value="{{ group.id }}">{{ group.name }}</option>
                     {% endfor %}
                 </select>
@@ -141,17 +141,17 @@ function toggleEditDest(destId) {
 }
 
 function toggleRoutingFields(mode, destId) {
-    let routingType, zendeskField, emailField;
+    let routingType, ticketField, emailField;
     if (mode === 'create') {
         routingType = document.getElementById('create_routing_type').value;
-        zendeskField = document.getElementById('create_zendesk_field');
+        ticketField = document.getElementById('create_ticket_field');
         emailField = document.getElementById('create_email_field');
     } else {
         routingType = document.getElementById('edit_routing_type_' + destId).value;
-        zendeskField = document.getElementById('edit_zendesk_field_' + destId);
+        ticketField = document.getElementById('edit_ticket_field_' + destId);
         emailField = document.getElementById('edit_email_field_' + destId);
     }
-    zendeskField.style.display = routingType === 'zendesk' ? '' : 'none';
+    ticketField.style.display = routingType === 'ticket' ? '' : 'none';
     emailField.style.display = routingType === 'email' ? '' : 'none';
 }
 </script>

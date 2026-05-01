@@ -2120,7 +2120,7 @@ def call_status_callback():
             logger.info(f"Caller {call_sid} disconnected — cancelled {len(ring_sids)} ringing agent calls")
 
         # If this was an AI receptionist call, notify AI receptionist so it can
-        # run post-call processing (summary, Zendesk ticket, email)
+        # run post-call processing (summary, ticket, email)
         call_type = db.get_call_log_field(call_sid, 'call_type')
         if call_type == 'ai_receptionist':
             _notify_ai_receptionist_call_ended(call_sid, call_status)
@@ -3803,10 +3803,10 @@ def voicemail_handler():
 
     # Route voicemail if destination configured
     if voicemail_dest:
-        routing_type = voicemail_dest.get('routing_type', 'zendesk')
+        routing_type = voicemail_dest.get('routing_type', 'ticket')
 
-        # For email routing type without zendesk_group_id, log warning (not yet implemented)
-        if routing_type == 'email' and not voicemail_dest.get('zendesk_group_id'):
+        # Email routing not yet implemented
+        if routing_type == 'email':
             logger.warning(f"Email routing not yet implemented for destination '{voicemail_dest['name']}'")
             db.log_activity(
                 action="voicemail_routing_skipped",
@@ -3815,7 +3815,7 @@ def voicemail_handler():
                 performed_by="tina"
             )
         else:
-            # Zendesk ticket routing
+            # Ticket routing
             try:
                 import time
 
@@ -3882,8 +3882,8 @@ Call Flow: {flow_name}
 
                 text_body += "The voicemail recording is attached.\n"
 
-                zendesk_group_id = voicemail_dest.get('zendesk_group_id')
-                logger.info(f"Voicemail routing: destination '{voicemail_dest['name']}' -> Zendesk group {zendesk_group_id}")
+                ticket_group_id = voicemail_dest.get('ticket_group_id')
+                logger.info(f"Voicemail routing: destination '{voicemail_dest['name']}' -> ticket group {ticket_group_id}")
 
                 # Create ticket via ticket service
                 from rinq.integrations import get_ticket_service
@@ -3896,7 +3896,7 @@ Call Flow: {flow_name}
                     tags=['voicemail', 'tina'],
                     requester_email='tina.bot@watsonblinds.com.au',
                     requester_name=f"{config.product_name} (Phone System)",
-                    group_id=zendesk_group_id,
+                    group_id=ticket_group_id,
                     attachments=[{
                         'filename': f"voicemail_{recording_sid}.mp3",
                         'content_type': 'audio/mpeg',
@@ -3906,7 +3906,7 @@ Call Flow: {flow_name}
 
                 if ticket_data:
                     ticket_id = ticket_data.get('id')
-                    group_info = f", group_id={zendesk_group_id}" if zendesk_group_id else ""
+                    group_info = f", group_id={ticket_group_id}" if ticket_group_id else ""
                     logger.info(f"Voicemail ticket #{ticket_id} created for call {call_sid}{group_info}")
 
                     if ticket_id:
@@ -3963,7 +3963,7 @@ def transcription_handler():
     """Handle voicemail transcription callback from Twilio.
 
     Twilio calls this when transcription completes (async, after recording).
-    We update the recording and the linked Zendesk ticket if present.
+    We update the recording and the linked ticket if present.
 
     No auth required - Twilio calls this directly.
     """
@@ -4013,8 +4013,8 @@ def transcription_handler():
         performed_by="twilio"
     )
 
-    # If there's a linked Zendesk ticket, update it with the transcription
-    ticket_id = recording.get('zendesk_ticket_id')
+    # If there's a linked ticket, update it with the transcription
+    ticket_id = recording.get('ticket_id')
     if ticket_id and transcription_text:
         from rinq.integrations import get_ticket_service
         tickets = get_ticket_service()

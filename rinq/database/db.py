@@ -796,7 +796,7 @@ class Database(StatsMixin, CallLogMixin):
             rows = conn.execute("""
                 SELECT * FROM recording_log
                 WHERE deleted_from_twilio = 0
-                  AND zendesk_ticket_id IS NOT NULL
+                  AND ticket_id IS NOT NULL
                   AND created_at < ?
                 ORDER BY created_at ASC
             """, (cutoff,)).fetchall()
@@ -824,21 +824,21 @@ class Database(StatsMixin, CallLogMixin):
             conn.commit()
 
     def update_recording_ticket(self, recording_sid: str,
-                                 zendesk_ticket_id: int) -> None:
-        """Update a recording's Zendesk ticket ID (for voicemails)."""
+                                 ticket_id: int) -> None:
+        """Update a recording's ticket ID (for voicemails)."""
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE recording_log
-                SET zendesk_ticket_id = ?
+                SET ticket_id = ?
                 WHERE recording_sid = ?
-            """, (zendesk_ticket_id, recording_sid))
+            """, (ticket_id, recording_sid))
             conn.commit()
 
     def update_recording_transcription(self, recording_sid: str,
                                         transcription: str) -> dict | None:
         """Update a recording's transcription text.
 
-        Returns the recording row so caller can access zendesk_ticket_id.
+        Returns the recording row so caller can access ticket_id.
         """
         with self._get_conn() as conn:
             conn.execute("""
@@ -2808,7 +2808,7 @@ class Database(StatsMixin, CallLogMixin):
     def get_voicemail_destination_by_email(self, email: str) -> dict | None:
         """Get a voicemail destination by email address.
 
-        Used to look up zendesk_group_id when processing voicemails.
+        Used to look up ticket_group_id when processing voicemails.
         """
         with self._get_conn() as conn:
             row = conn.execute("""
@@ -2822,11 +2822,11 @@ class Database(StatsMixin, CallLogMixin):
         now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.execute("""
-                INSERT INTO voicemail_destinations (name, email, description, zendesk_group_id,
+                INSERT INTO voicemail_destinations (name, email, description, ticket_group_id,
                     routing_type, created_at, created_by, updated_at, updated_by)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (data['name'], data.get('email'), data.get('description'),
-                  data.get('zendesk_group_id'), data.get('routing_type', 'email'),
+                  data.get('ticket_group_id'), data.get('routing_type', 'email'),
                   now, created_by, now, created_by))
             conn.commit()
             return cursor.lastrowid
@@ -2838,11 +2838,11 @@ class Database(StatsMixin, CallLogMixin):
         with self._get_conn() as conn:
             conn.execute("""
                 UPDATE voicemail_destinations
-                SET name = ?, email = ?, description = ?, zendesk_group_id = ?,
+                SET name = ?, email = ?, description = ?, ticket_group_id = ?,
                     routing_type = ?, updated_at = ?, updated_by = ?
                 WHERE id = ?
             """, (data['name'], data.get('email'), data.get('description'),
-                  data.get('zendesk_group_id'), data.get('routing_type', 'email'),
+                  data.get('ticket_group_id'), data.get('routing_type', 'email'),
                   now, updated_by, destination_id))
             conn.commit()
 

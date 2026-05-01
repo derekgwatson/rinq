@@ -1338,7 +1338,7 @@ def admin_call_flows():
     # Fetch ticket groups for voicemail destination dropdown
     from rinq.integrations import get_ticket_service
     tickets = get_ticket_service()
-    zendesk_groups = tickets.get_groups() if tickets else []
+    ticket_groups = tickets.get_groups() if tickets else []
 
     return render_template('admin_call_flows.html',
                          call_flows=call_flows,
@@ -1346,7 +1346,7 @@ def admin_call_flows():
                          schedules=schedules,
                          audio_files=audio_files,
                          voicemail_destinations=voicemail_destinations,
-                         zendesk_groups=zendesk_groups,
+                         ticket_groups=ticket_groups,
                          current_user=user)
 
 

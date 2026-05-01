@@ -263,17 +263,17 @@ def register(bp):
         voicemail_destinations = db.get_voicemail_destinations()
 
         ticket_service = get_ticket_service()
-        zendesk_groups = []
+        ticket_groups = []
         if ticket_service:
             try:
-                zendesk_groups = ticket_service.get_groups()
+                ticket_groups = ticket_service.get_groups()
             except Exception as e:
-                logger.warning(f"Failed to load Zendesk groups: {e}")
+                logger.warning(f"Failed to load ticket groups: {e}")
 
         return render_template(
             'admin_voicemail_destinations.html',
             voicemail_destinations=voicemail_destinations,
-            zendesk_groups=zendesk_groups,
+            ticket_groups=ticket_groups,
             current_user=user,
         )
 
@@ -282,16 +282,16 @@ def register(bp):
     def create_voicemail_destination():
         """Create a new voicemail destination."""
         name = request.form.get('name', '').strip()
-        routing_type = request.form.get('routing_type', 'zendesk').strip()
+        routing_type = request.form.get('routing_type', 'ticket').strip()
         email = request.form.get('email', '').strip() or None
         description = request.form.get('description', '').strip() or None
-        zendesk_group_id_str = request.form.get('zendesk_group_id', '').strip()
+        ticket_group_id_str = request.form.get('ticket_group_id', '').strip()
     
-        # Convert zendesk_group_id to int or None
-        zendesk_group_id = None
-        if zendesk_group_id_str:
+        # Convert ticket_group_id to int or None
+        ticket_group_id = None
+        if ticket_group_id_str:
             try:
-                zendesk_group_id = int(zendesk_group_id_str)
+                ticket_group_id = int(ticket_group_id_str)
             except ValueError:
                 pass
     
@@ -300,8 +300,8 @@ def register(bp):
             flash("Name is required", "error")
             return redirect(url_for('web.admin_voicemail_destinations'))
 
-        if routing_type == 'zendesk' and not zendesk_group_id:
-            flash("Zendesk group is required for Zendesk routing", "error")
+        if routing_type == 'ticket' and not ticket_group_id:
+            flash("A ticket group is required for ticket routing", "error")
             return redirect(url_for('web.admin_voicemail_destinations'))
 
         if routing_type == 'email' and not email:
@@ -318,12 +318,12 @@ def register(bp):
                     'routing_type': routing_type,
                     'email': email,
                     'description': description,
-                    'zendesk_group_id': zendesk_group_id,
+                    'ticket_group_id': ticket_group_id,
                 },
                 created_by=_audit_tag(user)
             )
     
-            detail = f"group_id={zendesk_group_id}" if routing_type == 'zendesk' else f"email={email}"
+            detail = f"group_id={ticket_group_id}" if routing_type == 'ticket' else f"email={email}"
             db.log_activity(
                 action="create_voicemail_destination",
                 target=name,
@@ -345,16 +345,16 @@ def register(bp):
     def update_voicemail_destination(destination_id):
         """Update a voicemail destination."""
         name = request.form.get('name', '').strip()
-        routing_type = request.form.get('routing_type', 'zendesk').strip()
+        routing_type = request.form.get('routing_type', 'ticket').strip()
         email = request.form.get('email', '').strip() or None
         description = request.form.get('description', '').strip() or None
-        zendesk_group_id_str = request.form.get('zendesk_group_id', '').strip()
+        ticket_group_id_str = request.form.get('ticket_group_id', '').strip()
     
-        # Convert zendesk_group_id to int or None
-        zendesk_group_id = None
-        if zendesk_group_id_str:
+        # Convert ticket_group_id to int or None
+        ticket_group_id = None
+        if ticket_group_id_str:
             try:
-                zendesk_group_id = int(zendesk_group_id_str)
+                ticket_group_id = int(ticket_group_id_str)
             except ValueError:
                 pass
     
@@ -363,8 +363,8 @@ def register(bp):
             flash("Name is required", "error")
             return redirect(url_for('web.admin_voicemail_destinations'))
 
-        if routing_type == 'zendesk' and not zendesk_group_id:
-            flash("Zendesk group is required for Zendesk routing", "error")
+        if routing_type == 'ticket' and not ticket_group_id:
+            flash("A ticket group is required for ticket routing", "error")
             return redirect(url_for('web.admin_voicemail_destinations'))
 
         if routing_type == 'email' and not email:
@@ -387,12 +387,12 @@ def register(bp):
                     'routing_type': routing_type,
                     'email': email,
                     'description': description,
-                    'zendesk_group_id': zendesk_group_id,
+                    'ticket_group_id': ticket_group_id,
                 },
                 updated_by=_audit_tag(user)
             )
     
-            detail = f"group_id={zendesk_group_id}" if routing_type == 'zendesk' else f"email={email}"
+            detail = f"group_id={ticket_group_id}" if routing_type == 'ticket' else f"email={email}"
             db.log_activity(
                 action="update_voicemail_destination",
                 target=name,
