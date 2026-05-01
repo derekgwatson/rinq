@@ -3154,6 +3154,30 @@ class Database(StatsMixin, CallLogMixin):
             ).fetchall()
             return [r['call_sid'] for r in rows]
 
+    def get_rung_agent_emails(self, group_key: str) -> list[str]:
+        """Get unique agent emails rung for a queue call group.
+
+        Returns emails in the order agents were rung, deduped.
+        Only returns emails from ring attempts that have user_email metadata.
+        """
+        import json
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT metadata FROM ring_attempts WHERE group_key = ? ORDER BY id",
+                (group_key,)
+            ).fetchall()
+            emails = []
+            for row in rows:
+                if row['metadata']:
+                    try:
+                        meta = json.loads(row['metadata'])
+                        email = meta.get('user_email')
+                        if email and email not in emails:
+                            emails.append(email)
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+            return emails
+
     def get_ring_attempt_metadata(self, call_sid: str) -> dict | None:
         """Get metadata for a specific ring attempt by its call SID.
 

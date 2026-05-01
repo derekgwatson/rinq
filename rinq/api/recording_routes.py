@@ -143,6 +143,17 @@ def register(bp):
                 # Determine call type from conference name
                 if conference_name.startswith('hold_room_'):
                     call_type = 'inbound'
+                    # For missed calls (nobody answered), attribute to the agents
+                    # who were rung so they can see it in their recordings list.
+                    if not staff_email:
+                        customer_call_sid = conference_name[len('hold_room_'):]
+                        rung = db.get_rung_agent_emails(customer_call_sid)
+                        if rung:
+                            staff_email = rung[0]
+                            staff_ext = db.get_staff_extension(staff_email)
+                            if staff_ext:
+                                staff_name = staff_ext.get('friendly_name') or staff_name
+                            logger.info(f"Missed call {conference_name}: attributing to {staff_email} (rung agents: {rung})")
                 elif conference_name.startswith('call_'):
                     call_type = 'outbound'
                     # For outbound, from is the agent, to is the customer
