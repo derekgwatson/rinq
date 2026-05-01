@@ -165,6 +165,17 @@ class Database(StatsMixin, CallLogMixin):
             """, (section or None, now, updated_by, sid))
             conn.commit()
 
+    def update_phone_number_voicemail_destination(self, sid: str, voicemail_destination_id, updated_by: str) -> None:
+        """Set the voicemail destination for a direct-ring phone number."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            conn.execute("""
+                UPDATE phone_numbers
+                SET voicemail_destination_id = ?, updated_at = ?, updated_by = ?
+                WHERE sid = ?
+            """, (voicemail_destination_id or None, now, updated_by, sid))
+            conn.commit()
+
     def get_phone_numbers_by_section(self, section: str) -> list[dict]:
         """Get all phone numbers for a section."""
         with self._get_conn() as conn:

@@ -112,6 +112,25 @@
                 </div>
             </details>
 
+            {% if voicemail_destinations %}
+            <details style="margin-top: 8px;">
+                <summary style="cursor: pointer; color: #6c757d; font-size: 0.9em;">
+                    Voicemail destination{% if number.voicemail_destination_id %}: <strong>{{ voicemail_destinations | selectattr('id', 'equalto', number.voicemail_destination_id) | map(attribute='name') | first | default('Unknown') }}</strong>{% else %}: <span style="color: #e74c3c;">Not set</span>{% endif %}
+                </summary>
+                <div style="padding: 10px; background: #f8f9fa; border-radius: 5px; margin-top: 5px;">
+                    <form method="post" action="{{ url_for('web.set_phone_number_voicemail_destination', sid=number.sid) }}" class="inline-form">
+                        <select name="voicemail_destination_id" style="padding: 6px; min-width: 200px;">
+                            <option value="">-- None --</option>
+                            {% for vd in voicemail_destinations %}
+                            <option value="{{ vd.id }}" {% if number.voicemail_destination_id == vd.id %}selected{% endif %}>{{ vd.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" class="btn btn-small">Save</button>
+                    </form>
+                </div>
+            </details>
+            {% endif %}
+
             {% else %}
             <!-- === NO ROUTING === -->
             <div class="routing-info" style="background: #fdecea; border-left-color: #e74c3c;">

@@ -3765,8 +3765,16 @@ def voicemail_handler():
                 logger.warning(f"Voicemail lookup: call_flow={call_flow.get('name')} has no valid voicemail destination")
         else:
             logger.warning(f"Voicemail lookup: call_flow_id={phone_record.get('call_flow_id')} not found")
+    elif phone_record and phone_record.get('voicemail_destination_id'):
+        # Direct-ring number with a voicemail destination configured
+        voicemail_dest = db.get_voicemail_destination(phone_record['voicemail_destination_id'])
+        if voicemail_dest:
+            logger.info(f"Voicemail lookup: phone={to_number} (direct ring), "
+                       f"destination={voicemail_dest['name']} ({voicemail_dest.get('routing_type', 'email')})")
+        else:
+            logger.warning(f"Voicemail lookup: phone={to_number} voicemail_destination_id={phone_record['voicemail_destination_id']} not found")
     else:
-        logger.warning(f"Voicemail lookup: phone={to_number}, call_flow_id={phone_record.get('call_flow_id') if phone_record else 'no phone record'}")
+        logger.warning(f"Voicemail lookup: phone={to_number}, no voicemail destination configured")
 
     # Stamp call_log status as voicemail now that a recording exists.
     if call_sid:

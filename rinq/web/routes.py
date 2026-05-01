@@ -816,6 +816,8 @@ def admin_phone_numbers():
                 all_users.append({'staff_email': email, 'friendly_name': name})
         all_users.sort(key=lambda u: u['friendly_name'])
 
+    voicemail_destinations = db.get_voicemail_destinations()
+
     return render_template('admin_phone_numbers.html',
                          phone_numbers=phone_numbers,
                          call_flows=call_flows,
@@ -824,6 +826,7 @@ def admin_phone_numbers():
                          covered_sections=covered_sections,
                          uncovered_users=uncovered_users,
                          all_users=all_users,
+                         voicemail_destinations=voicemail_destinations,
                          current_user=user)
 
 
@@ -1522,6 +1525,22 @@ def remove_assignment(assignment_id):
     )
     flash("Assignment removed", "success")
 
+    return redirect(url_for('web.admin_phone_numbers'))
+
+
+@web_bp.route('/admin/phone-numbers/<sid>/voicemail-destination', methods=['POST'])
+@admin_required
+def set_phone_number_voicemail_destination(sid):
+    """Set the voicemail destination for a direct-ring phone number."""
+    user = get_current_user()
+    db = get_db()
+    dest_id = request.form.get('voicemail_destination_id', '').strip()
+    db.update_phone_number_voicemail_destination(
+        sid,
+        int(dest_id) if dest_id else None,
+        _audit_tag(user)
+    )
+    flash('Voicemail destination updated.', 'success')
     return redirect(url_for('web.admin_phone_numbers'))
 
 
