@@ -4265,10 +4265,12 @@ function renderCallHistory() {
         return;
     }
 
-    // Group by date
+    // Group by local date (started_at is stored as UTC)
     const grouped = {};
     calls.forEach(call => {
-        const date = call.started_at ? call.started_at.substring(0, 10) : 'Unknown';
+        const date = call.started_at
+            ? new Date(call.started_at.endsWith('Z') ? call.started_at : call.started_at + 'Z').toLocaleDateString('en-CA')
+            : 'Unknown';
         if (!grouped[date]) grouped[date] = [];
         grouped[date].push(call);
     });
@@ -4340,14 +4342,13 @@ function historyCardClick(number) {
 
 function formatHistoryDate(dateStr) {
     const today = new Date();
-    const date = new Date(dateStr + 'T00:00:00');
-    const todayStr = today.toISOString().substring(0, 10);
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayStr = yesterday.toISOString().substring(0, 10);
+    const todayStr = today.toLocaleDateString('en-CA');
+    const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+    const yesterdayStr = yesterday.toLocaleDateString('en-CA');
 
     if (dateStr === todayStr) return 'Today';
     if (dateStr === yesterdayStr) return 'Yesterday';
+    const date = new Date(dateStr + 'T00:00:00');
     return date.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' });
 }
 
