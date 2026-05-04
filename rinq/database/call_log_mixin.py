@@ -549,9 +549,15 @@ class CallLogMixin:
                     customer_name, queue_name, is_recorded
                 FROM call_log
                 WHERE agent_email = ?
+                   OR (direction = 'inbound' AND agent_email IS NULL AND to_number IN (
+                       SELECT pn.phone_number
+                       FROM phone_numbers pn
+                       JOIN phone_assignments pa ON pa.phone_number_sid = pn.sid
+                       WHERE pa.staff_email = ?
+                   ))
                 ORDER BY started_at DESC
                 LIMIT ?
-            """, (agent_email, limit)).fetchall()
+            """, (agent_email, agent_email, limit)).fetchall()
             return [dict(row) for row in rows]
 
     def get_call_history_by_phone(self, phone_number: str, limit: int = 10) -> dict:

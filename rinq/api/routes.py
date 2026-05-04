@@ -2779,7 +2779,12 @@ def inbound_no_answer():
 
     logger.info(f"Inbound no-answer: {call_sid}, action={no_answer_action}")
 
-    db.update_call_log(call_sid, {'status': 'missed'})
+    # Only mark missed if the call was not already answered — this handler fires
+    # via <Redirect> when the conference ends, including after a normal answered
+    # call hangs up, so we must not stomp an answered/voicemail status.
+    existing_status = db.get_call_log_field(call_sid, 'status')
+    if existing_status not in ('answered', 'voicemail'):
+        db.update_call_log(call_sid, {'status': 'missed'})
 
     response_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>']
 
