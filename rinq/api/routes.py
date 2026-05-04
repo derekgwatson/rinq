@@ -4192,6 +4192,23 @@ def voice_call_ended():
         return jsonify({"error": "call_sid required"}), 400
 
     db = get_db()
+
+    # Guard: if the browser fires endCall() mid warm-transfer consult the
+    # customer is still live in the conference. Suppress the signal so we
+    # don't evict them from call_participants (which would trigger the
+    # poll's lone-participant auto-hangup). The transfer machinery handles
+    # the customer once the consult resolves.
+    try:
+        transfer_state = db.get_transfer_state(call_sid)
+        if transfer_state and transfer_state.get('transfer_status') == 'consulting':
+            logger.warning(
+                f"voice_call_ended suppressed for {call_sid}: "
+                f"warm transfer still consulting — customer is live in conference"
+            )
+            return jsonify({"success": True})
+    except Exception:
+        pass
+
     db.complete_call(call_sid=call_sid, status='answered')
 
     # Credit all conference participants with their actual talk time.

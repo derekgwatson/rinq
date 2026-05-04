@@ -3447,11 +3447,12 @@ function endCall() {
     // Clear customer-side SIDs so /voice/call-ended below reports our own
     // browser leg SID instead of killing the customer. The server-side
     // consult-status callback handles unhold/rejoin.
-    if (isConsulting) {
+    if (isConsulting || _justCancelledTransfer) {
         currentQueueCallerSid = null;
         currentTransferKey = null;
         isConsulting = false;
         consultCallSid = null;
+        _justCancelledTransfer = false;
     }
     autoRecordAttempted = false;
     // Notify server that the call has ended so call_log gets ended_at set.
@@ -4396,6 +4397,9 @@ let currentTransferCallType = null;
 let currentTransferAgentSid = null;
 let isConsulting = false;
 let consultCallSid = null;
+// Set by cancelTransfer() on success so endCall() doesn't mistake an
+// incidental disconnect for the customer leaving the conference.
+let _justCancelledTransfer = false;
 // Tracks whether opening the transfer modal auto-held the customer.
 // Closing the modal without starting a transfer restores them; starting
 // a transfer hands ownership of the hold state to the transfer flow.
@@ -4957,6 +4961,10 @@ async function cancelTransfer() {
                 closeTransferModal();
                 endCall();
             } else {
+                // Guard: any disconnect event that fires between now and the
+                // next endCall() must not use the customer SID (customer is
+                // still live in the conference). The flag is consumed by endCall().
+                _justCancelledTransfer = true;
                 // Return to target selection
                 transferTargetSelection.style.display = 'block';
                 transferConsulting.style.display = 'none';

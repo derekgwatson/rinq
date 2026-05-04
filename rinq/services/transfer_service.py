@@ -940,6 +940,20 @@ class TransferService:
                     self.twilio.client.conferences(conferences[0].sid).participants(call_sid).update(
                         hold=False
                     )
+                    # Restore endConferenceOnExit=True so the call terminates
+                    # cleanly when either party hangs up. warm_transfer_start set
+                    # this to False for all participants; the consult-status
+                    # callback does the same on failure — mirror it here on cancel.
+                    try:
+                        for p in twilio_list(self.twilio.client.conferences(conferences[0].sid).participants):
+                            try:
+                                self.twilio.client.conferences(conferences[0].sid).participants(p.call_sid).update(
+                                    end_conference_on_exit=True
+                                )
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        logger.warning(f"Could not restore endConferenceOnExit after cancel: {e}")
             # 3-way cancel: agent and customer are already talking — nothing to undo.
 
             self.db.cancel_transfer(call_sid)
