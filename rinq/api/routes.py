@@ -4900,6 +4900,13 @@ def get_presence():
     active_calls = _get_active_calls_from_twilio()
     on_call_emails = {c['agent_email'].lower() for c in active_calls if c.get('agent_email')}
 
+    # Supplement with call_participants for transfer targets (warm/3-way) that
+    # have no call_log entry and would otherwise appear offline
+    try:
+        on_call_emails.update(db.get_active_agent_emails())
+    except Exception:
+        pass
+
     presence = {}
     for ext in extensions:
         email = ext.get('email', '')

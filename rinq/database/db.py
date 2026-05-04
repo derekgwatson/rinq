@@ -3329,6 +3329,19 @@ class Database(StatsMixin, CallLogMixin):
             ).fetchone()
             return dict(row) if row else None
 
+    def get_active_agent_emails(self) -> set:
+        """Return emails of all agents currently in a conference (call_participants).
+
+        Used to supplement call_log presence data for participants that have no
+        call_log entry (e.g. warm/3-way transfer targets).
+        """
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT email FROM call_participants"
+                " WHERE role = 'agent' AND left_at IS NULL AND email IS NOT NULL AND email != ''"
+            ).fetchall()
+        return {row['email'].lower() for row in rows}
+
     def update_participant(self, call_sid: str, **fields) -> None:
         """Update fields on a participant record.
 
