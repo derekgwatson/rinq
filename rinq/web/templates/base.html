@@ -321,7 +321,25 @@
         position: fixed; bottom: 8px; right: 12px;
         font-size: 0.7em; color: rgba(255,255,255,0.5);
         font-family: monospace; pointer-events: none;
-    ">{{ config.git_hash }}{% if config.git_deploy_time %} · {{ config.git_deploy_time }}{% endif %}</div>
+    ">{{ config.git_hash }}{% if config.git_deploy_time %} · <span data-deploy-time="{{ config.git_deploy_time }}">{{ config.git_deploy_time }}</span>{% endif %}</div>
+    {% if config.git_deploy_time %}
+    <script>
+    (function() {
+        var el = document.querySelector('[data-deploy-time]');
+        if (!el) return;
+        var iso = el.getAttribute('data-deploy-time');
+        // Pre-2026-05-05 deploys wrote a pre-formatted local-server string
+        // (no T or Z) — leave those as-is, only reformat ISO timestamps.
+        if (!/T.*Z$/.test(iso)) return;
+        var d = new Date(iso);
+        if (isNaN(d.getTime())) return;
+        el.textContent = d.toLocaleString([], {
+            day: 'numeric', month: 'short',
+            hour: '2-digit', minute: '2-digit', hour12: false
+        });
+    })();
+    </script>
+    {% endif %}
     {% endif %}
 
     <!-- Two-click delete confirmation handler -->
