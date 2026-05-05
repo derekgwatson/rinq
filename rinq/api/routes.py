@@ -4906,9 +4906,12 @@ def get_presence():
     on_call_emails = {c['agent_email'].lower() for c in active_calls if c.get('agent_email')}
 
     # Supplement with call_participants for transfer targets (warm/3-way) that
-    # have no call_log entry and would otherwise appear offline
+    # have no call_log entry and would otherwise appear offline. Cross-check
+    # against Twilio's actual in-progress SIDs — left_at isn't always set, so
+    # without this filter stale rows make agents appear "on a call" for hours.
     try:
-        on_call_emails.update(db.get_active_agent_emails())
+        active_sids = _get_active_call_sids()
+        on_call_emails.update(db.get_active_agent_emails(active_sids=active_sids))
     except Exception:
         pass
 
@@ -5282,7 +5285,7 @@ def update_queued_caller_status(call_sid):
 
 # In-memory cache for Twilio active calls (avoids hammering the API)
 # Keyed by tenant ID to prevent cross-tenant data leakage
-_active_calls_cache = {}  # {tenant_id: {'calls': [], 'fetched_at': 0}}
+_active_calls_cache = {}  # {tenant_id: {'calls': [], 'active_sids': set(), 'fetched_at': 0}}
 _ACTIVE_CALLS_TTL = 5  # seconds
 
 
@@ -5298,7 +5301,7 @@ def _get_active_calls_from_twilio() -> list[dict]:
 
     # Return cached result if fresh (per-tenant)
     with _call_tracking_lock:
-        tenant_cache = _active_calls_cache.get(tenant_id, {'calls': [], 'fetched_at': 0})
+        tenant_cache = _active_calls_cache.get(tenant_id, {'calls': [], 'active_sids': set(), 'fetched_at': 0})
     if now - tenant_cache['fetched_at'] < _ACTIVE_CALLS_TTL:
         return tenant_cache['calls']
 
@@ -5341,8 +5344,17 @@ def _get_active_calls_from_twilio() -> list[dict]:
             })
 
     with _call_tracking_lock:
-        _active_calls_cache[tenant_id] = {'calls': result, 'fetched_at': now}
+        _active_calls_cache[tenant_id] = {'calls': result, 'active_sids': active_sids, 'fetched_at': now}
     return result
+
+
+def _get_active_call_sids() -> set:
+    """Return Twilio's current in-progress call SIDs (cached alongside active calls)."""
+    _get_active_calls_from_twilio()  # ensure cache is fresh
+    from flask import g
+    tenant_id = getattr(g, 'tenant', {}).get('id', '_none') if hasattr(g, 'tenant') and g.tenant else '_none'
+    with _call_tracking_lock:
+        return set(_active_calls_cache.get(tenant_id, {}).get('active_sids', set()))
 
 
 @api_bp.route('/active-calls', methods=['GET'])

@@ -3329,18 +3329,44 @@ class Database(StatsMixin, CallLogMixin):
             ).fetchone()
             return dict(row) if row else None
 
-    def get_active_agent_emails(self) -> set:
-        """Return emails of all agents currently in a conference (call_participants).
+    def get_active_agent_emails(self, active_sids: set | None = None) -> set:
+        """Return emails of agents in call_participants rows that look active.
 
         Used to supplement call_log presence data for participants that have no
         call_log entry (e.g. warm/3-way transfer targets).
+
+        `left_at` isn't always reliably set — if the browser closes without
+        firing endCall() or a Twilio status callback drops, the row stays NULL
+        until the 24h cleanup. Pass `active_sids` (Twilio's current in-progress
+        call SIDs) to filter out stale rows.
         """
+        if active_sids is None:
+            with self._get_conn() as conn:
+                rows = conn.execute(
+                    "SELECT DISTINCT email FROM call_participants"
+                    " WHERE role = 'agent' AND left_at IS NULL AND email IS NOT NULL AND email != ''"
+                ).fetchall()
+            return {row['email'].lower() for row in rows}
+
+        if not active_sids:
+            return set()
+
+        sids = list(active_sids)
         with self._get_conn() as conn:
-            rows = conn.execute(
-                "SELECT DISTINCT email FROM call_participants"
-                " WHERE role = 'agent' AND left_at IS NULL AND email IS NOT NULL AND email != ''"
-            ).fetchall()
-        return {row['email'].lower() for row in rows}
+            emails = set()
+            # SQLite limits parameters per query; chunk to be safe
+            for i in range(0, len(sids), 500):
+                chunk = sids[i:i + 500]
+                placeholders = ','.join('?' * len(chunk))
+                rows = conn.execute(
+                    f"SELECT DISTINCT email FROM call_participants"
+                    f" WHERE role = 'agent' AND left_at IS NULL"
+                    f"  AND email IS NOT NULL AND email != ''"
+                    f"  AND call_sid IN ({placeholders})",
+                    chunk
+                ).fetchall()
+                emails.update(row['email'].lower() for row in rows)
+            return emails
 
     def update_participant(self, call_sid: str, **fields) -> None:
         """Update fields on a participant record.
