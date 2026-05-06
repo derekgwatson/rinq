@@ -599,6 +599,15 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
                                        metadata_by_sid=metadata_by_sid)
                 logger.info(f"Stored {len(agent_call_sids)} agent calls for customer {customer_call_sid}")
 
+                # Guard against the race where the caller hung up while we were making
+                # Twilio API calls — the cancel webhook ran before ring attempts were
+                # stored, so we need to cancel them now that they're in the DB.
+                stored_call = db.get_queued_call_by_sid(customer_call_sid)
+                if stored_call and stored_call.get('status') != 'waiting':
+                    logger.info(f"Caller already gone (status={stored_call.get('status')!r}) — cancelling ring attempts for {customer_call_sid}")
+                    _cancel_agent_calls(customer_call_sid, db=db)
+                    return
+
             if calls_initiated == 0:
                 # All active members were on DND or unreachable — no point leaving caller on hold
                 logger.info(f"No agents available for queue {queue_name} (all DND?) — sending customer to voicemail")
@@ -2274,11 +2283,16 @@ def queue_agent_answer(queue_id):
     claimed = db.claim_queued_call(customer_call_sid, answered_by=agent_info)
 
     if not claimed:
-        # Another agent already answered, or customer hung up
-        logger.info(f"Agent {agent_info} lost race for {customer_call_sid} — already claimed")
-        twiml = '''<?xml version="1.0" encoding="UTF-8"?>
+        lost_call = db.get_queued_call_by_sid(customer_call_sid)
+        if lost_call and lost_call.get('status') in ('abandoned', 'timeout'):
+            logger.info(f"Agent {agent_info} lost race for {customer_call_sid} — caller already hung up")
+            msg = 'The caller has already hung up.'
+        else:
+            logger.info(f"Agent {agent_info} lost race for {customer_call_sid} — already claimed")
+            msg = 'This call has already been answered by another agent.'
+        twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say>This call has already been answered by another agent.</Say>
+    <Say>{msg}</Say>
     <Hangup/>
 </Response>'''
         return Response(twiml, mimetype='application/xml')
@@ -4490,10 +4504,16 @@ def voice_outbound():
         # both redirect the same customer and both join the same conference.
         claimed = db.claim_queued_call(answer_call_sid, answered_by=staff_email)
         if not claimed:
-            logger.info(f"Queue answer: agent {staff_email} lost race for {answer_call_sid}")
-            twiml = '''<?xml version="1.0" encoding="UTF-8"?>
+            lost_call = db.get_queued_call_by_sid(answer_call_sid)
+            if lost_call and lost_call.get('status') in ('abandoned', 'timeout'):
+                logger.info(f"Queue answer: agent {staff_email} lost race for {answer_call_sid} — caller already hung up")
+                msg = 'The caller has already hung up.'
+            else:
+                logger.info(f"Queue answer: agent {staff_email} lost race for {answer_call_sid}")
+                msg = 'This call has already been answered by another agent.'
+            twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say>This call has already been answered by another agent.</Say>
+    <Say>{msg}</Say>
     <Hangup/>
 </Response>'''
             return Response(twiml, mimetype='application/xml')
