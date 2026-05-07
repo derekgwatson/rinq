@@ -3460,6 +3460,8 @@ function endCall() {
     const endSid = currentQueueCallerSid || currentOutboundCallSid
         || (currentCall && currentCall.parameters && currentCall.parameters.CallSid);
     const wasOutbound = !!currentOutboundCallSid;
+    const wasQueue = !!currentQueueCallerSid;
+    const queueDurationSecs = callSeconds;
     const dialedNumber = wasOutbound ? (callNumber.textContent || phoneNumber || '') : '';
     if (endSid) {
         fetch('/api/voice/call-ended', {
@@ -3522,6 +3524,14 @@ function endCall() {
                 }
             } catch (e) { /* ignore */ }
         }, 2000);
+    }
+
+    // Show feedback for queue calls that ended very quickly — caller hung up
+    // before or shortly after connection. Normal calls don't need this notice.
+    if (wasQueue && !wasOutbound && queueDurationSecs < 15) {
+        showOutboundOutcome('Caller hung up', '');
+        setStatus('Caller hung up', 'offline');
+        setTimeout(() => { if (!currentCall) setStatus('Ready', 'ready'); }, 4000);
     }
 }
 
