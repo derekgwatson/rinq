@@ -2684,6 +2684,10 @@ let isRecording = false;
 let recordingEnabled = true;  // User preference — NOT reset between calls
 let currentRecordingSid = null;
 let customerContext = null;
+// Diagnostic events captured from the Twilio Voice SDK during a call.
+// Posted to /api/voice/call-diagnostic in endCall() so we can debug drops
+// after the fact (audio issues, network reconnects, SDK errors).
+let callDiagnostics = [];
 
 /**
  * Reset all per-call state in one shot.
@@ -2704,6 +2708,7 @@ function resetCallState() {
     isRecording = false;
     currentRecordingSid = null;
     customerContext = null;
+    callDiagnostics = [];
     // Transfer state (declared later but reset here for completeness)
     if (typeof currentTransferKey !== 'undefined') {
         currentTransferKey = null;
@@ -2882,6 +2887,34 @@ async function initPhone() {
             enableRingingState: true
         });
 
+        // Diagnostics — capture SDK events for post-hoc debugging of drops
+        // and audio issues. Posted to the server in endCall() when a call
+        // looks problematic (had warnings/errors or ended very quickly).
+        window._recordDiagnostic = function(type, data) {
+            try {
+                callDiagnostics.push(Object.assign(
+                    { type, t: Date.now() }, data || {}
+                ));
+                if (callDiagnostics.length > 200) callDiagnostics.shift();
+            } catch (e) { /* never break a call on a logging bug */ }
+        };
+        window._wireCallDiagnostics = function(call) {
+            if (!call || call._diagWired) return;
+            call._diagWired = true;
+            try {
+                call.on('error', (err) => _recordDiagnostic('error', {
+                    code: err && err.code, message: err && err.message,
+                    causes: err && err.causes
+                }));
+                call.on('warning', (name, data) => _recordDiagnostic('warning', { name, data }));
+                call.on('warning-cleared', (name) => _recordDiagnostic('warning-cleared', { name }));
+                call.on('reconnecting', (err) => _recordDiagnostic('reconnecting', {
+                    code: err && err.code, message: err && err.message
+                }));
+                call.on('reconnected', () => _recordDiagnostic('reconnected', {}));
+            } catch (e) { /* SDK quirks — keep going */ }
+        };
+
         // Set up event handlers (SDK 2.x uses different events)
         device.on('registered', () => {
             setStatus('Ready', 'ready');
@@ -2924,6 +2957,7 @@ async function initPhone() {
             }
 
             currentCall = call;
+            _wireCallDiagnostics(call);
             let from = call.parameters.From || 'Unknown';
             const callSid = call.parameters.CallSid;
 
@@ -3017,6 +3051,7 @@ async function initPhone() {
             });
 
             call.on('disconnect', () => {
+                _recordDiagnostic('sdk-disconnect', { path: 'incoming' });
                 stopRingtone();
                 if (currentCall === call) endCall();
                 if (callNotification) callNotification.close();
@@ -3338,6 +3373,7 @@ async function makeCall() {
                 CallerId: callerId
             }
         });
+        _wireCallDiagnostics(currentCall);
 
         currentCall.on('accept', () => {
             setStatus('Ringing...', 'busy');
@@ -3355,19 +3391,23 @@ async function makeCall() {
         });
 
         currentCall.on('disconnect', () => {
+            _recordDiagnostic('sdk-disconnect', { path: 'outbound' });
             endCall();
         });
 
         currentCall.on('cancel', () => {
+            _recordDiagnostic('sdk-cancel', { path: 'outbound' });
             endCall();
         });
 
         currentCall.on('reject', () => {
+            _recordDiagnostic('sdk-reject', { path: 'outbound' });
             endCall();
         });
 
     } catch (error) {
         console.error('Call failed:', error);
+        _recordDiagnostic('connect-error', { message: error && error.message });
         setStatus('Call failed: ' + error.message, 'offline');
         endCall();
     }
@@ -3470,6 +3510,40 @@ function endCall() {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({call_sid: endSid})
         }).catch(() => {});
+    }
+
+    // Diagnostics: post Voice SDK events if anything interesting happened
+    // (any captured event, or a suspiciously short call). Helps debug
+    // unexplained drops and audio issues after the fact.
+    const shortCall = wasQueue && queueDurationSecs > 0 && queueDurationSecs < 15;
+    if (callDiagnostics.length > 0 || shortCall) {
+        const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+        const payload = {
+            call_sid: endSid || null,
+            queue_call: wasQueue,
+            outbound_call: wasOutbound,
+            duration_secs: queueDurationSecs,
+            short_call: shortCall,
+            events: callDiagnostics.slice(),
+            ua: navigator.userAgent,
+            visibility: document.visibilityState,
+            online: navigator.onLine,
+            connection: conn ? {
+                type: conn.type,
+                effectiveType: conn.effectiveType,
+                rtt: conn.rtt,
+                downlink: conn.downlink
+            } : null
+        };
+        try {
+            fetch('/api/voice/call-diagnostic', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload),
+                keepalive: true
+            }).catch(() => {});
+        } catch (e) { /* never break call teardown on a logging failure */ }
     }
 
     // Reset all per-call state in one shot
@@ -5238,6 +5312,7 @@ async function answerQueueCall(callSid) {
                 AnswerCallSid: callSid
             }
         });
+        _wireCallDiagnostics(currentCall);
 
         currentCall.on('accept', () => {
             setStatus('Connected', 'busy');
@@ -5253,18 +5328,21 @@ async function answerQueueCall(callSid) {
         });
 
         currentCall.on('disconnect', () => {
+            _recordDiagnostic('sdk-disconnect', { path: 'queue-fallback' });
             endCall();
             answeringCallSid = null;
             fetchQueueCallers();
         });
 
         currentCall.on('cancel', () => {
+            _recordDiagnostic('sdk-cancel', { path: 'queue-fallback' });
             endCall();
             answeringCallSid = null;
             fetchQueueCallers();
         });
 
         currentCall.on('reject', () => {
+            _recordDiagnostic('sdk-reject', { path: 'queue-fallback' });
             endCall();
             answeringCallSid = null;
             fetchQueueCallers();
@@ -5806,6 +5884,9 @@ async function pollCallState() {
                 // drop investigations much harder. Just disconnect our
                 // Twilio Device leg and let endCall() reset the UI.
                 console.log('Last participant in conference — cleaning up');
+                _recordDiagnostic('lone-participant-cleanup', {
+                    participants: state.participants.length
+                });
                 window._sawMultipleParticipants = false;
                 if (currentCall && typeof currentCall.disconnect === 'function') {
                     try { currentCall.disconnect(); } catch (e) {}

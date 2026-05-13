@@ -4241,6 +4241,24 @@ def voice_call_ended():
     return jsonify({"success": True})
 
 
+@api_bp.route('/voice/call-diagnostic', methods=['POST'])
+@login_required
+def voice_call_diagnostic():
+    """Receive client-side Voice SDK diagnostics for a call.
+
+    Captures error/warning/reconnect events from the Twilio Voice SDK that
+    aren't visible in server logs. Posted from phone.html when a call ends
+    if anything interesting happened (warnings, errors, short duration).
+    Useful for debugging unexplained drops and audio issues after the fact.
+    """
+    data = request.get_json(silent=True) or {}
+    user = get_current_user()
+    user_email = (user or {}).get('email', 'unknown')
+    payload = json.dumps(data, default=str)[:4000]
+    logger.info(f"Call diagnostic [{user_email}]: {payload}")
+    return jsonify({"ok": True})
+
+
 @api_bp.route('/voice/hangup', methods=['POST'])
 @login_required
 def voice_hangup():
