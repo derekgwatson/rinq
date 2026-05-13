@@ -3512,18 +3512,19 @@ function endCall() {
         }).catch(() => {});
     }
 
-    // Diagnostics: post Voice SDK events if anything interesting happened
-    // (any captured event, or a suspiciously short call). Helps debug
-    // unexplained drops and audio issues after the fact.
-    const shortCall = wasQueue && queueDurationSecs > 0 && queueDurationSecs < 15;
-    if (callDiagnostics.length > 0 || shortCall) {
+    // Diagnostics: post Voice SDK events + browser env at the end of every
+    // call so we can debug drops after the fact. Long calls that drop
+    // mid-conversation are just as interesting as short ones — the
+    // payload is small, fire-and-forget, and never on the audio path.
+    // `short_call` stays as a flag in the payload for easy grepping.
+    if (endSid) {
         const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
         const payload = {
-            call_sid: endSid || null,
+            call_sid: endSid,
             queue_call: wasQueue,
             outbound_call: wasOutbound,
             duration_secs: queueDurationSecs,
-            short_call: shortCall,
+            short_call: wasQueue && queueDurationSecs > 0 && queueDurationSecs < 15,
             events: callDiagnostics.slice(),
             ua: navigator.userAgent,
             visibility: document.visibilityState,
