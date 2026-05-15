@@ -847,6 +847,11 @@
     font-size: 0.75em;
     color: #adb5bd;
     margin-top: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 .caller-id-footer a {
     color: #adb5bd;
@@ -854,6 +859,25 @@
 }
 .caller-id-footer a:hover {
     color: #6c757d;
+}
+.caller-id-swap {
+    background: transparent;
+    border: 1px solid #ced4da;
+    color: #6c757d;
+    font-size: 0.95em;
+    padding: 2px 8px;
+    border-radius: 12px;
+    cursor: pointer;
+    line-height: 1.4;
+}
+.caller-id-swap:hover {
+    background: #f1f3f5;
+    color: #495057;
+    border-color: #adb5bd;
+}
+.caller-id-swap:disabled {
+    opacity: 0.6;
+    cursor: wait;
 }
 
 .call-info {
@@ -2319,6 +2343,7 @@
         </div>
 
         <input type="hidden" id="callerId" value="{{ default_caller_id or '' }}">
+        <input type="hidden" id="alternateCallerId" value="{{ alternate_caller_id or '' }}">
 
         <div class="dialpad">
             <button onclick="dial('1')">1<span class="letters">&nbsp;</span></button>
@@ -2347,7 +2372,14 @@
         </div>
 
         <div class="caller-id-footer">
-            Calling as {{ caller_id_display or 'Not set' }}
+            Calling as <span id="callerIdDisplay">{{ caller_id_display or 'Not set' }}</span>
+            {% if alternate_caller_id %}
+            <button type="button" class="caller-id-swap" id="callerIdSwapBtn"
+                    onclick="swapCallerId()"
+                    title="Swap active caller ID with toggle target">
+                &#x21C4; <span id="callerIdSwapLabel">{{ alternate_caller_id_display }}</span>
+            </button>
+            {% endif %}
             <a href="{{ url_for('web.my_devices') }}" target="_blank" rel="noopener">change</a>
         </div>
         </div>
@@ -3158,6 +3190,42 @@ function clearNumber() {
     contactName = '';
     phoneNumber = '';
     updateDisplay();
+}
+
+async function swapCallerId() {
+    const btn = document.getElementById('callerIdSwapBtn');
+    const display = document.getElementById('callerIdDisplay');
+    const swapLabel = document.getElementById('callerIdSwapLabel');
+    const callerIdInput = document.getElementById('callerId');
+    const alternateInput = document.getElementById('alternateCallerId');
+    if (!btn || !display) return;
+    btn.disabled = true;
+    try {
+        const resp = await fetch('/my-desk-phone/swap-caller-id', {
+            method: 'POST',
+            headers: {'Accept': 'application/json'},
+            credentials: 'same-origin'
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || !data.ok) {
+            showCallNotice(data.error || 'Could not swap caller ID');
+            return;
+        }
+        // The endpoint only returns phone numbers; swap the visible labels too.
+        const previousActiveLabel = display.textContent;
+        const previousSwapLabel = swapLabel ? swapLabel.textContent : '';
+        if (swapLabel) swapLabel.textContent = previousActiveLabel;
+        display.textContent = previousSwapLabel;
+        if (callerIdInput) callerIdInput.value = data.active_caller_id || '';
+        if (alternateInput) alternateInput.value = data.toggle_target || '';
+        if (typeof currentCallerId !== 'undefined') {
+            currentCallerId = data.active_caller_id || '';
+        }
+    } catch (e) {
+        showCallNotice('Could not swap caller ID: ' + e.message);
+    } finally {
+        btn.disabled = false;
+    }
 }
 
 async function pasteNumber() {

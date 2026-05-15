@@ -274,14 +274,29 @@
     {% if callable_numbers %}
     <div style="margin-top: 15px;">
         <strong>Outbound Caller ID</strong>
-        <p class="text-muted" style="margin: 5px 0;">When making outbound calls from the softphone or your SIP device, this number is shown to the recipient.</p>
+        <p class="text-muted" style="margin: 5px 0;">When making outbound calls from the softphone or your SIP device, the <em>Active</em> number is shown to the recipient. Dial <strong>*99</strong> from any device (or use the swap button on the softphone) to flip Active and Toggle target.</p>
         <form method="POST" action="{{ url_for('web.set_desk_phone_caller_id') }}" class="caller-id-form">
             <div class="form-group">
+                <label for="caller_id" style="display: block; font-size: 0.85em; color: #666; margin-bottom: 4px;">Active</label>
                 <select id="caller_id" name="caller_id">
                     <option value="">-- System default --</option>
                     {% for number in callable_numbers %}
                     <option value="{{ number.phone_number }}"
                             {% if staff_ext and staff_ext.default_caller_id == number.phone_number %}selected{% endif %}>
+                        {{ number.phone_number }}
+                        {% if number.friendly_name %} - {{ number.friendly_name }}{% endif %}
+                        {% if number.section %} ({{ number.section }}){% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="alternate_caller_id" style="display: block; font-size: 0.85em; color: #666; margin-bottom: 4px;">Toggle target (*99)</label>
+                <select id="alternate_caller_id" name="alternate_caller_id">
+                    <option value="">-- None --</option>
+                    {% for number in callable_numbers %}
+                    <option value="{{ number.phone_number }}"
+                            {% if staff_ext and staff_ext.alternate_caller_id == number.phone_number %}selected{% endif %}>
                         {{ number.phone_number }}
                         {% if number.friendly_name %} - {{ number.friendly_name }}{% endif %}
                         {% if number.section %} ({{ number.section }}){% endif %}

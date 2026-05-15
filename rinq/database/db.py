@@ -2353,7 +2353,7 @@ class Database(StatsMixin, CallLogMixin):
             return dict(row) if row else None
 
     def update_staff_extension_caller_id(self, email: str, caller_id: str | None, updated_by: str) -> bool:
-        """Set a staff member's default caller ID for outbound calls."""
+        """Set a staff member's active caller ID for outbound calls."""
         now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             cursor = conn.execute("""
@@ -2363,6 +2363,45 @@ class Database(StatsMixin, CallLogMixin):
             """, (caller_id, now, updated_by, email.lower()))
             conn.commit()
             return cursor.rowcount > 0
+
+    def update_staff_extension_alternate_caller_id(self, email: str, caller_id: str | None, updated_by: str) -> bool:
+        """Set a staff member's toggle target caller ID (the *99 alternate)."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            cursor = conn.execute("""
+                UPDATE staff_extensions
+                SET alternate_caller_id = ?, updated_at = ?, updated_by = ?
+                WHERE email = ?
+            """, (caller_id, now, updated_by, email.lower()))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def swap_staff_extension_caller_id(self, email: str, updated_by: str) -> dict | None:
+        """Atomically swap default_caller_id and alternate_caller_id.
+
+        Returns the row as it stands AFTER the swap, or None if no extension
+        exists or if the alternate slot is empty (caller should announce
+        'no toggle target configured' in that case).
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT default_caller_id, alternate_caller_id FROM staff_extensions WHERE email = ?",
+                (email.lower(),)
+            ).fetchone()
+            if not row:
+                return None
+            current = row['default_caller_id']
+            other = row['alternate_caller_id']
+            if not other:
+                return None
+            conn.execute("""
+                UPDATE staff_extensions
+                SET default_caller_id = ?, alternate_caller_id = ?, updated_at = ?, updated_by = ?
+                WHERE email = ?
+            """, (other, current, now, updated_by, email.lower()))
+            conn.commit()
+            return {'default_caller_id': other, 'alternate_caller_id': current}
 
     def get_staff_extension_by_ext(self, extension: str) -> dict | None:
         """Get a staff member by their extension number."""

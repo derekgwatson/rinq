@@ -2155,13 +2155,13 @@ def my_desk_phone():
 @web_bp.route('/my-desk-phone/caller-id', methods=['POST'])
 @login_required
 def set_desk_phone_caller_id():
-    """Set the user's default caller ID for outbound calls."""
+    """Set the user's active caller ID and toggle target for outbound calls."""
     caller_id = request.form.get('caller_id', '').strip()
+    alternate_caller_id = request.form.get('alternate_caller_id', '').strip()
 
     user = get_current_user()
     db = get_db()
 
-    # Update caller ID on staff extension
     ext = db.get_staff_extension(user.email)
     if not ext:
         flash('No staff extension found', 'error')
@@ -2172,20 +2172,54 @@ def set_desk_phone_caller_id():
         caller_id=caller_id if caller_id else None,
         updated_by=_audit_tag(user)
     )
+    db.update_staff_extension_alternate_caller_id(
+        email=user.email,
+        caller_id=alternate_caller_id if alternate_caller_id else None,
+        updated_by=_audit_tag(user)
+    )
 
     db.log_activity(
         action="set_default_caller_id",
         target=user.email,
-        details=f"Set default caller ID to: {caller_id or 'None'}",
+        details=f"Active: {caller_id or 'None'}, Toggle target: {alternate_caller_id or 'None'}",
         performed_by=_audit_tag(user)
     )
 
-    if caller_id:
-        flash(f'Default caller ID set to {caller_id}', 'success')
-    else:
-        flash('Default caller ID cleared', 'success')
-
+    flash('Caller ID settings updated', 'success')
     return redirect(url_for('web.my_devices'))
+
+
+@web_bp.route('/my-desk-phone/swap-caller-id', methods=['POST'])
+@login_required
+def swap_desk_phone_caller_id():
+    """Swap the user's active caller ID with their toggle target.
+
+    Used by the softphone swap button. Returns JSON with the new state.
+    """
+    user = get_current_user()
+    db = get_db()
+
+    result = db.swap_staff_extension_caller_id(
+        email=user.email,
+        updated_by=_audit_tag(user)
+    )
+    if not result:
+        return jsonify({
+            'ok': False,
+            'error': 'No toggle target configured. Set one in My Devices.'
+        }), 400
+
+    db.log_activity(
+        action="swap_caller_id",
+        target=user.email,
+        details=f"Swapped to active={result['default_caller_id']}, target={result['alternate_caller_id']}",
+        performed_by=_audit_tag(user)
+    )
+    return jsonify({
+        'ok': True,
+        'active_caller_id': result['default_caller_id'],
+        'toggle_target': result['alternate_caller_id'],
+    })
 
 
 @web_bp.route('/my-desk-phone/regenerate', methods=['POST'])
@@ -2429,9 +2463,28 @@ def phone():
     staff_ext = db.get_or_create_staff_extension(user.email, f'session:{user.email}')
     ext_directory_number = db.get_bot_setting('extension_directory_number')
 
+    # Toggle target for the swap button (label only — the swap endpoint
+    # re-resolves the active number itself).
+    alternate_caller_id = staff_ext.get('alternate_caller_id') if staff_ext else None
+    alternate_caller_id_display = None
+    if alternate_caller_id:
+        for n in db.get_phone_numbers():
+            if n['phone_number'] == alternate_caller_id:
+                alternate_caller_id_display = n.get('friendly_name') or alternate_caller_id
+                break
+        if not alternate_caller_id_display:
+            for vcid in db.get_verified_caller_ids(active_only=True):
+                if vcid['phone_number'] == alternate_caller_id:
+                    alternate_caller_id_display = vcid.get('friendly_name') or alternate_caller_id
+                    break
+        if not alternate_caller_id_display:
+            alternate_caller_id_display = alternate_caller_id
+
     response = make_response(render_template('phone.html',
                          default_caller_id=default_caller_id,
                          caller_id_display=caller_id_display,
+                         alternate_caller_id=alternate_caller_id,
+                         alternate_caller_id_display=alternate_caller_id_display,
                          api_key_configured=api_key_configured,
                          twiml_app_configured=twiml_app_configured,
                          staff_ext=staff_ext,

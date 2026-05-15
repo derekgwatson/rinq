@@ -4340,6 +4340,80 @@ def voice_hangup():
     return jsonify({"success": True})
 
 
+def _resolve_caller_friendly_name(phone_number: str, db) -> str:
+    """Look up a phone number's friendly name from owned numbers or verified caller IDs.
+
+    Returns the friendly name if found, otherwise the phone number itself
+    (formatted readably so Twilio's TTS reads digits one-by-one).
+    """
+    if not phone_number:
+        return 'no number'
+    for n in db.get_phone_numbers():
+        if n['phone_number'] == phone_number:
+            return n.get('friendly_name') or phone_number
+    for vcid in db.get_verified_caller_ids(active_only=False):
+        if vcid['phone_number'] == phone_number:
+            return vcid.get('friendly_name') or phone_number
+    return phone_number
+
+
+def _resolve_sip_email(from_identity: str, db) -> str | None:
+    """Resolve a SIP From identity (sip:username@domain) to a staff email."""
+    if not from_identity or not from_identity.startswith('sip:'):
+        return None
+    sip_part = from_identity[4:]
+    if '@' not in sip_part:
+        return None
+    sip_username = sip_part.split('@')[0]
+    sip_user = db.get_user_by_username(sip_username)
+    if sip_user:
+        return sip_user.get('staff_email')
+    return None
+
+
+def _handle_caller_id_toggle(from_identity: str, staff_email: str, db) -> Response:
+    """Handle the *99 feature code: swap active caller ID with the toggle target.
+
+    Plays an announcement naming the new active caller ID, then hangs up.
+    Works from both the browser softphone and SIP devices.
+    """
+    lookup_email = staff_email or _resolve_sip_email(from_identity, db)
+
+    if not lookup_email:
+        twiml = '''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say>Could not identify your account.</Say>
+    <Hangup/>
+</Response>'''
+        return Response(twiml, mimetype='application/xml')
+
+    audit_tag = f"feature-code:{lookup_email}"
+    result = db.swap_staff_extension_caller_id(email=lookup_email, updated_by=audit_tag)
+
+    if not result:
+        twiml = '''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say>No toggle target is configured. Set one in My Devices.</Say>
+    <Hangup/>
+</Response>'''
+        return Response(twiml, mimetype='application/xml')
+
+    new_active = result['default_caller_id']
+    friendly = _resolve_caller_friendly_name(new_active, db)
+    db.log_activity(
+        action="swap_caller_id",
+        target=lookup_email,
+        details=f"*99 from {from_identity}: now active={new_active}",
+        performed_by=audit_tag,
+    )
+    twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say>Caller ID set to {xml_escape(friendly)}</Say>
+    <Hangup/>
+</Response>'''
+    return Response(twiml, mimetype='application/xml')
+
+
 def _handle_internal_extension_call(extension: str, from_identity: str, staff_email: str, call_sid: str, db) -> Response:
     """Handle an internal extension-to-extension call from the softphone.
 
@@ -4616,8 +4690,13 @@ def voice_outbound():
 </Response>'''
         return Response(twiml, mimetype='application/xml')
 
-    # Check if this is a 4-digit extension (internal call)
     stripped = to_number.strip()
+
+    # Feature code: *99 swaps the user's active caller ID with their toggle target
+    if stripped == '*99':
+        return _handle_caller_id_toggle(from_identity, staff_email, db)
+
+    # Check if this is a 4-digit extension (internal call)
     if stripped.isdigit() and len(stripped) == 4:
         return _handle_internal_extension_call(stripped, from_identity, staff_email, call_sid, db)
 
