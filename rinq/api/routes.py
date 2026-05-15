@@ -4692,6 +4692,13 @@ def voice_outbound():
 
     stripped = to_number.strip()
 
+    # SIP devices send a full URI (e.g. sip:*99@watsonblinds.sip.twilio.com:5060)
+    # — strip the wrapper so feature-code and extension matches work uniformly
+    # for browser softphone, mobile SIP, and desk phones.
+    if stripped.startswith('sip:'):
+        sip_user = stripped[4:].split('@', 1)[0].split(';', 1)[0]
+        stripped = sip_user
+
     # Feature code: *99 swaps the user's active caller ID with their toggle target
     if stripped == '*99':
         return _handle_caller_id_toggle(from_identity, staff_email, db)
