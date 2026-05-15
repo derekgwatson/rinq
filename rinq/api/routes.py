@@ -4253,7 +4253,7 @@ def voice_call_diagnostic():
     """
     data = request.get_json(silent=True) or {}
     user = get_current_user()
-    user_email = (user or {}).get('email', 'unknown')
+    user_email = getattr(user, 'email', 'unknown')
     payload = json.dumps(data, default=str)[:4000]
     logger.info(f"Call diagnostic [{user_email}]: {payload}")
     return jsonify({"ok": True})
