@@ -26,7 +26,17 @@
       "Bash(gh run *)",
       "Bash(ssh *)",
       "Bash(git commit *)",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "PowerShell(ssh derek@209.38.91.37 \"sudo journalctl -u rinq -n 200 --no-pager 2>/dev/null | tail -200\")",
+      "PowerShell(ssh derek@209.38.91.37 \"sudo journalctl -u rinq --since '2026-05-04 01:00:00' --no-pager 2>/dev/null | grep -v 'twilio.http_client' | grep -v 'X-Twilio-Client\\\\|Accept-Charset\\\\|Content-Type\\\\|Accept\\\\|User-Agent\\\\|END Twilio\\\\|BEGIN Twilio\\\\|GET Request\\\\|Query Params\\\\|Response Status\\\\|Response Headers\\\\|Strict-Transport\\\\|Content-Length\\\\|Connection:\\\\|X-Home\\\\|X-API-Domain\\\\|X-Amz\\\\|X-Cache\\\\|X-Powered\\\\|X-Shenanigans\\\\|Via:\\\\|Vary:\\\\|Twilio-Concurrent\\\\|Twilio-Request\\\\|Content-Encoding\\\\|Date:' | tail -300\")",
+      "PowerShell(ssh derek@209.38.91.37 \"sudo journalctl -u rinq --since '2026-05-04 01:00:00' --no-pager 2>/dev/null | grep -v 'twilio.http_client\\\\|call_state - INFO - Call state poll' | grep -iE 'transfer|consult|cancel|warm|call-ended|voice/call|unhold|rejoin|ERROR|Exception|Traceback|hang|disconnect' | head -200\")",
+      "PowerShell(ssh derek@209.38.91.37 \"sudo journalctl -u rinq --since '2026-05-04 01:11:00' --until '2026-05-04 01:15:00' --no-pager 2>/dev/null | grep -v 'twilio.http_client\\\\|call_state - INFO - Call state poll' | grep -v 'BEGIN\\\\|END\\\\|GET Request\\\\|Query Params\\\\|Response Status\\\\|Response Headers\\\\|Strict-Transport\\\\|Content-Length\\\\|Connection:\\\\|X-Home\\\\|X-API-Domain\\\\|X-Amz\\\\|X-Cache\\\\|X-Powered\\\\|X-Shenanigans\\\\|Via:\\\\|Vary:\\\\|Twilio-Concurrent\\\\|Twilio-Request\\\\|Content-Encoding\\\\|Date:\\\\|Content-Type\\\\|Accept\\\\|User-Agent'\")",
+      "PowerShell(ssh derek@209.38.91.37 \"sudo journalctl -u rinq --since '2026-05-04 01:11:00' --until '2026-05-04 01:11:10' --no-pager 2>/dev/null | grep -v 'twilio.http_client\\\\|call_state - INFO - Call state poll' | grep -v 'BEGIN\\\\|END\\\\|GET Request\\\\|Query Params\\\\|Response Status\\\\|Response Headers\\\\|Strict-Transport\\\\|Content-Length\\\\|Connection:\\\\|X-Home\\\\|X-API-Domain\\\\|X-Amz\\\\|X-Cache\\\\|X-Powered\\\\|X-Shenanigans\\\\|Via:\\\\|Vary:\\\\|Twilio-Concurrent\\\\|Twilio-Request\\\\|Content-Encoding\\\\|Date:\\\\|Content-Type\\\\|Accept\\\\|User-Agent'\")",
+      "Bash(scp do-personal:/var/www/rinq/rinq/data/recordings/REa6460e8fc124a8379e9618a50fb3225b.mp3 /tmp/call1.mp3)",
+      "Bash(scp do-personal:/var/www/rinq/rinq/data/recordings/RE90bf4ed670e5d7c3200d9ad9ffc1318c.mp3 /tmp/call2.mp3)",
+      "Bash(git -C \"C:\\\\Users\\\\Derek\\\\Documents\\\\Coding\\\\Python_Scripts\\\\rinq\" status)",
+      "Bash(git -C \"C:\\\\Users\\\\Derek\\\\Documents\\\\Coding\\\\Python_Scripts\\\\rinq\" diff)",
+      "Bash(git *)"
     ]
   }
 }

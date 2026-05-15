@@ -5751,6 +5751,24 @@ async function fetchPresence() {
 fetchPresence();
 setInterval(fetchPresence, 15000);
 
+// Chrome throttles timers in backgrounded tabs and may freeze the tab
+// entirely — the heartbeat lapses and the Twilio Device's signaling
+// connection drops, so other staff see us as offline. On return to the
+// foreground, immediately re-assert presence and re-register the Device
+// so the offline gap is a second or two rather than a full poll interval.
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    sendHeartbeat();
+    fetchPresence();
+    if (device && device.state === 'unregistered') {
+        if (!currentCall) setStatus('Connecting...', 'connecting');
+        device.register().catch(err => {
+            console.error('Re-registration on focus failed:', err);
+            if (!currentCall) setStatus('Disconnected - please reload', 'offline');
+        });
+    }
+});
+
 // ============================================
 // Unified Call State Polling
 // ============================================
