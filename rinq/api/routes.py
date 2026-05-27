@@ -537,7 +537,10 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
             answer_url = f"{base_url}/api/voice/queue/{queue_id}/agent-answer?customer_call_sid={customer_call_sid}"
 
             # Status callback URL for rejection/no-answer handling
-            status_callback_url = f"{base_url}/api/voice/queue/{queue_id}/agent-ring-status?customer_call_sid={customer_call_sid}"
+            status_callback_url = (
+                f"{base_url}/api/voice/ring-status"
+                f"?origin=queue&queue_id={queue_id}&customer_call_sid={customer_call_sid}"
+            )
 
             calls_initiated = 0
             agent_call_sids = []  # Track for cancellation
@@ -666,8 +669,8 @@ def _ring_targets_into_conference(dial_targets: list, conference_name: str,
 
             answer_url = f"{base_url}/api/voice/conference/join?room={conference_name}&role=agent"
             status_url = (
-                f"{base_url}/api/voice/inbound/ring-status"
-                f"?conference={conference_name}&caller_call_sid={caller_call_sid}"
+                f"{base_url}/api/voice/ring-status"
+                f"?origin=inbound&conference={conference_name}&caller_call_sid={caller_call_sid}"
             )
 
             call_sids = []
@@ -2398,83 +2401,6 @@ def _send_queue_caller_to_voicemail(queue_id: int, customer_call_sid: str, reaso
         logger.exception(f"Failed to redirect customer {customer_call_sid} to voicemail: {e}")
 
 
-@api_bp.route('/voice/queue/<int:queue_id>/agent-ring-status', methods=['POST'])
-def queue_agent_ring_status(queue_id):
-    """Handle status callbacks for auto-ring outbound calls.
-
-    Called when an outbound call to an agent ends. When the rejecting agent is the
-    last one still ringing, redirects the customer to voicemail immediately via
-    _send_queue_caller_to_voicemail.
-
-    Query params:
-        customer_call_sid: The call SID of the customer waiting in queue
-
-    No auth required - Twilio calls this directly.
-    """
-    db = get_db()
-
-    agent_call_sid = request.form.get('CallSid', '')
-    call_status = request.form.get('CallStatus', '')
-    customer_call_sid = request.args.get('customer_call_sid', '')
-
-    logger.info(f"Agent ring status: {agent_call_sid} -> {call_status} (customer: {customer_call_sid})")
-
-    # Only remove the ring attempt once the call reaches a terminal state.
-    # Intermediate callbacks (initiated, ringing, in-progress) arrive before
-    # _cancel_agent_calls has had a chance to pop the SIDs for cancellation —
-    # removing early would leave other agents' phones ringing after one answers.
-    terminal_statuses = {'completed', 'failed', 'no-answer', 'busy', 'canceled'}
-    if call_status in terminal_statuses:
-        call_info = db.get_ring_attempt_metadata(agent_call_sid)
-        db.remove_ring_attempt_by_sid(agent_call_sid)
-    else:
-        call_info = db.get_ring_attempt_metadata(agent_call_sid)
-
-    if not call_info:
-        logger.debug(f"No tracking info for agent call {agent_call_sid}")
-        return Response('OK', status=200)
-
-    # Only handle rejection (busy) — "busy" means the agent explicitly rejected
-    if call_status != 'busy':
-        logger.debug(f"Agent call {agent_call_sid} ended with {call_status} - not a rejection")
-        return Response('OK', status=200)
-
-    queue = db.get_queue(queue_id)
-    if not queue:
-        logger.warning(f"Queue {queue_id} not found for rejection handling")
-        return Response('OK', status=200)
-
-    reject_action = queue.get('reject_action', 'continue')
-    agent_email = call_info.get('user_email', 'unknown')
-    logger.info(f"Queue {queue.get('name')} reject_action={reject_action}, agent {agent_email} rejected")
-
-    remaining = db.get_ring_attempts(customer_call_sid)
-
-    if reject_action == 'voicemail':
-        # Any rejection → voicemail immediately, cancel remaining rings
-        _send_queue_caller_to_voicemail(
-            queue_id, customer_call_sid,
-            reason=f"Agent {agent_email} rejected (queue set to voicemail-on-reject)",
-            db=db
-        )
-    elif remaining:
-        # Others still ringing — let them answer
-        db.log_activity(
-            action="agent_rejected_call",
-            target=f"queue_{queue_id}",
-            details=f"Agent {agent_email} rejected, {len(remaining)} agent(s) still ringing",
-            performed_by="twilio"
-        )
-    else:
-        # Last agent rejected — no point leaving caller in queue
-        _send_queue_caller_to_voicemail(
-            queue_id, customer_call_sid,
-            reason=f"Agent {agent_email} rejected and no agents remain",
-            db=db
-        )
-    return Response('OK', status=200)
-
-
 def _build_voicemail_twiml(queue_id, call_sid, from_number='', audio_type='queue_no_agents'):
     """Build voicemail TwiML for queue timeout, rejection, or voicemail escape.
 
@@ -2664,24 +2590,54 @@ def ringback():
     return Response(twiml, mimetype='application/xml')
 
 
-@api_bp.route('/voice/inbound/ring-status', methods=['POST'])
-def inbound_ring_status():
-    """Handle status updates for conference-first inbound agent ring attempts.
+TERMINAL_RING_STATUSES = {'completed', 'failed', 'no-answer', 'busy', 'canceled'}
 
-    When an agent answers, cancels all other ringing legs and stores the
-    agent's call SID. When all agents fail, ends the conference so the
-    caller falls through to the no-answer TwiML.
 
-    Query params:
+@api_bp.route('/voice/ring-status', methods=['POST'])
+def ring_status():
+    """Status callback for all agent ring legs (queue auto-ring + inbound directory dial).
+
+    Twilio POSTs here for every status transition (initiated, ringing,
+    in-progress, completed, busy, no-answer, failed, canceled) of a call we
+    placed to an agent. Branch by origin so the tails stay distinct.
+
+    Query params (always):
+        origin: 'inbound' (direct/directory dial) or 'queue' (auto-ring)
+
+    Query params (origin=inbound):
         conference: Conference room name
-        caller_call_sid: The caller's call SID
+        caller_call_sid: The customer's call SID
+
+    Query params (origin=queue):
+        queue_id: The queue ID
+        customer_call_sid: The customer's call SID
 
     No auth required - Twilio calls this directly.
     """
-    conference_name = request.args.get('conference', '')
-    caller_call_sid = request.args.get('caller_call_sid', '')
+    origin = request.args.get('origin', '')
     agent_call_sid = request.form.get('CallSid', '')
     call_status = request.form.get('CallStatus', '')
+
+    if origin == 'inbound':
+        return _inbound_ring_status(agent_call_sid, call_status)
+    if origin == 'queue':
+        return _queue_ring_status(agent_call_sid, call_status)
+
+    logger.warning(f"ring-status callback with unknown origin={origin!r}, sid={agent_call_sid}")
+    return '', 204
+
+
+def _inbound_ring_status(agent_call_sid: str, call_status: str):
+    """Tail for inbound directory/extension ring legs.
+
+    On 'in-progress' (agent answered): cancel other ringing legs, set call_log
+    fields, store child SIDs both ways, track participants.
+
+    On terminal failure of the last remaining leg: end the conference so the
+    caller falls through to the no-answer TwiML.
+    """
+    conference_name = request.args.get('conference', '')
+    caller_call_sid = request.args.get('caller_call_sid', '')
 
     logger.info(f"Inbound ring status: {agent_call_sid} -> {call_status}, conference={conference_name}")
 
@@ -2728,8 +2684,9 @@ def inbound_ring_status():
                     logger.debug(f"Could not cancel ring leg {sid}: {e}")
 
         logger.info(f"Agent {agent_call_sid} answered, cancelled {len(ring_sids) - 1} other legs")
+        return '', 204
 
-    elif call_status in ('completed', 'busy', 'no-answer', 'failed', 'canceled'):
+    if call_status in TERMINAL_RING_STATUSES:
         # This leg failed — remove it and check if all legs have failed.
         # Only treat as ring failure if we actually removed a tracked attempt;
         # once any agent answers, pop_ring_attempts clears the table, so a
@@ -2752,6 +2709,79 @@ def inbound_ring_status():
                 logger.warning(f"Could not end conference {conference_name}: {e}")
 
     return '', 204
+
+
+def _queue_ring_status(agent_call_sid: str, call_status: str):
+    """Tail for queue auto-ring legs.
+
+    On terminal status: pop the attempt. On 'busy' (agent rejected): honour the
+    queue's reject_action — voicemail immediately, or continue if others are
+    still ringing. If the last/only ringing agent rejected, fall through to
+    voicemail.
+
+    The 'in-progress' (answered) case is handled separately via the dial
+    action URL queue_agent_answer, not this status callback.
+    """
+    queue_id = int(request.args.get('queue_id') or 0)
+    customer_call_sid = request.args.get('customer_call_sid', '')
+
+    logger.info(f"Agent ring status: {agent_call_sid} -> {call_status} (customer: {customer_call_sid})")
+
+    db = get_db()
+
+    # Only remove the ring attempt once the call reaches a terminal state.
+    # Intermediate callbacks (initiated, ringing, in-progress) arrive before
+    # _cancel_agent_calls has had a chance to pop the SIDs for cancellation —
+    # removing early would leave other agents' phones ringing after one answers.
+    if call_status not in TERMINAL_RING_STATUSES:
+        return Response('OK', status=200)
+
+    call_info = db.get_ring_attempt_metadata(agent_call_sid)
+    db.remove_ring_attempt_by_sid(agent_call_sid)
+
+    if not call_info:
+        logger.debug(f"No tracking info for agent call {agent_call_sid}")
+        return Response('OK', status=200)
+
+    # Only handle rejection (busy) — "busy" means the agent explicitly rejected
+    if call_status != 'busy':
+        logger.debug(f"Agent call {agent_call_sid} ended with {call_status} - not a rejection")
+        return Response('OK', status=200)
+
+    queue = db.get_queue(queue_id)
+    if not queue:
+        logger.warning(f"Queue {queue_id} not found for rejection handling")
+        return Response('OK', status=200)
+
+    reject_action = queue.get('reject_action', 'continue')
+    agent_email = call_info.get('user_email', 'unknown')
+    logger.info(f"Queue {queue.get('name')} reject_action={reject_action}, agent {agent_email} rejected")
+
+    remaining = db.get_ring_attempts(customer_call_sid)
+
+    if reject_action == 'voicemail':
+        # Any rejection → voicemail immediately, cancel remaining rings
+        _send_queue_caller_to_voicemail(
+            queue_id, customer_call_sid,
+            reason=f"Agent {agent_email} rejected (queue set to voicemail-on-reject)",
+            db=db
+        )
+    elif remaining:
+        # Others still ringing — let them answer
+        db.log_activity(
+            action="agent_rejected_call",
+            target=f"queue_{queue_id}",
+            details=f"Agent {agent_email} rejected, {len(remaining)} agent(s) still ringing",
+            performed_by="twilio"
+        )
+    else:
+        # Last agent rejected — no point leaving caller in queue
+        _send_queue_caller_to_voicemail(
+            queue_id, customer_call_sid,
+            reason=f"Agent {agent_email} rejected and no agents remain",
+            db=db
+        )
+    return Response('OK', status=200)
 
 
 def _resolve_agent_email(call_sid: str, service) -> str | None:
