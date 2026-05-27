@@ -2722,8 +2722,13 @@ def inbound_ring_status():
         logger.info(f"Agent {agent_call_sid} answered, cancelled {len(ring_sids) - 1} other legs")
 
     elif call_status in ('completed', 'busy', 'no-answer', 'failed', 'canceled'):
-        # This leg failed — remove it and check if all legs have failed
-        db.remove_ring_attempt(conference_name, agent_call_sid)
+        # This leg failed — remove it and check if all legs have failed.
+        # Only treat as ring failure if we actually removed a tracked attempt;
+        # once any agent answers, pop_ring_attempts clears the table, so a
+        # later 'completed' on the answered leg (e.g. warm-transfer hand-off
+        # removing the initiating agent) must not kill the live conference.
+        if db.remove_ring_attempt(conference_name, agent_call_sid) == 0:
+            return '', 204
         remaining = db.get_ring_attempts(conference_name)
 
         if not remaining:
