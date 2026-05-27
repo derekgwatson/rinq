@@ -2994,6 +2994,26 @@ class Database(StatsMixin, CallLogMixin):
             """, (call_sid,)).fetchone()
             return dict(row) if row else None
 
+    def get_active_queue_enrichment(self, caller_number: str,
+                                    max_age_minutes: int = 60) -> dict | None:
+        """Get the most recent queued_calls enrichment for a caller number.
+
+        Used by the customer-panel lookup to reuse CRM enrichment already
+        stamped by the queue path, instead of asking Clara again — Clara
+        merge artifacts can return a different customer on a second query.
+        """
+        with self._get_conn() as conn:
+            row = conn.execute("""
+                SELECT customer_id, customer_name, customer_email,
+                       order_data, priority, priority_reason
+                FROM queued_calls
+                WHERE caller_number = ?
+                  AND enqueued_at >= datetime('now', '-' || ? || ' minutes')
+                ORDER BY enqueued_at DESC
+                LIMIT 1
+            """, (caller_number, max_age_minutes)).fetchone()
+            return dict(row) if row else None
+
     def update_queued_call_status(self, call_sid: str, status: str,
                                    answered_by: str = None) -> None:
         """Update the status of a queued call.

@@ -214,8 +214,16 @@ def lookup_customer():
 
     from rinq.services.caller_enrichment import get_enrichment_service
     enrichment = get_enrichment_service()
-    result = enrichment.enrich_caller(phone)
 
+    # Prefer enrichment already stamped by the queue path — Clara has merge
+    # artifacts that return different customers across queries for the same
+    # number, so two independent lookups can disagree. Reusing the queue
+    # result keeps the panel in sync with the in-call participant card.
+    cached = enrichment.enrich_from_active_call(phone)
+    if cached is not None:
+        return jsonify(cached)
+
+    result = enrichment.enrich_caller(phone)
     return jsonify(result)
 
 

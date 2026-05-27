@@ -3,6 +3,14 @@ Caller enrichment service for Rinq.
 
 Looks up caller information from customer and order integrations
 to provide context about who is calling.
+
+TODO: consolidate the multiple `enrich_caller()` calls fired per inbound call
+(queue entry in api/routes.py:1759 and 3200, AI receptionist redirect at 118,
+customer-panel lookup at 217). Each one independently queries Clara, and Clara
+merge artifacts can return different customers across queries — visible to the
+agent as the customer panel naming a different person than the in-call card.
+The right shape is a single per-call enrichment stamped once and read by all
+consumers. `enrich_from_active_call()` is a tactical fix for the panel only.
 """
 
 import json
@@ -73,6 +81,45 @@ class CallerEnrichmentService:
                 result['priority_reason'] = order_info.get('priority_reason', 'Has active orders')
 
         return result
+
+    def enrich_from_active_call(self, phone_number: str) -> Optional[dict]:
+        """Reuse enrichment from the most recent queued_calls entry for this number.
+
+        Returns the same shape as `enrich_caller()` but without querying Clara
+        or Otto — the queue path has already done that. Returns None if no
+        recent queue entry exists (caller bypassed the queue, outbound call,
+        old number).
+        """
+        try:
+            from rinq.services.phone import to_e164
+            normalized = to_e164(phone_number)
+            db = get_db()
+            cached = db.get_active_queue_enrichment(normalized)
+            if cached is None:
+                return None
+
+            result = {
+                'customer_id': cached.get('customer_id'),
+                'customer_name': cached.get('customer_name'),
+                'customer_email': cached.get('customer_email'),
+                'order_data': cached.get('order_data'),
+                'priority': cached.get('priority') or 'unknown',
+                'priority_reason': cached.get('priority_reason') or 'No customer record found',
+                'call_history': self._lookup_call_history(phone_number),
+            }
+
+            # Mirror the live path's address-book fallback for unknown callers
+            if not result['customer_name']:
+                ab_match = self._lookup_address_book(phone_number)
+                if ab_match:
+                    result['customer_name'] = ab_match['name']
+                    result['priority'] = 'normal'
+                    result['priority_reason'] = 'Known contact (address book)'
+
+            return result
+        except Exception as e:
+            logger.debug(f"Active-call enrichment reuse failed for {phone_number}: {e}")
+            return None
 
     def _lookup_customer_by_phone(self, phone_number: str) -> Optional[dict]:
         """Search for a customer by phone number via customer lookup integration."""
