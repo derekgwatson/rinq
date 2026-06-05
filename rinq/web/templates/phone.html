@@ -2947,6 +2947,23 @@ async function initPhone() {
             } catch (e) { /* SDK quirks — keep going */ }
         };
 
+        // Page-lifecycle diagnostics. Chrome freezes/discards backgrounded
+        // tabs, which can kill a call's WebRTC without the SDK firing a warning
+        // (the JS event loop is frozen, so error/reconnecting never run). Log
+        // these transitions into the same per-call buffer so a "page-freeze
+        // immediately before sdk-disconnect" trace distinguishes a backgrounded
+        // -tab death from a clean disconnect — the open question on recipient
+        // legs dropping mid warm-transfer (e.g. scheduling-team transfers).
+        if (!window._lifecycleDiagWired) {
+            window._lifecycleDiagWired = true;
+            try {
+                document.addEventListener('freeze', () => _recordDiagnostic('page-freeze', { vis: document.visibilityState }));
+                document.addEventListener('resume', () => _recordDiagnostic('page-resume', {}));
+                document.addEventListener('visibilitychange', () => _recordDiagnostic('visibility', { state: document.visibilityState }));
+                window.addEventListener('pagehide', (e) => _recordDiagnostic('pagehide', { persisted: !!e.persisted }));
+            } catch (e) { /* older browsers without Page Lifecycle API */ }
+        }
+
         // Set up event handlers (SDK 2.x uses different events)
         device.on('registered', () => {
             setStatus('Ready', 'ready');
