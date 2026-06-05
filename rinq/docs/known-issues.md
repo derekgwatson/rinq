@@ -32,3 +32,10 @@ Issues found during testing, noted for follow-up. Not blocking production.
 **Cause:** The caller redirect from queue to conference is async. Agent can join the conference before the redirect completes, sitting alone briefly.
 **Mitigation:** Added "Connecting." Say message to delay agent join (2026-04-07). Full fix requires restructuring to wait for redirect confirmation.
 **Impact:** Minor UX annoyance. Call connects after a brief delay.
+
+## 7. Warm transfer to scheduling recipient drops mid-consult
+**Reproduce:** Agent warm-transfers a call to a scheduling-team member (no queue — dialed as an individual, e.g. Stephanie, Zeel). The recipient's consult leg ends mid-consult; server cancels the transfer and rejoins the customer to the originating agent. Originating agent experiences it as a failed transfer.
+**Verified case:** 2026-06-05 ~10:35am AEST — Hazel → Stephanie (ext 1104), consult ran 62s then Stephanie's leg ended. Customer (Kaye Wilson) was rejoined to Hazel, not dropped — the rejoin safety net worked.
+**Cause:** Not yet confirmed. The recipient leg ended cleanly: carrier `status=completed`, only a bare `sdk-disconnect` (no warning/reconnecting/error despite handlers being wired at `phone.html:_wireCallDiagnostics`), and no server-side hangup by the recipient. Evidence leans *against* media throttling. Recipient's tab was backgrounded (`visibility:hidden`); the open question is whether Chrome froze the tab (which kills WebRTC without firing SDK warnings) vs. a clean disconnect from another path. Voice Insights Advanced is off on the account (no media telemetry, not retroactive).
+**Instrumentation (commit dce6105):** Page-lifecycle events (`page-freeze`/`page-resume`/`visibility`/`pagehide`) now logged into the per-call diagnostic buffer. Next recurrence: a `page-freeze` immediately before `sdk-disconnect` confirms backgrounded-tab death (→ push recipients to the PWA); no freeze → hunt what disconnected the leg.
+**Mitigation:** Scheduling recipients advised to use the PWA (separate window, not throttled). Unproven until tracing catches a freeze.
