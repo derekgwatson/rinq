@@ -39,3 +39,19 @@ Issues found during testing, noted for follow-up. Not blocking production.
 **Cause:** Not yet confirmed. The recipient leg ended cleanly: carrier `status=completed`, only a bare `sdk-disconnect` (no warning/reconnecting/error despite handlers being wired at `phone.html:_wireCallDiagnostics`), and no server-side hangup by the recipient. Evidence leans *against* media throttling. Recipient's tab was backgrounded (`visibility:hidden`); the open question is whether Chrome froze the tab (which kills WebRTC without firing SDK warnings) vs. a clean disconnect from another path. Voice Insights Advanced is off on the account (no media telemetry, not retroactive).
 **Instrumentation (commit dce6105):** Page-lifecycle events (`page-freeze`/`page-resume`/`visibility`/`pagehide`) now logged into the per-call diagnostic buffer. Next recurrence: a `page-freeze` immediately before `sdk-disconnect` confirms backgrounded-tab death (→ push recipients to the PWA); no freeze → hunt what disconnected the leg.
 **Mitigation:** Scheduling recipients advised to use the PWA (separate window, not throttled). Unproven until tracing catches a freeze.
+
+**Update 2026-06-17 — tab-freeze ruled out for this case; scope quantified; PWA experiment running:**
+- Recurrence: Hazel → Rhae (ext 6883), 3 consecutive warm transfers, consults ran 56s/86s/25s then the recipient leg dropped each time. Rejoin worked, customer not lost. Hazel has a long history of *completing* warm transfers — not training.
+- Recipient diagnostics on all 3: `visibility:"visible"`, `online:true`, bare `sdk-disconnect`, and crucially **no `page-freeze`** in the buffer (the dce6105 instrumentation fired nothing). → backgrounded-tab-freeze is RULED OUT for a foregrounded tab; the WebRTC media leg dropped while visible. Points at recipient network/connection.
+- **Scope: NOT systemic — concentrated in ~4 (likely remote) scheduling recipients.** Per-recipient mid-consult drop rate, last 6 wks: Rhae 28% (102 received), Zeel 25% (75), Cid 21% (74), Stephanie 23% (42) vs controls Philip 8% (24), Brittany 12% (24). Baseline ~8-12% is mostly legitimate consult-then-cancel; the 4 sit 2-3× above it. Steady for ~2 months — under-reported because the rejoin keeps the customer, so agents silently retry/call direct.
+- **Experiment in progress:** Rhae moved browser→PWA on 2026-06-17. **Re-check her drop rate ~2026-06-24.** If it falls to ~10% baseline → roll PWA to Zeel/Cid/Stephanie, no code change. If it stays ~25% on PWA → it's their underlying network (IT/connectivity), still not a Rinq code fix. Only if both fail is consult-leg hardening justified: ring the recipient's full device set (browser + SIP + mobile `forward_to`) like blind transfer's `_build_extension_dial_twiml` already does — warm currently rings ONLY `client:` — and/or auto re-ring a mid-consult drop instead of cancelling.
+
+**Re-check query** (per-recipient drop rate; against `data/tenants/watson/rinq.db`):
+```sql
+WITH starts AS (SELECT substr(details, instr(details,'for ')+4, 34) AS call_sid, target AS ext
+  FROM activity_log WHERE action='call_transfer_warm_start' AND performed_at > DATE('now','-42 days')),
+fails AS (SELECT target AS call_sid FROM activity_log
+  WHERE action='call_transfer_failed' AND details LIKE '%: completed' AND performed_at > DATE('now','-42 days'))
+SELECT s.ext, COUNT(*) received, SUM(s.call_sid IN (SELECT call_sid FROM fails)) drops
+FROM starts s WHERE s.ext GLOB '[0-9][0-9][0-9][0-9]' GROUP BY s.ext HAVING received>=10 ORDER BY received DESC;
+```
