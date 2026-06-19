@@ -48,6 +48,16 @@ class CallerEnrichmentService:
             'priority_reason': 'No customer record found',
         }
 
+        # Guard: withheld caller ID ('anonymous') and malformed/short numbers
+        # can't identify anyone. Looking them up against fuzzy substring search
+        # returns false matches (see is_lookupable_number), so bail early and
+        # treat the caller as anonymous instead of stamping a wrong customer.
+        from rinq.services.phone import is_lookupable_number
+        if not is_lookupable_number(phone_number):
+            result['call_history'] = {'total_calls': 0, 'recent_calls': [], 'last_call_date': None}
+            result['priority_reason'] = 'Anonymous / withheld caller'
+            return result
+
         # Step 1: Look up call history from local database (always do this)
         # Even for unknown callers, we may have talked to them before
         call_history = self._lookup_call_history(phone_number)
@@ -91,7 +101,9 @@ class CallerEnrichmentService:
         old number).
         """
         try:
-            from rinq.services.phone import to_e164
+            from rinq.services.phone import to_e164, is_lookupable_number
+            if not is_lookupable_number(phone_number):
+                return None
             normalized = to_e164(phone_number)
             db = get_db()
             cached = db.get_active_queue_enrichment(normalized)

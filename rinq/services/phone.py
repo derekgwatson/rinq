@@ -70,6 +70,23 @@ def to_local(number: str) -> str:
     return number
 
 
+def is_lookupable_number(number: str) -> bool:
+    """True if a string is a real phone number worth a CRM/identity lookup.
+
+    Withheld caller ID arrives as 'anonymous'/'restricted'/'unavailable' or an
+    empty string; spoofed or malformed numbers are too short to identify anyone.
+    Feeding any of these into a fuzzy substring search returns false matches
+    (e.g. 'anonymous' substring-hits a customer whose email is
+    'anonymousdane117@gmail.com', and an empty term matches every customer), so
+    callers should skip enrichment for them and treat the caller as anonymous.
+    """
+    if not number:
+        return False
+    digits = ''.join(c for c in number if c.isdigit())
+    # AU local subscriber numbers are 8 digits; anything shorter can't identify.
+    return len(digits) >= 8
+
+
 def normalize_au_mobile(number: str) -> str | None:
     """Normalize an Australian mobile to +614 format, or return None."""
     if not number:

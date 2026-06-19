@@ -31,7 +31,12 @@ class WatsonCustomerLookup(CustomerLookup):
 
     def find_by_phone(self, phone_number: str) -> Optional[dict]:
         try:
-            from rinq.services.phone import to_local
+            from rinq.services.phone import to_local, is_lookupable_number
+            # Defence-in-depth: never search Clara with a non-identifying term
+            # (withheld 'anonymous' ID, empty, or too-short number). A fuzzy
+            # substring search would return a false match.
+            if not is_lookupable_number(phone_number):
+                return None
             search_phone = to_local(phone_number.replace(' ', '').replace('-', ''))
 
             response = self.client.get('/api/customers', params={'q': search_phone, 'limit': 1})
