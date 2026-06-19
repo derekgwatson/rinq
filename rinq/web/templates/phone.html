@@ -3627,6 +3627,7 @@ function endCall() {
             events: callDiagnostics.slice(),
             ua: navigator.userAgent,
             display_mode: displayMode,
+            app_version: window.RINQ_BUILD || null,
             visibility: document.visibilityState,
             online: navigator.onLine,
             connection: conn ? {

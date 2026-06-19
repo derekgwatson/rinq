@@ -101,6 +101,10 @@ def inject_globals():
         ctx['product_name'] = tenant['product_name']
     else:
         ctx['product_name'] = config.product_name
+    # Build identity the page was served with — the client compares this
+    # against /api/version to detect it's running a stale build (notably a
+    # long-open PWA window that never reloaded). See issue #7.
+    ctx['app_version'] = config.git_hash or ''
     return ctx
 
 # Import blueprints AFTER auth is initialized
@@ -183,6 +187,20 @@ def health():
         'bot': config.name,
         'version': config.version,
         'git_hash': config.git_hash,
+    })
+
+
+@app.route('/api/version')
+def api_version():
+    """Current server build — polled by the client to detect a stale page.
+
+    Lightweight and unauthenticated (just a git hash + deploy time, no
+    sensitive data) so a long-open PWA/tab can cheaply check whether it's
+    running an out-of-date build and prompt the user to refresh. See issue #7.
+    """
+    return jsonify({
+        'version': config.git_hash or '',
+        'deploy_time': config.git_deploy_time or '',
     })
 
 

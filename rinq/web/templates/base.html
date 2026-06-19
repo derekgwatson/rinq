@@ -228,6 +228,19 @@
     </style>
 </head>
 <body>
+    <!-- New-version-available banner: shown when the running page is on an
+         older build than the server (e.g. a long-open PWA window). Slim,
+         non-modal, user clicks Refresh when they're between calls. See issue #7. -->
+    <div id="updateAvailableBanner" style="display: none; position: fixed; top: 0; left: 0; right: 0; z-index: 10000; background: linear-gradient(135deg, #2563eb, #1d4ed8); color: #fff; padding: 10px 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.25); font-size: 15px;">
+        <div style="max-width: 1100px; margin: 0 auto; display: flex; align-items: center; gap: 14px; justify-content: center; flex-wrap: wrap;">
+            <span style="font-size: 18px;">🔄</span>
+            <strong>A new version of {{ product_name }} is available.</strong>
+            <span style="opacity: 0.9;">Refresh to update (finish your current call first).</span>
+            <button onclick="window.applyUpdate && window.applyUpdate()" style="white-space: nowrap; background: #fff; color: #1d4ed8; border: none; border-radius: 6px; padding: 6px 16px; font-weight: 600; cursor: pointer;">Refresh now</button>
+            <button onclick="document.getElementById('updateAvailableBanner').style.display='none'" title="Dismiss until next check" style="background: transparent; color: #fff; border: 1px solid rgba(255,255,255,0.5); border-radius: 6px; padding: 6px 12px; cursor: pointer;">Later</button>
+        </div>
+    </div>
+
     <!-- Global queue notification banner -->
     <div class="incoming-call-banner" id="globalIncomingCall">
         <div class="call-info">
@@ -393,6 +406,42 @@
                 console.log('SW registration failed:', e.message);
             });
         }
+
+        // ---- Stale-build detection ---------------------------------------
+        // The build this page was served with. The server's /api/version
+        // returns the CURRENT build; if they differ, the page is stale (the
+        // usual culprit is a PWA window left open for days). We surface a
+        // clear banner rather than silently running old softphone code.
+        window.RINQ_BUILD = {{ app_version | tojson }};
+        window.applyUpdate = function() {
+            // No-cache SW + ProxyFix mean a plain reload pulls fresh assets.
+            // Nudge the SW to update too, then hard-reload.
+            try {
+                if ('serviceWorker' in navigator) {
+                    navigator.serviceWorker.getRegistration().then(r => { if (r) r.update(); }).catch(() => {});
+                }
+            } catch (e) {}
+            location.reload();
+        };
+        async function checkForUpdate() {
+            if (!window.RINQ_BUILD) return;  // dev/no VERSION file — nothing to compare
+            try {
+                const r = await fetch('/api/version', { credentials: 'same-origin', cache: 'no-store' });
+                if (!r.ok) return;
+                const data = await r.json();
+                if (data.version && data.version !== window.RINQ_BUILD) {
+                    const banner = document.getElementById('updateAvailableBanner');
+                    if (banner) banner.style.display = '';
+                }
+            } catch (e) { /* offline / transient — try again next tick */ }
+        }
+        // Check on load, every 5 min, and whenever the window regains focus
+        // (catches a PWA window that was idle in the background for days).
+        checkForUpdate();
+        setInterval(checkForUpdate, 5 * 60 * 1000);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') checkForUpdate();
+        });
 
         // Capture the install prompt
         let deferredPrompt = null;
