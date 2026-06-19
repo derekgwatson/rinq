@@ -3604,6 +3604,20 @@ function endCall() {
     // `short_call` stays as a flag in the payload for easy grepping.
     if (endSid) {
         const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+        // PWA vs browser-tab detection. A PWA (installed app window) sends the
+        // SAME user-agent as a normal tab, so the UA can't tell them apart —
+        // this is the only signal that can. Critical for the issue-#7 warm-
+        // transfer drop investigation: it's how we confirm whether a dropping
+        // recipient (e.g. scheduling staff asked to move to the PWA) was
+        // actually in the PWA when their leg dropped, rather than assuming it.
+        let displayMode = 'browser';
+        try {
+            if (window.matchMedia('(display-mode: standalone)').matches
+                || window.matchMedia('(display-mode: window-controls-overlay)').matches
+                || window.navigator.standalone === true) {
+                displayMode = 'standalone';
+            }
+        } catch (e) { /* matchMedia unsupported — leave as 'browser' */ }
         const payload = {
             call_sid: endSid,
             queue_call: wasQueue,
@@ -3612,6 +3626,7 @@ function endCall() {
             short_call: wasQueue && queueDurationSecs > 0 && queueDurationSecs < 15,
             events: callDiagnostics.slice(),
             ua: navigator.userAgent,
+            display_mode: displayMode,
             visibility: document.visibilityState,
             online: navigator.onLine,
             connection: conn ? {
