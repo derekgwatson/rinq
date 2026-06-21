@@ -2716,6 +2716,13 @@ let isRecording = false;
 let recordingEnabled = true;  // User preference — NOT reset between calls
 let currentRecordingSid = null;
 let customerContext = null;
+// The caller-number (digits only) the context pane is currently showing, and a
+// monotonic request token. A queue call rings several agents at once, so
+// lookups for different callers can be in flight together; these let a newer
+// lookup supersede an older one so the slowest HTTP response can't stamp the
+// wrong caller onto the panel during your call.
+let customerContextNumber = null;
+let customerContextSeq = 0;
 // Diagnostic events captured from the Twilio Voice SDK during a call.
 // Posted to /api/voice/call-diagnostic in endCall() so we can debug drops
 // after the fact (audio issues, network reconnects, SDK errors).
@@ -2740,6 +2747,8 @@ function resetCallState() {
     isRecording = false;
     currentRecordingSid = null;
     customerContext = null;
+    customerContextNumber = null;
+    customerContextSeq++;  // invalidate any in-flight context lookup
     callDiagnostics = [];
     // Transfer state (declared later but reset here for completeness)
     if (typeof currentTransferKey !== 'undefined') {
@@ -3095,6 +3104,13 @@ async function initPhone() {
                 if (currentCall === call) {
                     currentCall = null;
                     clearCustomerContext();
+                } else if (customerContextNumber && customerContextNumber === _ctxDigits(from)) {
+                    // This ring rang us but was answered elsewhere (queue calls
+                    // ring several agents) or missed, while we're on a different
+                    // call. The panel is still showing THIS ring's caller, which
+                    // isn't who we're talking to — clear it so it can't be
+                    // mistaken for the active call's customer.
+                    clearCustomerContext();
                 }
                 if (callNotification) callNotification.close();
             });
@@ -3277,6 +3293,12 @@ function updateDisplay() {
 // Customer Context Functions
 // =============================================================================
 
+// Digits-only tail of a number, for comparing caller identities regardless of
+// formatting (+61415..., 0415..., spaces/dashes all normalise to the same key).
+function _ctxDigits(s) {
+    return (s || '').toString().replace(/\D/g, '').slice(-9);
+}
+
 // Fetch customer context by phone number
 async function fetchCustomerContext(phone) {
     if (!phone || phone.length < 8) {
@@ -3284,17 +3306,29 @@ async function fetchCustomerContext(phone) {
         return;
     }
 
+    // Claim a request token. If another lookup (or a clear) happens while this
+    // one is awaiting the network, customerContextSeq moves on and we discard
+    // this result — the last-issued lookup wins, not the last HTTP response to
+    // arrive. This is what stops a concurrently-ringing call's details landing
+    // on the panel during the call you actually answered.
+    const seq = ++customerContextSeq;
+    const reqDigits = _ctxDigits(phone);
+
     try {
         const response = await fetch(`/api/customers/lookup?phone=${encodeURIComponent(phone)}`);
+        if (seq !== customerContextSeq) return;  // superseded — drop
         if (response.ok) {
-            customerContext = await response.json();
+            const data = await response.json();
+            if (seq !== customerContextSeq) return;  // re-check after awaiting body
+            customerContext = data;
+            customerContextNumber = reqDigits;
             renderCustomerContext(phone);
-        } else {
+        } else if (seq === customerContextSeq) {
             clearCustomerContext();
         }
     } catch (error) {
         console.error('Error fetching customer context:', error);
-        clearCustomerContext();
+        if (seq === customerContextSeq) clearCustomerContext();
     }
 }
 
@@ -3401,6 +3435,8 @@ function renderCustomerContext(displayPhone) {
 // Clear customer context pane
 function clearCustomerContext() {
     customerContext = null;
+    customerContextNumber = null;
+    customerContextSeq++;  // invalidate any in-flight lookup so it can't repopulate
     contextEmpty.innerHTML = '<p>Enter a number or answer a call to see customer info</p>';
     contextEmpty.style.display = 'block';
     contextContent.style.display = 'none';
