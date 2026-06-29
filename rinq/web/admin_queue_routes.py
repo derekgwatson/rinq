@@ -52,6 +52,9 @@ def register(bp):
         name = request.form.get('name', '').strip()
         description = request.form.get('description', '').strip()
         ring_strategy = request.form.get('ring_strategy', 'simultaneous')
+        ring_timeout = request.form.get('ring_timeout', '30')
+        ring_timeout = int(ring_timeout) if ring_timeout else 30
+        ring_timeout = max(5, min(ring_timeout, 120))
         allow_self_service = request.form.get('allow_self_service') == '1'
         allow_voicemail_escape = request.form.get('allow_voicemail_escape') == '1'
         offer_callback = request.form.get('offer_callback') == '1'
@@ -78,6 +81,7 @@ def register(bp):
                     'name': name,
                     'description': description or None,
                     'ring_strategy': ring_strategy,
+                    'ring_timeout': ring_timeout,
                     'allow_self_service': allow_self_service,
                     'allow_voicemail_escape': allow_voicemail_escape,
                     'offer_callback': offer_callback,
@@ -168,6 +172,9 @@ def register(bp):
         name = request.form.get('name', '').strip()
         description = request.form.get('description', '').strip()
         ring_strategy = request.form.get('ring_strategy', 'simultaneous')
+        ring_timeout = request.form.get('ring_timeout', '30')
+        ring_timeout = int(ring_timeout) if ring_timeout else 30
+        ring_timeout = max(5, min(ring_timeout, 120))
         allow_self_service = request.form.get('allow_self_service') == '1'
         allow_voicemail_escape = request.form.get('allow_voicemail_escape') == '1'
         offer_callback = request.form.get('offer_callback') == '1'
@@ -197,6 +204,7 @@ def register(bp):
                     'name': name,
                     'description': description or None,
                     'ring_strategy': ring_strategy,
+                    'ring_timeout': ring_timeout,
                     'allow_self_service': allow_self_service,
                     'allow_voicemail_escape': allow_voicemail_escape,
                     'offer_callback': offer_callback,

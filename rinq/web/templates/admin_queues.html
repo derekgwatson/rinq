@@ -218,6 +218,19 @@
                             </select>
                         </div>
                         <div>
+                            <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em;">Ring agents for</label>
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                                <input type="number" name="ring_timeout"
+                                       value="{{ queue.ring_timeout if queue.ring_timeout else 30 }}"
+                                       min="5" max="120"
+                                       style="width: 80px; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                <span style="font-size: 0.9em; color: #666;">seconds</span>
+                            </div>
+                            <p class="text-muted" style="margin: 3px 0 0 0; font-size: 0.8em;">
+                                How long calls ring the team before going to the receptionist / voicemail
+                            </p>
+                        </div>
+                        <div>
                             <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em;">Hold Music</label>
                             <select name="hold_music_id" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
                                 <option value="">Default (Clockwork Waltz)</option>
@@ -437,6 +450,14 @@
                     <option value="round_robin">Round Robin</option>
                     <option value="sequential">Sequential</option>
                 </select>
+            </div>
+            <div>
+                <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em;">Ring agents for</label>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <input type="number" name="ring_timeout" value="30" min="5" max="120"
+                           style="width: 90px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
+                    <span style="font-size: 0.9em; color: #666;">seconds</span>
+                </div>
             </div>
             <div>
                 <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em;">Hold Music</label>
