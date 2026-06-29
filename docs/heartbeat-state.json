@@ -1,27 +1,27 @@
 {
   "_description": "System health snapshot for Rinq. Updated at end of sessions.",
-  "_last_updated": "2026-06-22",
+  "_last_updated": "2026-06-29",
   "_last_updated_by": "wrap-up",
-  "_notes": "2026-06-22: No Rinq code changed — the fix shipped to Clara (bot-team commit c36bf79). Britt's recurring 'caller details don't match' bug root-caused to Clara: a number (0456477779 = Edward Hallett) also sat on another customer (Michael Weaver) as a malformed contact value '0456477779 - Edward ( Tenant )' from Buz; Clara's phone search ordered only by updated_at, so the wrong record (last-synced) won. Fixed by ranking phone search by match quality (exact-primary > exact-secondary > substring). Distinct from the just-pulled Rinq race fix 2d2583a (panel number == active-call number here, so a refresh does NOT help). NOTE: heartbeat lapsed Apr 22 → Jun 22; structural sections below (tenants/integrations/known_issues) may be stale — verify before relying.",
+  "_notes": "2026-06-29: Chris (Watson) asked to send unanswered incoming calls to voicemail after 20s. The ring-before-voicemail timeout already existed (queues.ring_timeout, default 30s) but had no UI control AND was being silently reset to 30 on every queue save (the admin update route omitted ring_timeout while db.update_queue defaults missing keys via data.get('ring_timeout', 30)). Two commits: 9295f70 added the field to the admin create/edit forms and wired it through both routes (fixes the silent reset); 38f816b added a least-privilege manager path (db.set_queue_ring_timeout single-column setter + @manager_required /admin/queue/<id>/ring-timeout route re-checking is_queue_manager + control on /queues) so Chris can set it without full admin. Derek then assigned Chris as Manager + queue manager via the deployed UI. NOTE: ring timeout only governs how long phones ring; after it expires the call goes to the queue's no-answer action (defaults to AI receptionist, NOT plain voicemail) — true plain-voicemail-after-20s needs the no-answer action changed on the Call Flows page (admin-only, NOT done).",
   "repo": {
     "branch": "main",
     "remote": "derekgwatson/rinq",
-    "status": "clean (no Rinq commits this session; fix was in bot-team)",
+    "status": "clean (ring-timeout work shipped: 9295f70, 38f816b)",
     "local_origin": "git@github-work:derekgwatson/rinq.git",
     "server_origin": "git@github.com:derekgwatson/rinq.git",
     "recent_commits": [
+      "38f816b feat: let queue managers set ring timeout from the /queues page (no admin needed)",
+      "9295f70 feat: make queue ring-timeout editable in admin UI (fixes silent reset to 30s)",
+      "1f881e7 docs: session log 2026-06-22 (Clara phone-search owner-ranking fix)",
       "2d2583a fix: stop a concurrently-ringing call's customer details landing on the panel",
       "93fe55a docs: issue #7 — Cid recurrence classified, stale-PWA + version-stamp shipped",
       "c120bf7 feat: detect & surface stale client builds; stamp app_version in diagnostics",
       "5f97222 diag: record PWA-vs-tab (display_mode) in call diagnostics (issue #7)",
       "487370e fix: don't enrich anonymous/withheld callers (the 'DANE OLIVERI' bug)",
       "0311386 docs: known-issue #7 — tab-freeze ruled out, scope quantified, PWA experiment",
-      "c616df7 docs: track warm-transfer recipient-leg drop (known issue #7)",
-      "dce6105 diag: log page-lifecycle events (freeze/resume/visibility/pagehide)",
-      "e143c98 Revert 'refactor: unify queue + inbound ring-status callbacks into one endpoint'",
-      "68074c6 refactor: unify queue + inbound ring-status callbacks into one endpoint"
+      "c616df7 docs: track warm-transfer recipient-leg drop (known issue #7)"
     ],
-    "related_bot_team_commit": "c36bf79 fix(clara): rank phone search by who actually owns the number (deployed to do-work, Clara restarted 11:47:36 UTC)"
+    "related_bot_team_commit": "c36bf79 fix(clara): rank phone search by who actually owns the number (deployed 2026-06-22 to do-work)"
   },
   "migrations": {
     "latest": 76,
@@ -61,6 +61,7 @@
     "notes": "Manual test focus for 2026-04-22 changes: outbound call to a busy/non-answering number should show prominent amber outcome banner above dialpad that persists after hangup; next Watson voicemail delivery should appear in the recordings group inbox sent from mabel.bot@watsonblinds.com.au."
   },
   "pending_operations": [
+    "2026-06-29: Plain voicemail after 20s for Chris/Watson — ring timeout now editable, but unanswered calls still hit the AI receptionist (queue no-answer action). To send to plain voicemail instead, change the queue's no-answer action on the Call Flows page (admin-only). Awaiting Derek's call.",
     "2026-06-22: Clara/Buz data hygiene — names-in-phone-fields like '0456477779 - Edward ( Tenant )' are dirty and likely numerous; consider a sync-time normalisation pass to strip names out of phone values (ranking fix handles it regardless). Separate bot-team job.",
     "Per-tenant email provider selection: deferred pending IP-ownership discussion for multi-tenant model",
     "2026-04-20: Audit blind transfer + 3-way extension flows for endConferenceOnExit restore bug",
