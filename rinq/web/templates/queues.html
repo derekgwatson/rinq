@@ -94,6 +94,25 @@
                 </div>
             </form>
         </div>
+
+        <!-- Ring timeout -->
+        <form method="post" action="{{ url_for('web.set_queue_ring_timeout', queue_id=queue.id) }}" style="margin: 0;">
+            <div class="pause-form-inline">
+                <div>
+                    <label style="display: block; font-size: 0.8em; color: #666; margin-bottom: 3px;">
+                        Ring agents for
+                    </label>
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <input type="number" name="ring_timeout"
+                               value="{{ queue.ring_timeout if queue.ring_timeout else 30 }}"
+                               min="5" max="120"
+                               style="width: 80px; padding: 6px 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 0.9em;">
+                        <span style="font-size: 0.85em; color: #666;">seconds before voicemail</span>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-small">Save</button>
+            </div>
+        </form>
     </div>
 
     <!-- Action buttons -->

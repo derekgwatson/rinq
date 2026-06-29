@@ -1793,6 +1793,18 @@ class Database(StatsMixin, CallLogMixin):
             """, (queue_id, user_email.lower())).fetchone()
             return row is not None
 
+    def set_queue_ring_timeout(self, queue_id: int, ring_timeout: int, updated_by: str) -> None:
+        """Update ONLY a queue's ring timeout (seconds before falling through to
+        the no-answer action). Scoped method so queue managers can change this one
+        setting without the full update_queue surface."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            conn.execute("""
+                UPDATE queues SET ring_timeout = ?, updated_at = ?, updated_by = ?
+                WHERE id = ?
+            """, (ring_timeout, now, updated_by, queue_id))
+            conn.commit()
+
     def schedule_queue_pause(self, queue_id: int, paused_from: str, paused_until: str, updated_by: str) -> None:
         """Set a scheduled pause window on a queue (UTC ISO strings)."""
         now = datetime.now(timezone.utc).isoformat()

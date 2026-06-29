@@ -337,6 +337,36 @@ def register(bp):
         return redirect(_pause_redirect(queue_id, user))
 
 
+    @bp.route('/admin/queue/<int:queue_id>/ring-timeout', methods=['POST'])
+    @manager_required
+    def set_queue_ring_timeout(queue_id):
+        """Update just a queue's ring timeout. Available to queue managers (not
+        only admins) so they can self-serve this one setting without admin access."""
+        user = get_current_user()
+        db = get_db()
+
+        if not user.is_admin and not db.is_queue_manager(queue_id, user.email):
+            return "Access denied", 403
+
+        raw = request.form.get('ring_timeout', '').strip()
+        try:
+            ring_timeout = int(raw)
+        except (TypeError, ValueError):
+            flash("Ring timeout must be a whole number of seconds.", "error")
+            return redirect(_pause_redirect(queue_id, user))
+        ring_timeout = max(5, min(ring_timeout, 120))
+
+        db.set_queue_ring_timeout(queue_id, ring_timeout, _audit_tag(user))
+        db.log_activity(
+            action="set_queue_ring_timeout",
+            target=str(queue_id),
+            details=f"Ring timeout set to {ring_timeout}s",
+            performed_by=_audit_tag(user)
+        )
+        flash(f"Calls now ring for {ring_timeout} seconds before going to voicemail.", "success")
+        return redirect(_pause_redirect(queue_id, user))
+
+
     @bp.route('/admin/queue/<int:queue_id>/delete', methods=['POST'])
     @admin_required
     def delete_queue(queue_id):
