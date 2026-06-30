@@ -3623,6 +3623,21 @@ class Database(StatsMixin, CallLogMixin):
             conn.commit()
             return cursor.rowcount
 
+    def seconds_since_last_ring_attempt(self, group_key: str) -> float | None:
+        """Seconds since the most recent ring attempt for a group, or None if none.
+
+        Used by the queue re-ring to avoid re-ringing a caller's agents again
+        before the previous burst has had time to time out. created_at is stored
+        in UTC (datetime('now')), matching julianday('now').
+        """
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT (julianday('now') - julianday(MAX(created_at))) * 86400 AS age"
+                " FROM ring_attempts WHERE group_key = ?",
+                (group_key,)
+            ).fetchone()
+            return row['age'] if row and row['age'] is not None else None
+
     # ── Local permissions ─────────────────────────────────────────────
 
     def get_permissions(self, role_filter: list[str] = None) -> list[dict]:

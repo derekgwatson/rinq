@@ -496,7 +496,7 @@ def _is_queue_paused(queue: dict) -> bool:
     return True
 
 
-def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: str, our_caller_id: str, customer_call_sid: str, base_url: str = None):
+def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: str, our_caller_id: str, customer_call_sid: str, base_url: str = None, skip_emails: set = None, voicemail_on_empty: bool = True):
     """Initiate outbound calls to all agents when a caller enters the queue.
 
     This implements "queue with auto-ring" - callers wait in queue with hold music
@@ -508,6 +508,12 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
         customer_caller_id: The customer's phone number (used for SIP so agents see who's calling)
         our_caller_id: Our Twilio number (required for mobile calls - can only use numbers we own)
         customer_call_sid: The call SID of the customer waiting in queue
+        skip_emails: Agents to NOT ring this round (e.g. already on a call). Used by
+            the periodic re-ring while a caller waits, so we don't interrupt anyone
+            mid-call.
+        voicemail_on_empty: When True (the initial entry ring), send the caller to
+            voicemail if no agent can be rung. When False (a re-ring), do nothing on
+            empty — the caller keeps waiting; queue_wait owns the give-up decision.
     """
     import threading
 
@@ -515,6 +521,7 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
     # the background thread won't have access to flask.g
     sip_domain = _get_sip_domain()
     db = get_db()
+    skip_emails = skip_emails or set()
 
     def ring_agents():
         try:
@@ -522,9 +529,13 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
 
             # Get queue members
             members = db.get_queue_members(queue_id)
-            active_members = [m for m in members if m.get('is_active')]
+            active_members = [m for m in members
+                              if m.get('is_active') and m.get('user_email') not in skip_emails]
 
             if not active_members:
+                if not voicemail_on_empty:
+                    logger.info(f"Re-ring for queue {queue_name}: no free agents to ring this cycle")
+                    return
                 logger.warning(f"No active members in queue {queue_name} to ring")
                 _send_queue_caller_to_voicemail(
                     queue_id, customer_call_sid,
@@ -617,6 +628,10 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
                     return
 
             if calls_initiated == 0:
+                if not voicemail_on_empty:
+                    # Re-ring round rang nobody (all free agents on DND/unreachable) —
+                    # leave the caller waiting; don't divert them to voicemail.
+                    return
                 # All active members were on DND or unreachable — no point leaving caller on hold
                 logger.info(f"No agents available for queue {queue_name} (all DND?) — sending customer to voicemail")
                 _send_queue_caller_to_voicemail(
@@ -3288,6 +3303,40 @@ def queue_wait(queue_id):
     <Leave/>
 </Response>'''
             return Response(twiml, mimetype='application/xml')
+
+    # Continuous re-ring (rollout-flagged 'queue_continuous_ring', default off):
+    # while a caller waits, ring agents who are available and NOT already on a
+    # call, so a freed-up agent's phone rings instead of the caller sitting
+    # unanswered until someone watches the dashboard. queue_time_int > 0 means the
+    # entry ring already fired; we only re-ring on later hold cycles (~once per
+    # hold-music play). Busy agents are skipped — they get rung once they hang up.
+    if queue_time_int > 0 and db.get_bot_setting('queue_continuous_ring', '0') == '1':
+        try:
+            stored = db.get_queued_call_by_sid(call_sid)
+            # Don't re-ring too soon: the hold-track length (not us) sets the cycle
+            # cadence, so if the previous burst is still within the agent ring
+            # timeout, skip this cycle to avoid overlapping rings to one agent.
+            recent = db.seconds_since_last_ring_attempt(call_sid)
+            too_soon = recent is not None and recent < 30
+            if stored and stored.get('status') == 'waiting' and not too_soon:
+                # Skip agents already on a call. Use Twilio ground truth (call_log
+                # agent + call_participants cross-checked against live SIDs) — a
+                # bare `left_at IS NULL` is unreliable and would mark agents busy
+                # for hours. Busy agents get rung once they free up.
+                busy = {c['agent_email'].lower() for c in _get_active_calls_from_twilio()
+                        if c.get('agent_email')}
+                try:
+                    busy.update(db.get_active_agent_emails(active_sids=_get_active_call_sids()))
+                except Exception:
+                    pass
+                get_twilio_service().capture_for_thread()
+                _ring_agents_for_queue(
+                    queue_id, queue.get('name'), from_number, called_number,
+                    call_sid, base_url=config.webhook_base_url,
+                    skip_emails=busy, voicemail_on_empty=False,
+                )
+        except Exception as e:
+            logger.warning(f"Queue {queue_id} re-ring failed for {call_sid}: {e}")
 
     response_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>']
 
