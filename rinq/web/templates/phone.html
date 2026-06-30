@@ -3534,6 +3534,25 @@ async function makeCall() {
     }
 }
 
+// Beacon to the server that a leg ended deliberately (vs. a network drop), so
+// the auto-reconnect feature won't re-ring a leg the user hung up on purpose.
+// Fire-and-forget; uses sendBeacon so it survives the page being torn down.
+function sendLegIntent(callSid) {
+    if (!callSid) return;
+    try {
+        const body = JSON.stringify({call_sid: callSid, intent: 'hangup'});
+        if (navigator.sendBeacon) {
+            navigator.sendBeacon('/api/voice/leg-intent',
+                new Blob([body], {type: 'application/json'}));
+        } else {
+            fetch('/api/voice/leg-intent', {
+                method: 'POST', credentials: 'same-origin', keepalive: true,
+                headers: {'Content-Type': 'application/json'}, body,
+            }).catch(() => {});
+        }
+    } catch (e) { /* never let intent reporting block a hangup */ }
+}
+
 function hangupCall() {
     // If we're in the middle of a warm-transfer consult, hanging up should
     // act on the transfer, not drop the customer. Agent's mental model:
@@ -3554,6 +3573,12 @@ function hangupCall() {
 
     // Capture call SID before endCall() nulls it
     const callSid = currentCall?.parameters?.CallSid || currentOutboundCallSid;
+
+    // Tell the server this leg is ending ON PURPOSE so it doesn't try to
+    // auto-reconnect it as a network drop. Must fire before we disconnect,
+    // while we still have a network path. (No-op unless the reconnect feature
+    // is enabled server-side.)
+    sendLegIntent(callSid);
 
     if (currentCall) {
         currentCall.disconnect();
@@ -5068,6 +5093,14 @@ async function completeTransfer() {
                 isConsulting = false;
                 consultCallSid = null;
                 currentTransferKey = null;
+                // Restore the button — these early-return branches transition out
+                // of consulting, but without this the static btnHandoff node stays
+                // wedged on "Completing…" (the abort timeout was already cleared,
+                // so nothing else recovers it).
+                if (completeBtn) {
+                    completeBtn.disabled = false;
+                    completeBtn.textContent = '✓ Hand off';
+                }
             } else if (data.target_disconnected) {
                 // Target hung up just before hand-off — customer is back with us
                 stopTransferStatusPolling();
@@ -5075,6 +5108,10 @@ async function completeTransfer() {
                 isConsulting = false;
                 consultCallSid = null;
                 currentTransferKey = null;
+                if (completeBtn) {
+                    completeBtn.disabled = false;
+                    completeBtn.textContent = '✓ Hand off';
+                }
                 showCallNotice(data.error || 'Transfer target disconnected — you are back with the caller.');
             } else {
                 showCallNotice(data.error || 'Failed to complete transfer');
@@ -6090,11 +6127,14 @@ function renderCallStatePanel(state) {
         // failed/completed we don't want a stale "ringing…" card lingering.
         const targetInParticipants = allParticipants.some(p => p.isTransferTarget);
         if (!targetInParticipants) {
+            // While auto-reconnect is re-ringing a dropped target, show
+            // "Reconnecting…" rather than the initial-ring "Ringing…".
             extraCard = {
                 call_sid: null,
-                name: transfer.target_name || 'Ringing…',
+                name: transfer.target_name || (transfer.reconnecting ? 'Reconnecting…' : 'Ringing…'),
                 role: 'agent',
-                ringing: true,
+                ringing: !transfer.reconnecting,
+                reconnecting: !!transfer.reconnecting,
                 isTransferTarget: true,
             };
         }
@@ -6129,7 +6169,11 @@ function renderParticipantCard(p, myCallSid) {
     let dotClass = 'connected';
     let statusText = '';
 
-    if (p.ringing) {
+    if (p.reconnecting) {
+        cardClass += ' ringing';
+        dotClass = 'ringing';
+        statusText = 'reconnecting…';
+    } else if (p.ringing) {
         cardClass += ' ringing';
         dotClass = 'ringing';
         statusText = 'ringing…';

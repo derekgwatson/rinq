@@ -3335,6 +3335,143 @@ class Database(StatsMixin, CallLogMixin):
             conn.commit()
             return cursor.rowcount
 
+    # ── Leg-drop auto-reconnect ────────────────────────────────────────
+    # leg_intents: a leg that ended on purpose (user pressed End / Go back)
+    # records its SID here. A network-dropped leg cannot, so ABSENCE of an
+    # intent for an ended leg == a drop we should try to reconnect.
+    # reconnect_attempts: one active row per conference while we re-ring a
+    # dropped client:/SIP leg back in. Both gated by the per-tenant
+    # bot_settings flag 'auto_reconnect_enabled' (default off).
+
+    def record_leg_intent(self, call_sid: str, intent: str = 'hangup') -> None:
+        """Record that a leg ended deliberately (so we don't try to reconnect it)."""
+        if not call_sid:
+            return
+        with self._get_conn() as conn:
+            conn.execute("""
+                INSERT INTO leg_intents (call_sid, intent, created_at)
+                VALUES (?, ?, datetime('now'))
+                ON CONFLICT(call_sid) DO UPDATE SET
+                    intent = excluded.intent,
+                    created_at = excluded.created_at
+            """, (call_sid, intent))
+            conn.commit()
+
+    def get_leg_intent(self, call_sid: str) -> str | None:
+        """Return the recorded intent for a leg ('hangup') or None if it just dropped."""
+        if not call_sid:
+            return None
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT intent FROM leg_intents WHERE call_sid = ?",
+                (call_sid,)
+            ).fetchone()
+            return row['intent'] if row else None
+
+    def cleanup_old_leg_intents(self, max_age_minutes: int = 30) -> int:
+        """Remove stale leg-intent markers (cron safety net)."""
+        with self._get_conn() as conn:
+            cursor = conn.execute(
+                "DELETE FROM leg_intents WHERE created_at < datetime('now', ?)",
+                (f'-{max_age_minutes} minutes',)
+            )
+            conn.commit()
+            return cursor.rowcount
+
+    def upsert_reconnect_attempt(self, conference_name: str, dropped_call_sid: str,
+                                  target_to: str, from_number: str = None,
+                                  role: str = None, name: str = None,
+                                  original_call_sid: str = None,
+                                  context: str = None) -> None:
+        """Start (or restart) a reconnect attempt for a conference.
+
+        One active row per conference. attempt_count starts at 1 (this is the
+        first re-ring). Restarting after an earlier give-up/reconnect resets it.
+        """
+        with self._get_conn() as conn:
+            conn.execute("""
+                INSERT INTO reconnect_attempts (
+                    conference_name, dropped_call_sid, target_to, from_number,
+                    role, name, original_call_sid, context, attempt_count,
+                    status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'reconnecting',
+                          datetime('now'), datetime('now'))
+                ON CONFLICT(conference_name) DO UPDATE SET
+                    dropped_call_sid = excluded.dropped_call_sid,
+                    target_to = excluded.target_to,
+                    from_number = excluded.from_number,
+                    role = excluded.role,
+                    name = excluded.name,
+                    original_call_sid = excluded.original_call_sid,
+                    context = excluded.context,
+                    attempt_count = 1,
+                    status = 'reconnecting',
+                    updated_at = datetime('now')
+            """, (conference_name, dropped_call_sid, target_to, from_number,
+                  role, name, original_call_sid, context))
+            conn.commit()
+
+    def get_reconnect_attempt(self, conference_name: str) -> dict | None:
+        """Return the active reconnect attempt for a conference, or None."""
+        if not conference_name:
+            return None
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM reconnect_attempts WHERE conference_name = ?",
+                (conference_name,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def bump_reconnect_attempt(self, conference_name: str, new_dropped_call_sid: str) -> int:
+        """Record another re-ring: increment count, track the new leg SID.
+
+        Returns the new attempt_count.
+        """
+        with self._get_conn() as conn:
+            conn.execute("""
+                UPDATE reconnect_attempts
+                SET attempt_count = attempt_count + 1,
+                    dropped_call_sid = ?,
+                    status = 'reconnecting',
+                    updated_at = datetime('now')
+                WHERE conference_name = ?
+            """, (new_dropped_call_sid, conference_name))
+            conn.commit()
+            row = conn.execute(
+                "SELECT attempt_count FROM reconnect_attempts WHERE conference_name = ?",
+                (conference_name,)
+            ).fetchone()
+            return row['attempt_count'] if row else 0
+
+    def set_reconnect_status(self, conference_name: str, status: str) -> None:
+        """Update a reconnect attempt's status ('reconnecting'|'reconnected'|'gave_up')."""
+        with self._get_conn() as conn:
+            conn.execute("""
+                UPDATE reconnect_attempts
+                SET status = ?, updated_at = datetime('now')
+                WHERE conference_name = ?
+            """, (status, conference_name))
+            conn.commit()
+
+    def delete_reconnect_attempt(self, conference_name: str) -> None:
+        """Remove a reconnect attempt (resolved or aborted)."""
+        with self._get_conn() as conn:
+            conn.execute(
+                "DELETE FROM reconnect_attempts WHERE conference_name = ?",
+                (conference_name,)
+            )
+            conn.commit()
+
+    def cleanup_old_reconnect_attempts(self, max_age_minutes: int = 30) -> int:
+        """Remove stale reconnect attempts (cron safety net)."""
+        with self._get_conn() as conn:
+            cursor = conn.execute(
+                "DELETE FROM reconnect_attempts WHERE created_at < datetime('now', ?)",
+                (f'-{max_age_minutes} minutes',)
+            )
+            conn.commit()
+            return cursor.rowcount
+
     # ── Call participant tracking ──────────────────────────────────────
     # Source of truth for who is in each active call.
 

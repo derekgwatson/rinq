@@ -813,6 +813,13 @@ class TransferService:
 
             self.db.complete_transfer(call_sid)
 
+            # Clear any in-flight reconnect for this conference (no-op unless the
+            # feature is enabled) — the hand-off is done, don't keep re-ringing.
+            try:
+                self.db.delete_reconnect_attempt(original_conference)
+            except Exception:
+                pass
+
             self.db.log_activity(
                 action="call_transfer_warm_complete",
                 target=transfer_state['transfer_target'],
@@ -901,6 +908,24 @@ class TransferService:
             consult_call_sid = transfer_state.get('transfer_consult_call_sid')
             consult_conference = transfer_state.get('transfer_consult_conference')
             is_three_way = transfer_state.get('transfer_type') == 'three_way'
+
+            # Auto-reconnect guard (no-op unless the feature is enabled):
+            # cancelling kills the consult leg below, which fires the consult-status
+            # callback — without this it could be mistaken for a network drop and
+            # re-ring the target the agent just cancelled. Mark the leg as a
+            # deliberate end, and cancel/clear any reconnect already in flight.
+            try:
+                recon = self.db.get_reconnect_attempt(original_conference)
+                if recon and recon.get('dropped_call_sid'):
+                    try:
+                        self.twilio.client.calls(recon['dropped_call_sid']).update(status='completed')
+                    except Exception:
+                        pass
+                if consult_call_sid:
+                    self.db.record_leg_intent(consult_call_sid, 'cancel')
+                self.db.delete_reconnect_attempt(original_conference)
+            except Exception as e:
+                logger.warning(f"Could not clear reconnect state on cancel for {original_conference}: {e}")
 
             # Remove Agent 2: try conference participant.delete() first (if they've
             # already joined), fall back to cancelling the outbound call (if still ringing).

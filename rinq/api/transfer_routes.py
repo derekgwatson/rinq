@@ -3,6 +3,7 @@
 Extracted from routes.py. Registered via register(api_bp) at import time.
 """
 
+import json
 import logging
 from xml.sax.saxutils import escape as xml_escape
 
@@ -531,6 +532,55 @@ def register(bp):
                     # Cancel button (warm_transfer_cancel) handles the explicit
                     # "give up and resume" path.
                     is_mid_consult_disconnect = (call_status == 'completed' and call_duration > 0)
+
+                    # Auto-reconnect (flagged): if the consult target's leg
+                    # DROPPED mid-consult — not a deliberate hangup — re-ring them
+                    # back into the conference instead of failing. The customer
+                    # stays held and the originating agent keeps their line; only
+                    # the dropped target is missing while we reconnect. Scoped to
+                    # our own softphone legs (client:/sip:), where the intent
+                    # beacon lets us tell a drop from a hangup.
+                    # Gate on transfer_status still 'consulting': a cancel or
+                    # complete sets a different status and also ends the consult
+                    # leg (server-side, with no intent beacon) — we must NOT treat
+                    # those as drops to reconnect.
+                    # Wrapped so ANY failure in the reconnect path falls through
+                    # to the normal salvage below — reconnect must never be able to
+                    # break the existing mid-consult handling.
+                    try:
+                        if (is_mid_consult_disconnect
+                                and transfer_status_db == 'consulting'
+                                and _auto_reconnect_enabled(db)
+                                and not db.get_leg_intent(consult_call_sid)
+                                and not db.get_reconnect_attempt(conference_name)
+                                and _others_present(conference_name, db, exclude_sid=consult_call_sid)):
+                            target_to = _resolve_consult_target_to(transfer_state, db)
+                            if target_to and (target_to.startswith('client:')
+                                              or target_to.startswith('sip:')):
+                                started = start_leg_reconnect(
+                                    conference_name, target_to,
+                                    from_number=_consult_caller_id(original_call, db),
+                                    role='agent_no_exit',
+                                    name=transfer_state.get('transfer_target_name'),
+                                    original_call_sid=original_call,
+                                    context=json.dumps({'kind': 'transfer', 'source': source}),
+                                    db=db,
+                                )
+                                if started:
+                                    db.log_activity(
+                                        action="call_transfer_reconnect",
+                                        target=original_call,
+                                        details=f"Transfer target {transfer_state.get('transfer_target_name')} "
+                                                f"dropped mid-consult — reconnecting",
+                                        performed_by="twilio",
+                                    )
+                                    logger.info(f"Mid-consult drop for {original_call} — "
+                                                f"reconnecting target instead of failing")
+                                    return '', 200
+                    except Exception as e:
+                        logger.warning(f"Auto-reconnect attempt failed for {original_call}, "
+                                       f"falling back to salvage: {e}")
+
                     if is_mid_consult_disconnect:
                         _unhold_and_rejoin_agent(conference_name, consult_conference)
 
@@ -555,6 +605,133 @@ def register(bp):
                 details=f"Transfer target did not answer: {call_status}",
                 performed_by="twilio"
             )
+
+        return '', 200
+
+    @bp.route('/voice/leg-intent', methods=['POST'])
+    def leg_intent():
+        """Record that a call leg ended on purpose (user pressed End / Go back).
+
+        Posted by the softphone via navigator.sendBeacon just before it
+        disconnects, so the server can tell a deliberate hangup apart from a
+        network drop. No auth: it only records a marker keyed by a Twilio call
+        SID and is harmless. Body may arrive as JSON or text/plain (sendBeacon).
+        """
+        call_sid = None
+        try:
+            data = request.get_json(silent=True)
+            if not data:
+                import json as _json
+                raw = request.get_data(as_text=True) or ''
+                data = _json.loads(raw) if raw else {}
+            call_sid = (data or {}).get('call_sid')
+        except Exception:
+            call_sid = None
+        if call_sid:
+            try:
+                get_db().record_leg_intent(call_sid, (data or {}).get('intent', 'hangup'))
+            except Exception as e:
+                logger.warning(f"Could not record leg intent for {call_sid}: {e}")
+        return '', 204
+
+    @bp.route('/voice/reconnect-status', methods=['POST'])
+    def reconnect_status():
+        """Status callback for a leg we're re-ringing back into a conference.
+
+        Drives the reconnect retry loop: on answer, stop showing 'Reconnecting…';
+        on end, re-ring again unless the leg was hung up on purpose, no other
+        party remains, or we've hit the circuit breaker.
+        """
+        conference_name = request.args.get('conference')
+        call_status = request.form.get('CallStatus', '')
+        call_sid = request.form.get('CallSid', '')
+        db = get_db()
+
+        if not conference_name:
+            return '', 200
+        attempt = db.get_reconnect_attempt(conference_name)
+        if not attempt:
+            return '', 200  # already resolved/cleaned up
+
+        # Only the CURRENT re-ring leg drives state. Twilio retries/duplicates
+        # callbacks, and a superseded leg can deliver a late terminal status —
+        # those must not start another dial or flip status.
+        is_current = (call_sid == attempt.get('dropped_call_sid'))
+
+        if call_status in ('answered', 'in-progress'):
+            if not is_current:
+                return '', 200
+            # Leg rejoined — conference/join re-adds it to participants. Stop the
+            # "Reconnecting…" card and point the transfer's consult SID at the new
+            # leg so Hand off / Go back target the live leg, not the dead one.
+            db.set_reconnect_status(conference_name, 'reconnected')
+            try:
+                ctx = json.loads(attempt['context']) if attempt.get('context') else {}
+            except Exception:
+                ctx = {}
+            if ctx.get('kind') == 'transfer' and attempt.get('original_call_sid'):
+                try:
+                    db.update_transfer_consultation(
+                        attempt['original_call_sid'], call_sid, conference_name,
+                        source=ctx.get('source', 'queued_calls'))
+                except Exception as e:
+                    logger.warning(f"Could not repoint consult SID after reconnect "
+                                   f"for {conference_name}: {e}")
+            logger.info(f"Reconnect succeeded for conference {conference_name} (leg {call_sid})")
+            return '', 200
+
+        if call_status in ('completed', 'busy', 'no-answer', 'failed', 'canceled'):
+            # Mark this leg as left regardless of whether it's the current one,
+            # so an answered-then-dropped reconnect leg doesn't linger as an
+            # active participant and keep _others_present() falsely True.
+            try:
+                db.remove_participant(call_sid)
+            except Exception:
+                pass
+            if not is_current:
+                return '', 200  # stale/duplicate callback — don't drive the retry
+            # This re-ring leg ended. Deliberate hangup of the reconnected leg?
+            if db.get_leg_intent(call_sid):
+                logger.info(f"Reconnect leg {call_sid} ended deliberately — "
+                            f"stopping reconnect for {conference_name}")
+                _finish_reconnect(attempt, db, gave_up=False)
+                return '', 200
+            # For a transfer reconnect, stop if the transfer is no longer
+            # consulting — the agent cancelled/completed it (or it failed
+            # elsewhere), so we must not keep re-ringing the old target.
+            try:
+                ctx = json.loads(attempt['context']) if attempt.get('context') else {}
+            except Exception:
+                ctx = {}
+            if ctx.get('kind') == 'transfer':
+                orig = attempt.get('original_call_sid')
+                ts = (db.get_transfer_state_log(orig)
+                      if ctx.get('source') == 'call_log'
+                      else db.get_transfer_state(orig)) if orig else None
+                if not ts or ts.get('transfer_status') != 'consulting':
+                    logger.info(f"Reconnect for {conference_name}: transfer no longer "
+                                f"consulting — stopping")
+                    _finish_reconnect(attempt, db, gave_up=False)
+                    return '', 200
+            # Still a drop. Stop if nobody else remains or we hit the breaker.
+            if not _others_present(conference_name, db, exclude_sid=call_sid):
+                logger.info(f"Reconnect for {conference_name}: no other parties left — stopping")
+                _finish_reconnect(attempt, db, gave_up=True)
+                return '', 200
+            if attempt['attempt_count'] >= RECONNECT_ATTEMPT_CAP:
+                logger.error(f"Reconnect circuit-breaker hit for {conference_name} after "
+                             f"{attempt['attempt_count']} attempts — giving up")
+                _finish_reconnect(attempt, db, gave_up=True)
+                return '', 200
+            # Re-ring.
+            new_sid = _place_reconnect_call(attempt, db)
+            if new_sid:
+                count = db.bump_reconnect_attempt(conference_name, new_sid)
+                logger.info(f"Reconnect re-ring #{count} for conference {conference_name} (leg {new_sid})")
+            else:
+                logger.warning(f"Reconnect re-ring failed to initiate for {conference_name} — giving up")
+                _finish_reconnect(attempt, db, gave_up=True)
+            return '', 200
 
         return '', 200
 
@@ -672,3 +849,164 @@ def _redirect_conference_to_voicemail(twilio_service, conference_name):
         for p in twilio_list(twilio_service.client.conferences(confs[0].sid).participants):
             fail_url = f"{config.webhook_base_url}/api/voice/transfer/failed-message"
             twilio_service.client.calls(p.call_sid).update(url=fail_url, method='POST')
+
+
+# =============================================================================
+# Leg-drop auto-reconnect (per-tenant flag 'auto_reconnect_enabled', default off)
+#
+# When one of our own softphone legs (client:/sip:) drops mid-call while other
+# parties are still connected, re-ring it back into the SAME conference instead
+# of failing the call. Event-driven: each re-ring is a Twilio call whose status
+# callback (/voice/reconnect-status) decides whether to re-ring again or stop.
+# No background threads — every step runs inside a Twilio webhook request.
+#
+# A leg that ended on PURPOSE records a leg_intent (the client beacons it before
+# disconnecting); a network-dropped leg cannot, so absence of an intent == drop.
+# =============================================================================
+
+# Circuit breaker: a hard ceiling on re-rings so a logic bug can't auto-dial
+# forever. Far above any real reconnect — should never trip in normal use.
+RECONNECT_ATTEMPT_CAP = 30
+
+
+def _auto_reconnect_enabled(db) -> bool:
+    """Per-tenant feature flag (bot_settings 'auto_reconnect_enabled'), default off."""
+    try:
+        return db.get_bot_setting('auto_reconnect_enabled', '0') == '1'
+    except Exception:
+        return False
+
+
+def _others_present(conference_name, db, exclude_sid=None) -> bool:
+    """True if at least one OTHER live participant remains in the conference."""
+    try:
+        for p in (db.get_participants(conference_name) or []):
+            if exclude_sid and p['call_sid'] == exclude_sid:
+                continue
+            return True
+    except Exception as e:
+        logger.warning(f"Could not check participants for {conference_name}: {e}")
+    return False
+
+
+def _place_reconnect_call(attempt, db) -> str | None:
+    """Re-dial the dropped client:/SIP leg back into its conference.
+
+    Returns the new call SID, or None if the dial couldn't even be initiated.
+    """
+    from urllib.parse import quote
+    conference_name = attempt['conference_name']
+    role = attempt.get('role') or 'agent'
+    base_url = config.webhook_base_url
+    join_url = (f"{base_url}/api/voice/conference/join"
+                f"?room={quote(conference_name)}&role={quote(role)}")
+    status_url = (f"{base_url}/api/voice/reconnect-status"
+                  f"?conference={quote(conference_name)}")
+    try:
+        twilio_service = get_twilio_service()
+        from_number = attempt.get('from_number') or get_twilio_config('twilio_default_caller_id')
+        call = twilio_service.client.calls.create(
+            to=attempt['target_to'],
+            from_=from_number,
+            url=join_url,
+            timeout=25,
+            status_callback=status_url,
+            status_callback_event=['answered', 'completed', 'busy', 'no-answer', 'failed', 'canceled'],
+        )
+        return call.sid
+    except Exception as e:
+        logger.warning(f"Reconnect dial failed for conference {conference_name}: {e}")
+        return None
+
+
+def start_leg_reconnect(conference_name, target_to, *, from_number=None,
+                        role='agent', name=None, original_call_sid=None,
+                        context=None, db=None) -> bool:
+    """Begin reconnecting a dropped client:/SIP leg back into its conference.
+
+    Caller is responsible for having already checked: the flag is on, the leg
+    has no deliberate-hangup intent, the target is a client:/sip: leg, and other
+    parties remain. Returns True if a re-ring was placed.
+    """
+    db = db or get_db()
+    pseudo = {'conference_name': conference_name, 'target_to': target_to,
+              'role': role, 'from_number': from_number}
+    new_sid = _place_reconnect_call(pseudo, db)
+    if not new_sid:
+        return False
+    db.upsert_reconnect_attempt(
+        conference_name, new_sid, target_to,
+        from_number=from_number, role=role, name=name,
+        original_call_sid=original_call_sid, context=context,
+    )
+    logger.info(f"Reconnect started for conference {conference_name}: "
+                f"re-ringing {target_to} (leg {new_sid}), reason=drop")
+    return True
+
+
+def _resolve_consult_target_to(transfer_state, db) -> str | None:
+    """Resolve a warm-transfer target (extension or number) to the dial string
+    we'd re-ring — client:identity for an extension, +E.164 for a number."""
+    from rinq.services.transfer_service import _is_extension
+    target = (transfer_state.get('transfer_target') or '').strip()
+    if not target:
+        return None
+    if _is_extension(target):
+        rec = db.get_staff_extension_by_ext(target)
+        if rec and rec.get('email'):
+            return f"client:{_email_to_browser_identity(rec['email'])}"
+        return None
+    try:
+        return get_twilio_service()._format_phone_number(target)
+    except Exception:
+        return target
+
+
+def _consult_caller_id(original_call, db) -> str:
+    """Caller ID to show on the reconnect leg — the customer's number when we
+    have it (so the target sees who's calling), else the tenant default."""
+    try:
+        direction = db.get_call_log_field(original_call, 'direction')
+        field = 'to_number' if direction == 'outbound' else 'from_number'
+        customer_number = db.get_call_log_field(original_call, field)
+        if customer_number and customer_number.startswith('+'):
+            return customer_number
+    except Exception:
+        pass
+    return get_twilio_config('twilio_default_caller_id')
+
+
+def _finish_reconnect(attempt, db, gave_up: bool):
+    """Tear down a reconnect attempt. On give-up for a transfer, fall back to
+    today's salvage (unhold customer, rejoin originating agent, fail transfer)
+    so the worst case is exactly the pre-reconnect behaviour."""
+    import json as _json
+    conference_name = attempt['conference_name']
+    context = {}
+    try:
+        if attempt.get('context'):
+            context = _json.loads(attempt['context'])
+    except Exception:
+        context = {}
+
+    if gave_up and context.get('kind') == 'transfer':
+        original_call = attempt.get('original_call_sid')
+        source = context.get('source', 'queued_calls')
+        try:
+            _unhold_and_rejoin_agent(conference_name, conference_name)
+            _restore_end_conference_on_exit(conference_name)
+            if original_call:
+                if source == 'call_log':
+                    db.fail_transfer_log(original_call, 'reconnect_exhausted')
+                else:
+                    db.fail_transfer(original_call, 'reconnect_exhausted')
+                db.log_activity(
+                    action="call_transfer_failed",
+                    target=original_call,
+                    details="Transfer target dropped and could not be reconnected",
+                    performed_by="twilio",
+                )
+        except Exception as e:
+            logger.warning(f"Reconnect give-up salvage failed for {conference_name}: {e}")
+
+    db.delete_reconnect_attempt(conference_name)

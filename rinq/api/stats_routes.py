@@ -117,11 +117,17 @@ def register(bp):
         # Clean up old participant records
         stale_participants = db.cleanup_old_participants(hours=hours)
 
+        # Clean up stale leg-drop reconnect state (safety net for missed callbacks)
+        stale_intents = db.cleanup_old_leg_intents(max_age_minutes=30)
+        stale_reconnects = db.cleanup_old_reconnect_attempts(max_age_minutes=30)
+
         caller = get_api_caller()
         db.log_activity(
             'queue_cleanup',
             f'{hours}h',
-            f"Deleted {deleted_count} old queued_calls, {stale_ring_count} stale ring_attempts, {stale_participants} old participants",
+            f"Deleted {deleted_count} old queued_calls, {stale_ring_count} stale ring_attempts, "
+            f"{stale_participants} old participants, {stale_intents} leg_intents, "
+            f"{stale_reconnects} reconnect_attempts",
             caller
         )
 

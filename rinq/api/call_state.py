@@ -99,6 +99,15 @@ def get_call_state(agent_call_sid: str, caller_email: str = None) -> dict:
                     if p['role'] == 'customer':
                         p['hold'] = True
 
+            # Surface an in-progress auto-reconnect of the dropped target so the
+            # UI can show "Reconnecting…" instead of a stale "Ringing…" card.
+            try:
+                recon = db.get_reconnect_attempt(conf_name)
+                if recon and recon.get('status') == 'reconnecting':
+                    result['transfer']['reconnecting'] = True
+            except Exception:
+                pass
+
     # Also find customer_call_sid from child_sid if not set
     if not result.get('customer_call_sid'):
         child_sid = db.get_call_child_sid(agent_call_sid)
