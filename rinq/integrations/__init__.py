@@ -33,6 +33,7 @@ def init_integrations(provider: str = 'none', **kwargs):
 
     Individual integrations can also be configured via env vars:
         RINQ_TICKET_PROVIDER=zendesk  (native Zendesk API)
+        RINQ_TICKET_PROVIDER=zelda    (Watson bot-team native ticketing)
     """
     global _staff_directory, _ticket_service, _permission_service
     global _customer_lookup, _order_lookup, _email_service, _ai_receptionist
@@ -60,6 +61,10 @@ def init_integrations(provider: str = 'none', **kwargs):
         from rinq.integrations.zendesk import ZendeskTicketService
         _ticket_service = ZendeskTicketService()
         logger.info("Ticket service: zendesk (native API)")
+    elif ticket_provider == 'zelda':
+        from rinq.integrations.zelda import ZeldaTicketService
+        _ticket_service = ZeldaTicketService()
+        logger.info("Ticket service: zelda (bot-team native)")
     elif not _ticket_service:
         # Auto-detect: if Zendesk env vars are set, use native Zendesk
         if os.environ.get('ZENDESK_SUBDOMAIN'):
