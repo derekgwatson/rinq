@@ -3,6 +3,7 @@
 Extracted from web/routes.py. Registered via register(web_bp).
 """
 
+import json
 import logging
 from flask import request, redirect, url_for, flash, jsonify, render_template
 from rinq.services.auth import admin_required, get_current_user

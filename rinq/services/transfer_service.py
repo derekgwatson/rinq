@@ -428,7 +428,20 @@ class TransferService:
 
             # Redirect the customer into the new conference
             customer_conf_url = f"{self.base_url}/api/voice/conference/join?room={new_conference}&role=caller"
-            self.twilio.client.calls(call_sid).update(url=customer_conf_url, method='POST')
+            try:
+                self.twilio.client.calls(call_sid).update(url=customer_conf_url, method='POST')
+            except Exception as e:
+                # Customer likely hung up mid-transfer. Cancel the still-ringing
+                # target leg so their phone doesn't ring into an empty conference
+                # (canceling a ringing leg never runs its TwiML, so gotcha 21's
+                # after-dial concern doesn't apply here).
+                logger.warning(f"Blind transfer: could not redirect customer {call_sid}: {e}")
+                try:
+                    self.twilio.client.calls(target_call.sid).update(status='canceled')
+                except Exception as cancel_err:
+                    logger.warning(f"Blind transfer: could not cancel target leg {target_call.sid}: {cancel_err}")
+                self.db.fail_transfer(call_sid, 'Caller disconnected before transfer')
+                return {'success': False, 'error': 'Caller disconnected before transfer completed'}
 
             # End the original agent's call
             if agent_participant:

@@ -2756,6 +2756,7 @@ function resetCallState() {
         currentTransferCallType = null;
         currentTransferAgentSid = null;
     }
+    if (typeof consultTargetAnswered !== 'undefined') consultTargetAnswered = false;
     // Conference tracking
     window._sawMultipleParticipants = false;
     window._addToCallPending = false;
@@ -4644,6 +4645,10 @@ let currentTransferCallType = null;
 let currentTransferAgentSid = null;
 let isConsulting = false;
 let consultCallSid = null;
+// Whether the warm-transfer consult target has answered (set by pollCallState,
+// read by hangupCall/pollCallState to word the failure message). Previously an
+// undeclared implicit global — declared here and reset in resetCallState().
+let consultTargetAnswered = false;
 // Set by cancelTransfer() on success so endCall() doesn't mistake an
 // incidental disconnect for the customer leaving the conference.
 let _justCancelledTransfer = false;
@@ -5294,6 +5299,7 @@ let answeringCallSid = null;
 async function fetchQueueCallers() {
     // DND means do not disturb — don't show queue callers at all
     if (isDndEnabled) {
+        window._lastCallers = [];
         renderQueueCallers([]);
         return;
     }
@@ -5308,7 +5314,9 @@ async function fetchQueueCallers() {
         }
 
         const data = await response.json();
-        renderQueueCallers(data.callers || []);
+        window._lastCallers = data.callers || [];
+        checkForNewQueueCallers(window._lastCallers);
+        renderQueueCallers(window._lastCallers);
     } catch (error) {
         console.error('Error fetching queue callers:', error);
     }
@@ -5550,26 +5558,6 @@ function startQueuePolling() {
 
 // Store last callers for re-render during answer
 window._lastCallers = [];
-const originalFetch = fetchQueueCallers;
-fetchQueueCallers = async function() {
-    try {
-        const response = await fetch('/api/queue/callers', {
-            credentials: 'same-origin'
-        });
-
-        if (!response.ok) {
-            console.error('Failed to fetch queue callers');
-            return;
-        }
-
-        const data = await response.json();
-        window._lastCallers = data.callers || [];
-        checkForNewQueueCallers(window._lastCallers);
-        renderQueueCallers(window._lastCallers);
-    } catch (error) {
-        console.error('Error fetching queue callers:', error);
-    }
-};
 
 // Start polling on page load
 startQueuePolling();
@@ -5838,9 +5826,10 @@ async function claimAndCallBack(callbackId, phone) {
         // Dial the number using the softphone dialpad if available, otherwise just mark claimed
         if (typeof makeCall === 'function') {
             // Set the number in the dialpad and initiate the call
-            const dialInput = document.getElementById('dialNumber');
-            if (dialInput) dialInput.value = phone;
-            makeCall(phone);
+            switchPhoneTab('dialpad');
+            phoneNumber = phone.replace(/[^\d+]/g, '');
+            updateDisplay();
+            makeCall();
         } else {
             // Non-softphone user: just show the number to call manually
             const item = document.getElementById(`callback-${callbackId}`);

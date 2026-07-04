@@ -1848,9 +1848,12 @@ def recordings():
 
 
 @web_bp.route('/setup')
-@login_required
+@admin_required
 def setup():
-    """Setup page - shows Twilio configuration status and SIP domains."""
+    """Setup page - shows Twilio configuration status and SIP domains.
+
+    Admin-only: exposes Twilio account info and the credential-list inventory.
+    """
     service = get_twilio_service()
 
     sip_domains = []

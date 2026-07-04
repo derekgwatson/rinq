@@ -675,6 +675,11 @@ def _ring_targets_into_conference(dial_targets: list, conference_name: str,
     """
     import threading
 
+    # Capture tenant config NOW — get_twilio_config() reads flask.g, which does
+    # not exist inside the background thread (gotcha #2). Calling it in the
+    # closure raises RuntimeError and kills the ring loop for PSTN targets.
+    default_caller_id = get_twilio_config('twilio_default_caller_id')
+
     def ring_targets():
         try:
             service = get_twilio_service()
@@ -713,7 +718,7 @@ def _ring_targets_into_conference(dial_targets: list, conference_name: str,
                         call_from = caller_identity
                     elif to_addr.startswith('+') or to_addr[0].isdigit():
                         # PSTN call — use tenant's default or first owned number
-                        call_from = get_twilio_config('twilio_default_caller_id')
+                        call_from = default_caller_id
                         if not call_from:
                             try:
                                 owned = twilio_list(service.client.incoming_phone_numbers, limit=1)
