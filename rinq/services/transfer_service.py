@@ -38,7 +38,6 @@ class TransferService:
 
     def __init__(self):
         self.twilio = get_twilio_service()
-        self._base_url = None
 
     @property
     def db(self):
@@ -46,14 +45,13 @@ class TransferService:
 
     @property
     def base_url(self):
-        """Get webhook base URL. Uses captured value if in a thread, otherwise config."""
-        if self._base_url:
-            return self._base_url
-        return config.webhook_base_url
+        """Webhook base URL, resolved per request.
 
-    def _capture_base_url(self):
-        """Capture the base URL from request context for use in background threads."""
-        self._base_url = config.webhook_base_url
+        Never cache this on the instance: TransferService is a process-wide
+        singleton shared across tenants, so captured state leaks the first
+        tenant's domain into every later transfer.
+        """
+        return config.webhook_base_url
 
     def _build_extension_dial_twiml(self, extension: str, caller_id: str,
                                      transferred_by: str = None,

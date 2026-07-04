@@ -3971,16 +3971,23 @@ Call Flow: {flow_name}
                 ticket_group_id = voicemail_dest.get('ticket_group_id')
                 logger.info(f"Voicemail routing: destination '{voicemail_dest['name']}' -> ticket group {ticket_group_id}")
 
-                # Create ticket via ticket service
+                # Create ticket via ticket service.
+                # Requester email is per-tenant (bot_settings key
+                # 'voicemail_requester_email'); the fallback keeps watson's
+                # historical behaviour. TODO(vendor-neutral): the 'tina' tag
+                # is kept because downstream ticket automation may filter on
+                # it — confirm before changing.
                 from rinq.integrations import get_ticket_service
                 tickets = get_ticket_service()
+                requester_email = (db.get_bot_setting('voicemail_requester_email')
+                                   or 'tina.bot@watsonblinds.com.au')
                 ticket_data = tickets.create_ticket(
                     subject=subject,
                     description=text_body,
                     priority='normal',
                     ticket_type='task',
                     tags=['voicemail', 'tina'],
-                    requester_email='tina.bot@watsonblinds.com.au',
+                    requester_email=requester_email,
                     requester_name=f"{config.product_name} (Phone System)",
                     group_id=ticket_group_id,
                     attachments=[{

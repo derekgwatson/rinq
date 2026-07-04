@@ -25,16 +25,25 @@ def get_sip_domain() -> str | None:
     """
     try:
         from flask import g
-        tenant_id = getattr(g, 'tenant', {}).get('id', '_none') if hasattr(g, 'tenant') and g.tenant else '_none'
+        tenant_id = getattr(g, 'tenant', {}).get('id') if hasattr(g, 'tenant') and g.tenant else None
     except RuntimeError:
-        tenant_id = '_none'
+        tenant_id = None
 
-    with _sip_cache_lock:
-        cached = _sip_domain_cache.get(tenant_id)
-        if cached and cached['fetched_at']:
-            age = datetime.now(timezone.utc) - cached['fetched_at']
-            if age < timedelta(minutes=5):
-                return cached['domain']
+    if tenant_id is None:
+        # No request context (background thread). Don't touch the cache: a
+        # shared slot would serve one tenant's domain to another tenant's
+        # thread. Callers in threads should capture sip_domain before
+        # spawning (gotcha #2); this fetch uses whatever client the thread
+        # resolved, so log it for visibility.
+        logger.warning("get_sip_domain() called without tenant context — "
+                       "bypassing cache; capture sip_domain before spawning threads")
+    else:
+        with _sip_cache_lock:
+            cached = _sip_domain_cache.get(tenant_id)
+            if cached and cached['fetched_at']:
+                age = datetime.now(timezone.utc) - cached['fetched_at']
+                if age < timedelta(minutes=5):
+                    return cached['domain']
 
     # Fetch from Twilio (outside lock — don't hold lock during API calls)
     try:
@@ -42,8 +51,9 @@ def get_sip_domain() -> str | None:
         domains = service.get_sip_domains()
         if domains:
             domain_name = domains[0]['domain_name']
-            with _sip_cache_lock:
-                _sip_domain_cache[tenant_id] = {'domain': domain_name, 'fetched_at': datetime.now(timezone.utc)}
+            if tenant_id is not None:
+                with _sip_cache_lock:
+                    _sip_domain_cache[tenant_id] = {'domain': domain_name, 'fetched_at': datetime.now(timezone.utc)}
             return domain_name
     except Exception as e:
         logger.warning(f"Failed to get SIP domain: {e}")

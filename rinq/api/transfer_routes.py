@@ -52,7 +52,6 @@ def register(bp):
         """Get list of available transfer targets (team members)."""
         from rinq.services.transfer_service import get_transfer_service
         transfer_service = get_transfer_service()
-        transfer_service._capture_base_url()
         targets = transfer_service.get_transfer_targets()
         return jsonify({"targets": targets})
 
@@ -72,8 +71,6 @@ def register(bp):
 
         transferred_by = get_api_caller_email()
         transfer_service = get_transfer_service()
-        transfer_service._capture_base_url()
-
         result = transfer_service.blind_transfer(call_sid, target, target_name, transferred_by)
 
         # Agent is done with the call after a blind transfer — mark them as left
@@ -102,8 +99,6 @@ def register(bp):
 
         transferred_by = get_api_caller_email()
         transfer_service = get_transfer_service()
-        transfer_service._capture_base_url()
-
         db = get_db()
         conference_name = db.get_call_conference(call_sid)
         if conference_name:
@@ -141,8 +136,6 @@ def register(bp):
 
         transferred_by = get_api_caller_email()
         transfer_service = get_transfer_service()
-        transfer_service._capture_base_url()
-
         db = get_db()
         conf_name = db.get_call_conference(agent_call_sid) if agent_call_sid else None
         child_sid = db.get_call_child_sid(agent_call_sid) if agent_call_sid else None
@@ -176,8 +169,6 @@ def register(bp):
         data = request.get_json() or {}
         transferred_by = get_api_caller_email()
         transfer_service = get_transfer_service()
-        transfer_service._capture_base_url()
-
         call_sid = data.get('call_sid') or data.get('transfer_key')
         if not call_sid:
             return jsonify({"error": "call_sid or transfer_key required"}), 400
@@ -196,8 +187,6 @@ def register(bp):
         data = request.get_json() or {}
         cancelled_by = get_api_caller_email()
         transfer_service = get_transfer_service()
-        transfer_service._capture_base_url()
-
         call_sid = data.get('call_sid') or data.get('transfer_key')
         if not call_sid:
             return jsonify({"error": "call_sid or transfer_key required"}), 400

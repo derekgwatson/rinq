@@ -2693,6 +2693,17 @@ function checkForNewQueueCallers(callers) {
 
     previousQueueSids = currentSids;
 }
+
+// HTML-escape helper for values interpolated into innerHTML (customer names,
+// caller numbers etc. come from external data — Clara/customer records).
+// Defined here (shared block) so both the softphone and non-softphone
+// branches can use it.
+function escapeHtml(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
 </script>
 
 {% if api_key_configured and twiml_app_configured %}
@@ -4414,12 +4425,7 @@ function getInitials(name) {
     return (parts[0] || '?')[0].toUpperCase();
 }
 
-function escapeHtml(str) {
-    if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}
+// escapeHtml is defined in the shared script block above the softphone guard.
 
 function escapeAttr(str) {
     if (!str) return '';
@@ -4728,9 +4734,9 @@ function renderTransferTargets() {
         const isReachable = isOnline || isSipRegistered;
         return `
             <div class="target-item ${isSelected ? 'selected' : ''} ${isBusy ? 'target-busy' : ''} ${!isReachable ? 'target-offline' : ''}"
-                 onclick="selectTarget('${target.extension || target.phone || target.email}', '${target.name}', '${target.email}')">
-                <span class="target-name">${target.name}${statusHtml}</span>
-                <span class="target-phone">${detail}</span>
+                 onclick="selectTarget('${escapeAttr(target.extension || target.phone || target.email)}', '${escapeAttr(target.name)}', '${escapeAttr(target.email)}')">
+                <span class="target-name">${escapeHtml(target.name)}${statusHtml}</span>
+                <span class="target-phone">${escapeHtml(detail)}</span>
             </div>
         `;
     }).join('');
@@ -5357,9 +5363,9 @@ function renderQueueCallers(callers) {
         let details = [];
 
         if (caller.priority === 'high') {
-            details.push(`<span class="caller-detail priority-high">⚠️ ${caller.priority_reason || 'High Priority'}</span>`);
+            details.push(`<span class="caller-detail priority-high">⚠️ ${escapeHtml(caller.priority_reason) || 'High Priority'}</span>`);
         } else if (caller.priority === 'medium') {
-            details.push(`<span class="caller-detail priority-medium">📦 ${caller.priority_reason || 'Has active orders'}</span>`);
+            details.push(`<span class="caller-detail priority-medium">📦 ${escapeHtml(caller.priority_reason) || 'Has active orders'}</span>`);
         }
 
         if (caller.order_data) {
@@ -5376,18 +5382,18 @@ function renderQueueCallers(callers) {
         }
 
         if (caller.queue_name) {
-            details.push(`<span class="caller-detail">📞 ${caller.queue_name}</span>`);
+            details.push(`<span class="caller-detail">📞 ${escapeHtml(caller.queue_name)}</span>`);
         }
 
         return `
             <div class="queue-caller priority-${caller.priority || 'unknown'}">
                 <div class="caller-info">
                     <div class="caller-name">
-                        ${caller.customer_name || 'Unknown Caller'}
+                        ${escapeHtml(caller.customer_name) || 'Unknown Caller'}
                         ${caller.priority === 'high' ? '<span class="priority-badge high">HIGH</span>' : ''}
                         ${caller.priority === 'medium' ? '<span class="priority-badge medium">MEDIUM</span>' : ''}
                     </div>
-                    <div class="caller-number">${caller.caller_number}</div>
+                    <div class="caller-number">${escapeHtml(caller.caller_number)}</div>
                     ${details.length > 0 ? `<div class="caller-details">${details.join('')}</div>` : ''}
                 </div>
                 <div class="caller-wait-time">
@@ -5625,9 +5631,9 @@ function renderQueueCallers(callers) {
         let details = [];
 
         if (caller.priority === 'high') {
-            details.push(`<span class="caller-detail priority-high">⚠️ ${caller.priority_reason || 'High Priority'}</span>`);
+            details.push(`<span class="caller-detail priority-high">⚠️ ${escapeHtml(caller.priority_reason) || 'High Priority'}</span>`);
         } else if (caller.priority === 'medium') {
-            details.push(`<span class="caller-detail priority-medium">📦 ${caller.priority_reason || 'Has active orders'}</span>`);
+            details.push(`<span class="caller-detail priority-medium">📦 ${escapeHtml(caller.priority_reason) || 'Has active orders'}</span>`);
         }
 
         if (caller.order_data) {
@@ -5644,18 +5650,18 @@ function renderQueueCallers(callers) {
         }
 
         if (caller.queue_name) {
-            details.push(`<span class="caller-detail">📞 ${caller.queue_name}</span>`);
+            details.push(`<span class="caller-detail">📞 ${escapeHtml(caller.queue_name)}</span>`);
         }
 
         return `
             <div class="queue-caller priority-${caller.priority || 'unknown'}">
                 <div class="caller-info">
                     <div class="caller-name">
-                        ${caller.customer_name || 'Unknown Caller'}
+                        ${escapeHtml(caller.customer_name) || 'Unknown Caller'}
                         ${caller.priority === 'high' ? '<span class="priority-badge high">HIGH</span>' : ''}
                         ${caller.priority === 'medium' ? '<span class="priority-badge medium">MEDIUM</span>' : ''}
                     </div>
-                    <div class="caller-number">${caller.caller_number}</div>
+                    <div class="caller-number">${escapeHtml(caller.caller_number)}</div>
                     ${details.length > 0 ? `<div class="caller-details">${details.join('')}</div>` : ''}
                 </div>
                 <div class="caller-wait-time">
@@ -5769,10 +5775,10 @@ function renderCallbacks(callbacks) {
         return `
             <div class="callback-item" id="callback-${cb.id}">
                 <div class="caller-info">
-                    <div class="caller-name">${cb.customer_name || 'Unknown Caller'}</div>
-                    <div class="caller-number">${cb.customer_phone}</div>
+                    <div class="caller-name">${escapeHtml(cb.customer_name) || 'Unknown Caller'}</div>
+                    <div class="caller-number">${escapeHtml(cb.customer_phone)}</div>
                     <div class="caller-details">
-                        <span class="caller-detail">📞 ${cb.queue_name || 'Queue'}</span>
+                        <span class="caller-detail">📞 ${escapeHtml(cb.queue_name) || 'Queue'}</span>
                         <span class="caller-detail">⏱️ Requested ${waitTime} ago</span>
                     </div>
                 </div>

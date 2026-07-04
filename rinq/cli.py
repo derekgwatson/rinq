@@ -2,10 +2,10 @@
 Rinq CLI for tenant management.
 
 Usage:
-    python -m tina.cli setup-tenant --id watson --name "Watson Blinds" --email derek@watsonblinds.com.au
-    python -m tina.cli add-user --tenant watson --email user@example.com
-    python -m tina.cli list-tenants
-    python -m tina.cli register-number --tenant watson --number +61261234567
+    python -m rinq.cli setup-tenant --id watson --name "Watson Blinds" --email derek@watsonblinds.com.au
+    python -m rinq.cli add-user --tenant watson --email user@example.com
+    python -m rinq.cli list-tenants
+    python -m rinq.cli register-number --tenant watson --number +61261234567
 """
 
 import argparse
@@ -23,7 +23,17 @@ from rinq.database.master import get_master_db
 
 
 def setup_tenant(args):
-    """Create a new tenant and provision their database."""
+    """Create a new tenant and provision their database.
+
+    Default: full provisioning via services/provisioning.py (creates a Twilio
+    subaccount, TwiML app, API key, SIP credential list + domain).
+    Pass --twilio-sid/--twilio-token to inject existing credentials instead,
+    or --no-twilio for a bare tenant record with no Twilio config.
+
+    Never falls back to TWILIO_* env vars — those are the MASTER account's
+    credentials; copying them into a tenant record shares watson's subaccount,
+    caller ID, and SIP credentials with the new tenant.
+    """
     master_db = get_master_db()
 
     existing = master_db.get_tenant(args.id)
@@ -31,21 +41,44 @@ def setup_tenant(args):
         print(f"Tenant '{args.id}' already exists: {existing['name']}")
         return
 
-    # Build kwargs from args and env vars
-    kwargs = {
-        'twilio_account_sid': args.twilio_sid or os.environ.get('TWILIO_ACCOUNT_SID'),
-        'twilio_auth_token': args.twilio_token or os.environ.get('TWILIO_AUTH_TOKEN'),
-        'twilio_api_key': os.environ.get('TWILIO_API_KEY'),
-        'twilio_api_secret': os.environ.get('TWILIO_API_SECRET'),
-        'twilio_twiml_app_sid': os.environ.get('TWILIO_TWIML_APP_SID'),
-        'twilio_default_caller_id': os.environ.get('TWILIO_DEFAULT_CALLER_ID'),
-        'twilio_sip_credential_list_sid': os.environ.get('TWILIO_SIP_CREDENTIAL_LIST_SID'),
-        'webhook_base_url': args.webhook_url,
-        'integration_provider': args.integrations or 'none',
-    }
-
-    master_db.create_tenant(tenant_id=args.id, name=args.name, **kwargs)
-    print(f"Created tenant: {args.id} ({args.name})")
+    if args.twilio_sid or args.twilio_token:
+        if not (args.twilio_sid and args.twilio_token):
+            print("Both --twilio-sid and --twilio-token are required to inject credentials")
+            sys.exit(1)
+        kwargs = {
+            'twilio_account_sid': args.twilio_sid,
+            'twilio_auth_token': args.twilio_token,
+            'webhook_base_url': args.webhook_url,
+            'integration_provider': args.integrations or 'none',
+        }
+        master_db.create_tenant(tenant_id=args.id, name=args.name, **kwargs)
+        print(f"Created tenant: {args.id} ({args.name}) with supplied Twilio credentials")
+        print("Note: TwiML app / API key / SIP are not set up for injected credentials — "
+              "run setup-sip and configure the rest manually.")
+    elif args.no_twilio:
+        master_db.create_tenant(
+            tenant_id=args.id, name=args.name,
+            webhook_base_url=args.webhook_url,
+            integration_provider=args.integrations or 'none',
+        )
+        print(f"Created tenant: {args.id} ({args.name}) with no Twilio config")
+    else:
+        # Full automated provisioning (subaccount, TwiML app, API key, SIP)
+        from rinq.services.provisioning import provision_tenant
+        if not args.email:
+            print("--email is required for full provisioning (first admin user)")
+            sys.exit(1)
+        result = provision_tenant(args.id, args.name, args.email,
+                                  webhook_base_url=args.webhook_url)
+        if not result.get('success'):
+            print(f"Provisioning failed: {result.get('error')}")
+            sys.exit(1)
+        if args.integrations and args.integrations != 'none':
+            master_db.update_tenant(args.id, integration_provider=args.integrations)
+        print(f"Provisioned tenant: {args.id} ({args.name})")
+        print(f"  Twilio subaccount: {result.get('twilio_account_sid')}")
+        print(f"  TwiML app: {result.get('twiml_app_sid')}")
+        return  # provision_tenant already created the DB and admin user
 
     # Provision tenant database (triggers migrations)
     from rinq.database.db import Database
@@ -295,8 +328,9 @@ def main():
     sp.add_argument('--id', required=True, help='Tenant ID (slug)')
     sp.add_argument('--name', required=True, help='Tenant display name')
     sp.add_argument('--email', help='Admin user email')
-    sp.add_argument('--twilio-sid', help='Twilio Account SID (or use TWILIO_ACCOUNT_SID env)')
-    sp.add_argument('--twilio-token', help='Twilio Auth Token (or use TWILIO_AUTH_TOKEN env)')
+    sp.add_argument('--twilio-sid', help='Existing Twilio Account SID to inject (default: create a new subaccount)')
+    sp.add_argument('--twilio-token', help='Existing Twilio Auth Token to inject (default: create a new subaccount)')
+    sp.add_argument('--no-twilio', action='store_true', help='Create a bare tenant record with no Twilio config')
     sp.add_argument('--webhook-url', help='Webhook base URL for this tenant')
     sp.add_argument('--integrations', help='Integration provider (watson, none)', default='none')
     sp.set_defaults(func=setup_tenant)

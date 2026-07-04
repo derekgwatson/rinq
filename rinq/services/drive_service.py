@@ -33,7 +33,6 @@ class GoogleDriveService:
     def __init__(self):
         self.credentials = None
         self.drive_service = None
-        self._recordings_folder_id = None
         self._initialized = False
 
     def _ensure_initialized(self):
@@ -148,10 +147,10 @@ class GoogleDriveService:
         Returns:
             The folder ID if configured, None otherwise.
         """
-        if self._recordings_folder_id:
-            return self._recordings_folder_id
-
-        # Get configured folder ID from database settings
+        # Read fresh every call — this setting is per-tenant (get_db() resolves
+        # the current tenant) and this service is a process-wide singleton, so
+        # caching it on the instance would pin the first tenant's folder for
+        # everyone and would also ignore admin changes until restart.
         from rinq.database.db import get_db
         folder_id = get_db().get_bot_setting('drive_recordings_folder_id')
 
@@ -160,9 +159,7 @@ class GoogleDriveService:
                            "Create a folder in Google Drive and configure its ID in Rinq Admin > Settings.")
             return None
 
-        self._recordings_folder_id = folder_id
-        logger.info(f"Using configured recordings folder: {folder_id}")
-        return self._recordings_folder_id
+        return folder_id
 
     # ─── File Operations ───────────────────────────────────────────────────────
 

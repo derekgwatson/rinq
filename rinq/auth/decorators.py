@@ -54,6 +54,16 @@ def get_current_user():
         if data:
             role = data['role'] or 'user'
             can_view_all_recordings = bool(data.get('can_view_all_recordings'))
+        else:
+            # No membership row for the current tenant — do NOT default to a
+            # 'user' role in someone else's tenant. Treat as unauthenticated
+            # for this tenant (login_required sends them back to /login).
+            logger.warning(
+                f"User {session.get('user_email', user_id)} has no membership "
+                f"in tenant '{tenant['id']}' — denying"
+            )
+            g._current_user = None
+            return None
 
     user = User(
         id=user_id,
@@ -68,13 +78,24 @@ def get_current_user():
 
 
 def login_required(f):
-    """Require authenticated user."""
+    """Require authenticated user with access to the current tenant."""
     @wraps(f)
     def decorated(*args, **kwargs):
         if not session.get('user_id'):
             if request.headers.get('X-API-Key') or \
                request.accept_mimetypes.best_match(['application/json', 'text/html']) == 'application/json':
                 return jsonify({'error': 'Authentication required'}), 401
+            return redirect(url_for('standalone_auth.login'))
+        # Session exists but the user may have no membership in the current
+        # tenant (get_current_user returns None in that case) — send them
+        # back through login rather than serving another tenant's data.
+        if get_current_user() is None:
+            if request.headers.get('X-API-Key') or \
+               request.accept_mimetypes.best_match(['application/json', 'text/html']) == 'application/json':
+                return jsonify({'error': 'No access to this tenant'}), 403
+            # Clear the whole session: /login redirects logged-in users back
+            # to '/', so keeping user_id here would loop forever.
+            session.clear()
             return redirect(url_for('standalone_auth.login'))
         return f(*args, **kwargs)
     return decorated
