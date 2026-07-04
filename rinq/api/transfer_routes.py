@@ -614,7 +614,10 @@ def register(bp):
                 raw = request.get_data(as_text=True) or ''
                 data = _json.loads(raw) if raw else {}
             call_sid = (data or {}).get('call_sid')
-        except Exception:
+        except Exception as e:
+            # Expected/benign: sendBeacon bodies can arrive empty or malformed
+            # (documented above — body may be JSON or text/plain), debug only.
+            logger.debug(f"Could not parse leg-intent body: {e}")
             call_sid = None
         if call_sid:
             try:
@@ -656,7 +659,8 @@ def register(bp):
             db.set_reconnect_status(conference_name, 'reconnected')
             try:
                 ctx = json.loads(attempt['context']) if attempt.get('context') else {}
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Could not parse reconnect context for {conference_name}: {e}")
                 ctx = {}
             if ctx.get('kind') == 'transfer' and attempt.get('original_call_sid'):
                 try:
@@ -675,8 +679,8 @@ def register(bp):
             # active participant and keep _others_present() falsely True.
             try:
                 db.remove_participant(call_sid)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Could not remove participant {call_sid} after reconnect leg ended: {e}")
             if not is_current:
                 return '', 200  # stale/duplicate callback — don't drive the retry
             # This re-ring leg ended. Deliberate hangup of the reconnected leg?
@@ -690,7 +694,8 @@ def register(bp):
             # elsewhere), so we must not keep re-ringing the old target.
             try:
                 ctx = json.loads(attempt['context']) if attempt.get('context') else {}
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Could not parse reconnect context for {conference_name}: {e}")
                 ctx = {}
             if ctx.get('kind') == 'transfer':
                 orig = attempt.get('original_call_sid')
@@ -766,12 +771,16 @@ def _handle_failed_blind_transfer(original_call, transfer_state, db):
                 except Exception as e:
                     logger.warning(f"Failed to update transfer consultation for {original_call}: {e}")
             except Exception as e:
-                logger.warning(f"Could not call agent back: {e}")
+                # A live customer is stranded in the conference when this fires.
+                logger.error(f"Could not call agent back after failed blind transfer "
+                             f"of {original_call}: {e}", exc_info=True)
                 _redirect_conference_to_voicemail(twilio_service, xfer_conf)
         else:
             _redirect_conference_to_voicemail(twilio_service, xfer_conf)
     except Exception as e:
-        logger.warning(f"Could not handle failed blind transfer: {e}")
+        # A live customer is stranded in the conference when this fires.
+        logger.error(f"Could not handle failed blind transfer of {original_call}: {e}",
+                     exc_info=True)
 
 
 def _restore_end_conference_on_exit(conference_name):
@@ -862,7 +871,8 @@ def _auto_reconnect_enabled(db) -> bool:
     """Per-tenant feature flag (bot_settings 'auto_reconnect_enabled'), default off."""
     try:
         return db.get_bot_setting('auto_reconnect_enabled', '0') == '1'
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Could not read auto_reconnect_enabled flag — defaulting to off: {e}")
         return False
 
 
@@ -947,7 +957,8 @@ def _resolve_consult_target_to(transfer_state, db) -> str | None:
         return None
     try:
         return get_twilio_service()._format_phone_number(target)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Could not format consult target {target!r} — using raw value: {e}")
         return target
 
 
@@ -960,8 +971,9 @@ def _consult_caller_id(original_call, db) -> str:
         customer_number = db.get_call_log_field(original_call, field)
         if customer_number and customer_number.startswith('+'):
             return customer_number
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Could not resolve customer number for consult caller ID "
+                       f"on {original_call} — using tenant default: {e}")
     return get_twilio_config('twilio_default_caller_id')
 
 
@@ -975,7 +987,8 @@ def _finish_reconnect(attempt, db, gave_up: bool):
     try:
         if attempt.get('context'):
             context = _json.loads(attempt['context'])
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Could not parse reconnect context for {conference_name}: {e}")
         context = {}
 
     if gave_up and context.get('kind') == 'transfer':

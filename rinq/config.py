@@ -2,6 +2,7 @@
 Configuration loader for Rinq.
 """
 
+import logging
 import os
 import subprocess
 from pathlib import Path
@@ -87,8 +88,9 @@ class Config:
             deploy_time = lines[1].strip() if len(lines) > 1 else None
             if git_hash:
                 return git_hash, deploy_time
-        except Exception:
-            pass
+        except Exception as e:
+            # Expected in dev checkouts — deploy.sh writes VERSION on the server only.
+            logging.getLogger(__name__).debug(f"Could not read VERSION file: {e}")
         try:
             result = subprocess.run(
                 ['git', 'rev-parse', '--short', 'HEAD'],
@@ -97,7 +99,9 @@ class Config:
             )
             git_hash = result.stdout.strip() if result.returncode == 0 else None
             return git_hash, None
-        except Exception:
+        except Exception as e:
+            # Expected when git isn't available (e.g. deployed without .git) — benign.
+            logging.getLogger(__name__).debug(f"Could not read git version via subprocess: {e}")
             return None, None
 
     @property
@@ -114,13 +118,16 @@ class Config:
             tenant = getattr(g, 'tenant', None)
             if tenant and tenant.get('webhook_base_url'):
                 return tenant['webhook_base_url'].rstrip('/')
-        except RuntimeError:
-            pass
+        except RuntimeError as e:
+            # Expected outside a Flask request context (background threads) — benign.
+            logging.getLogger(__name__).debug(f"No request context for tenant webhook_base_url: {e}")
         # Fall back to request host
         try:
             from flask import request
             return request.host_url.rstrip('/')
-        except RuntimeError:
+        except RuntimeError as e:
+            # Expected outside a Flask request context (background threads) — benign.
+            logging.getLogger(__name__).debug(f"No request context for webhook_base_url fallback: {e}")
             return None
 
     @property

@@ -20,6 +20,7 @@ from rinq.services.twilio_service import get_twilio_service
 from rinq.database.db import get_db
 from rinq.config import config
 from rinq.tenant.context import get_twilio_config
+from rinq.web.util import flash_error
 try:
     from shared.config.ports import get_shared_css_context
 except ImportError:
@@ -651,8 +652,8 @@ def setup_address():
                 'postal_code': addr.postal_code,
                 'iso_country': addr.iso_country,
             }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to fetch Twilio address {tenant['twilio_address_sid']}: {e}")
     return render_template('setup_address.html', address=address, current_user=get_current_user())
 
 
@@ -693,7 +694,7 @@ def save_address():
             flash('Address saved.', 'success')
 
     except Exception as e:
-        flash(f'Failed to save address: {e}', 'error')
+        flash_error(f'Failed to save address: {e}', e)
 
     return redirect(url_for('web.setup_address'))
 
@@ -1094,7 +1095,7 @@ def add_verified_caller_id():
         if "UNIQUE constraint failed" in str(e):
             flash(f"Verified caller ID {phone_number} already exists", "error")
         else:
-            flash(f"Failed to add verified caller ID: {e}", "error")
+            flash_error(f"Failed to add verified caller ID: {e}", e)
 
     return redirect(url_for('web.admin_verified_caller_ids'))
 
@@ -1149,7 +1150,7 @@ def update_verified_caller_id(phone_number):
         )
         flash(f"Updated verified caller ID: {phone_number}", "success")
     except Exception as e:
-        flash(f"Failed to update verified caller ID: {e}", "error")
+        flash_error(f"Failed to update verified caller ID: {e}", e)
 
     return redirect(url_for('web.admin_verified_caller_ids'))
 
@@ -1171,7 +1172,7 @@ def delete_verified_caller_id(phone_number):
         )
         flash(f"Deleted verified caller ID: {phone_number}", "success")
     except Exception as e:
-        flash(f"Failed to delete verified caller ID: {e}", "error")
+        flash_error(f"Failed to delete verified caller ID: {e}", e)
 
     return redirect(url_for('web.admin_verified_caller_ids'))
 
@@ -1505,7 +1506,7 @@ def add_assignment(sid):
         if "UNIQUE constraint" in str(e):
             flash(f"{staff_email} is already assigned to this number", "error")
         else:
-            flash(f"Failed to assign: {e}", "error")
+            flash_error(f"Failed to assign: {e}", e)
 
     return redirect(url_for('web.admin_phone_numbers'))
 

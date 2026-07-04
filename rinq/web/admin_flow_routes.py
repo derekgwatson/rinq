@@ -8,6 +8,7 @@ from flask import request, redirect, url_for, flash, jsonify, render_template
 from rinq.services.auth import admin_required, get_current_user
 from rinq.database.db import get_db
 from rinq.config import config
+from rinq.web.util import flash_error
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ def register(bp):
             )
             flash(f"Created call flow '{name}'", "success")
         except Exception as e:
-            flash(f"Failed to create call flow: {e}", "error")
+            flash_error(f"Failed to create call flow: {e}", e)
     
         return redirect(url_for('web.admin'))
     
@@ -103,7 +104,7 @@ def register(bp):
             )
             flash("Call flow assigned", "success")
         except Exception as e:
-            flash(f"Failed to assign call flow: {e}", "error")
+            flash_error(f"Failed to assign call flow: {e}", e)
     
         return redirect(url_for('web.admin_phone_numbers'))
     
@@ -167,7 +168,7 @@ def register(bp):
             )
             flash(f"Call flow '{name}' updated", "success")
         except Exception as e:
-            flash(f"Failed to update call flow: {e}", "error")
+            flash_error(f"Failed to update call flow: {e}", e)
     
         return redirect(url_for('web.admin_call_flows'))
     
@@ -212,7 +213,7 @@ def register(bp):
             )
             flash(f"Cloned call flow '{source['name']}' as '{clone_data['name']}'", "success")
         except Exception as e:
-            flash(f"Failed to clone call flow: {e}", "error")
+            flash_error(f"Failed to clone call flow: {e}", e)
     
         return redirect(url_for('web.admin_call_flows'))
     
@@ -243,7 +244,7 @@ def register(bp):
             else:
                 flash(f"Cannot delete '{flow['name']}' - it is still assigned to phone numbers", "error")
         except Exception as e:
-            flash(f"Failed to delete call flow: {e}", "error")
+            flash_error(f"Failed to delete call flow: {e}", e)
     
         return redirect(url_for('web.admin_call_flows'))
     
@@ -335,7 +336,7 @@ def register(bp):
             if 'UNIQUE constraint' in str(e):
                 flash(f"A destination with email '{email}' already exists", "error")
             else:
-                flash(f"Failed to create voicemail destination: {e}", "error")
+                flash_error(f"Failed to create voicemail destination: {e}", e)
 
         return redirect(url_for('web.admin_voicemail_destinations'))
     
@@ -401,7 +402,7 @@ def register(bp):
             )
             flash(f"Voicemail destination '{name}' updated", "success")
         except Exception as e:
-            flash(f"Failed to update voicemail destination: {e}", "error")
+            flash_error(f"Failed to update voicemail destination: {e}", e)
 
         return redirect(url_for('web.admin_voicemail_destinations'))
     
@@ -431,7 +432,7 @@ def register(bp):
             else:
                 flash(f"Cannot delete '{destination['name']}' - it is still in use by call flows", "error")
         except Exception as e:
-            flash(f"Failed to delete voicemail destination: {e}", "error")
+            flash_error(f"Failed to delete voicemail destination: {e}", e)
 
         return redirect(url_for('web.admin_voicemail_destinations'))
     
@@ -462,7 +463,7 @@ def register(bp):
             else:
                 flash("Section cleared", "success")
         except Exception as e:
-            flash(f"Failed to update section: {e}", "error")
+            flash_error(f"Failed to update section: {e}", e)
     
         return redirect(url_for('web.admin_phone_numbers'))
     

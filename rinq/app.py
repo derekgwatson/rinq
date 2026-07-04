@@ -42,7 +42,10 @@ def fromjson_filter(value):
         return {}
     try:
         return json.loads(value)
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError) as e:
+        # Stored values are written with json.dumps, so a parse failure here
+        # means corrupt data worth knowing about.
+        logger.warning(f"fromjson filter could not parse value {str(value)[:80]!r}: {e}")
         return {}
 
 # ProxyFix for production (nginx)
@@ -89,8 +92,12 @@ def inject_globals():
         from shared.config.ports import get_shared_css_context, get_staging_banner_context
         ctx = get_shared_css_context()
         ctx.update(get_staging_banner_context())
-    except (ImportError, Exception):
-        # Standalone mode — no shared CSS from Chester
+    except ImportError:
+        # Standalone mode — no shared CSS from Chester. Expected, no log needed.
+        ctx['shared_css_url'] = None
+        ctx['staging_banner'] = False
+    except Exception:
+        logger.exception("Failed to load shared CSS/staging banner context")
         ctx['shared_css_url'] = None
         ctx['staging_banner'] = False
     ctx['config'] = config

@@ -7,9 +7,14 @@ Manages:
 - Call recording logs
 """
 
+import json
+import logging
+import re
 import sqlite3
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_dt(value: str) -> datetime:
@@ -698,7 +703,6 @@ class Database(StatsMixin, CallLogMixin):
             staff_emails: If provided, only return recordings for these staff
             phone_number: If provided, filter by phone number (normalized match)
         """
-        import re
         with self._get_conn() as conn:
             query = "SELECT * FROM recording_log WHERE 1=1"
             params = []
@@ -800,7 +804,6 @@ class Database(StatsMixin, CallLogMixin):
         Returns:
             List of recording dicts with local_file_path set
         """
-        from datetime import timedelta
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
         with self._get_conn() as conn:
@@ -826,7 +829,6 @@ class Database(StatsMixin, CallLogMixin):
         Returns:
             List of recording dicts
         """
-        from datetime import timedelta
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
         with self._get_conn() as conn:
@@ -1466,10 +1468,11 @@ class Database(StatsMixin, CallLogMixin):
                 """, (template_id, schedule_id, now, created_by))
                 conn.commit()
                 return True
-            except sqlite3.IntegrityError:
-                # Already linked (UNIQUE constraint). Anything else —
-                # locked DB, disk error — must propagate, not report
+            except sqlite3.IntegrityError as e:
+                # Expected/benign: already linked (UNIQUE constraint). Anything
+                # else — locked DB, disk error — must propagate, not report
                 # "already linked".
+                logger.debug(f"Template {template_id} already linked to schedule {schedule_id}: {e}")
                 return False
 
     def unlink_template_from_schedule(self, template_id: int, schedule_id: int) -> bool:
@@ -3022,8 +3025,9 @@ class Database(StatsMixin, CallLogMixin):
                 try:
                     enqueued = _parse_dt(row['enqueued_at'])
                     wait_seconds = int((datetime.now(timezone.utc) - enqueued).total_seconds())
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Could not parse enqueued_at {row['enqueued_at']!r} "
+                                   f"for queued call {call_sid} — wait_seconds will be NULL: {e}")
 
             if status == 'answered':
                 conn.execute("""
@@ -3070,8 +3074,9 @@ class Database(StatsMixin, CallLogMixin):
                 try:
                     enqueued = _parse_dt(row['enqueued_at'])
                     wait_seconds = int((datetime.now(timezone.utc) - enqueued).total_seconds())
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Could not parse enqueued_at {row['enqueued_at']!r} "
+                                   f"when claiming call {call_sid} — wait_seconds will be NULL: {e}")
 
             # Atomic update — only succeeds if status is still 'waiting'
             cursor = conn.execute("""
@@ -3217,7 +3222,6 @@ class Database(StatsMixin, CallLogMixin):
         Returns emails in the order agents were rung, deduped.
         Only returns emails from ring attempts that have user_email metadata.
         """
-        import json
         with self._get_conn() as conn:
             rows = conn.execute(
                 "SELECT metadata FROM ring_attempts WHERE group_key = ? ORDER BY id",
@@ -3231,8 +3235,9 @@ class Database(StatsMixin, CallLogMixin):
                         email = meta.get('user_email')
                         if email and email not in emails:
                             emails.append(email)
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.warning(f"Could not parse ring attempt metadata "
+                                       f"for group {group_key}: {e}")
             return emails
 
     def get_ring_attempt_metadata(self, call_sid: str) -> dict | None:
@@ -3241,7 +3246,6 @@ class Database(StatsMixin, CallLogMixin):
         Returns:
             Dict with group_key, group_type, metadata (parsed JSON) or None
         """
-        import json
         with self._get_conn() as conn:
             row = conn.execute(
                 "SELECT group_key, group_type, metadata FROM ring_attempts WHERE call_sid = ?",
@@ -3253,8 +3257,9 @@ class Database(StatsMixin, CallLogMixin):
             if row['metadata']:
                 try:
                     result.update(json.loads(row['metadata']))
-                except (json.JSONDecodeError, TypeError):
-                    pass
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.warning(f"Could not parse ring attempt metadata "
+                                   f"for call {call_sid}: {e}")
             return result
 
     def remove_ring_attempt(self, group_key: str, call_sid: str) -> int:

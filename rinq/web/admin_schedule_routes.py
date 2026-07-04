@@ -9,6 +9,7 @@ from flask import request, redirect, url_for, flash, jsonify, render_template
 from rinq.services.auth import admin_required, get_current_user
 from rinq.database.db import get_db
 from rinq.config import config
+from rinq.web.util import flash_error
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ def register(bp):
             )
             flash(f"Created schedule '{name}'", "success")
         except Exception as e:
-            flash(f"Failed to create schedule: {e}", "error")
+            flash_error(f"Failed to create schedule: {e}", e)
     
         return schedule_redirect(schedule_id)
     
@@ -122,7 +123,7 @@ def register(bp):
             )
             flash(f"Updated schedule '{name}'", "success")
         except Exception as e:
-            flash(f"Failed to update schedule: {e}", "error")
+            flash_error(f"Failed to update schedule: {e}", e)
     
         return schedule_redirect(schedule_id)
     
@@ -168,7 +169,7 @@ def register(bp):
             )
             flash("Updated closure defaults", "success")
         except Exception as e:
-            flash(f"Failed to update closure defaults: {e}", "error")
+            flash_error(f"Failed to update closure defaults: {e}", e)
     
         return schedule_redirect(schedule_id)
     
@@ -207,7 +208,7 @@ def register(bp):
             holiday_count = len(schedule.get('holidays', []))
             flash(f"Created '{new_name}' from '{schedule['name']}' with {holiday_count} holiday{'s' if holiday_count != 1 else ''}", "success")
         except Exception as e:
-            flash(f"Failed to clone schedule: {e}", "error")
+            flash_error(f"Failed to clone schedule: {e}", e)
     
         # Redirect to the NEW cloned schedule
         return schedule_redirect(new_id if new_id else schedule_id)
@@ -239,7 +240,7 @@ def register(bp):
             flash(str(e), "error")
             return schedule_redirect(schedule_id)
         except Exception as e:
-            flash(f"Failed to delete schedule: {e}", "error")
+            flash_error(f"Failed to delete schedule: {e}", e)
             return schedule_redirect(schedule_id)
     
         return schedule_redirect()
@@ -313,7 +314,7 @@ def register(bp):
             )
             flash(f"Added closure '{name}'", "success")
         except Exception as e:
-            flash(f"Failed to add closure: {e}", "error")
+            flash_error(f"Failed to add closure: {e}", e)
     
         return schedule_redirect(schedule_id)
     
@@ -376,7 +377,7 @@ def register(bp):
             )
             flash(f"Updated closure '{name}'", "success")
         except Exception as e:
-            flash(f"Failed to update closure: {e}", "error")
+            flash_error(f"Failed to update closure: {e}", e)
     
         return schedule_redirect(schedule_id)
     
@@ -398,7 +399,7 @@ def register(bp):
             )
             flash("Holiday removed", "success")
         except Exception as e:
-            flash(f"Failed to remove holiday: {e}", "error")
+            flash_error(f"Failed to remove holiday: {e}", e)
     
         return schedule_redirect(schedule_id)
     
@@ -455,7 +456,7 @@ def register(bp):
             )
             flash(f"Created holiday template '{name}'", "success")
         except Exception as e:
-            flash(f"Failed to create template: {e}", "error")
+            flash_error(f"Failed to create template: {e}", e)
     
         return template_redirect(template_id)
     
@@ -498,7 +499,7 @@ def register(bp):
             )
             flash(f"Updated template '{name}'", "success")
         except Exception as e:
-            flash(f"Failed to update template: {e}", "error")
+            flash_error(f"Failed to update template: {e}", e)
     
         return template_redirect(template_id)
     
@@ -536,7 +537,7 @@ def register(bp):
             )
             flash(f"Created '{new_name}' from '{template['name']}' with {len(template.get('items', []))} holidays", "success")
         except Exception as e:
-            flash(f"Failed to clone template: {e}", "error")
+            flash_error(f"Failed to clone template: {e}", e)
     
         # Redirect to the NEW cloned template
         return template_redirect(new_id if new_id else template_id)
@@ -564,7 +565,7 @@ def register(bp):
             )
             flash(f"Deleted template '{template['name']}'", "success")
         except Exception as e:
-            flash(f"Failed to delete template: {e}", "error")
+            flash_error(f"Failed to delete template: {e}", e)
     
         # Template deleted, so redirect to section (not specific template)
         return template_redirect()
@@ -605,7 +606,7 @@ def register(bp):
             )
             flash(f"Added '{name}' to template", "success")
         except Exception as e:
-            flash(f"Failed to add item: {e}", "error")
+            flash_error(f"Failed to add item: {e}", e)
     
         return template_redirect(template_id)
     
@@ -627,7 +628,7 @@ def register(bp):
             )
             flash("Holiday removed from template", "success")
         except Exception as e:
-            flash(f"Failed to remove item: {e}", "error")
+            flash_error(f"Failed to remove item: {e}", e)
     
         return template_redirect(template_id)
     
@@ -656,7 +657,7 @@ def register(bp):
             )
             flash(f"Updated '{name}'", "success")
         except Exception as e:
-            flash(f"Failed to update item: {e}", "error")
+            flash_error(f"Failed to update item: {e}", e)
     
         return template_redirect(template_id)
     
@@ -691,7 +692,7 @@ def register(bp):
             else:
                 flash("Schedule already linked", "info")
         except Exception as e:
-            flash(f"Failed to link schedule: {e}", "error")
+            flash_error(f"Failed to link schedule: {e}", e)
     
         return template_redirect(template_id)
     
@@ -716,7 +717,7 @@ def register(bp):
             else:
                 flash("Schedule was not linked", "info")
         except Exception as e:
-            flash(f"Failed to unlink schedule: {e}", "error")
+            flash_error(f"Failed to unlink schedule: {e}", e)
     
         return template_redirect(template_id)
     
@@ -771,7 +772,7 @@ def register(bp):
                 )
                 flash(f"Applied template: {added_count} holidays added, {skipped_count} already existed", "success")
         except Exception as e:
-            flash(f"Failed to apply template: {e}", "error")
+            flash_error(f"Failed to apply template: {e}", e)
     
         return template_redirect(template_id)
     

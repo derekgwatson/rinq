@@ -65,8 +65,9 @@ def resolve_caller_id(email: str, db=None) -> dict:
                                 caller_id = number['phone_number']
                                 source = 'section'
                                 break
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Section-based caller ID resolution failed for {email} "
+                           f"— falling through to default: {e}")
 
     # Priority 4: System default
     if not caller_id:

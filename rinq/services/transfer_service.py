@@ -422,6 +422,8 @@ class TransferService:
                     'conference_name': new_conference,
                 })
             except Exception as e:
+                logger.warning(f"Blind transfer: could not call target {target_to} "
+                               f"for {call_sid}: {e}")
                 self.db.fail_transfer(call_sid, f'Could not reach {target_name}')
                 return {'success': False, 'error': f'Could not reach {target_name}: {e}'}
 
@@ -807,8 +809,9 @@ class TransferService:
                     self.db.fail_transfer(call_sid, 'Transfer target disconnected before hand-off')
                     try:
                         self.twilio.client.conferences(conference.sid).participants(call_sid).update(hold=False)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Could not take caller {call_sid} off hold in conference "
+                                       f"{conference.sid} after target disconnected: {e}")
                     target_name = transfer_state.get('transfer_target_name', 'The transfer target')
                     return {
                         'success': False,
@@ -854,8 +857,9 @@ class TransferService:
             # feature is enabled) — the hand-off is done, don't keep re-ringing.
             try:
                 self.db.delete_reconnect_attempt(original_conference)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Could not clear reconnect attempt for {original_conference} "
+                               f"after warm transfer complete: {e}")
 
             self.db.log_activity(
                 action="call_transfer_warm_complete",
@@ -909,8 +913,9 @@ class TransferService:
                                 consult_call_sid
                             ).delete()
                         self.db.remove_participant(consult_call_sid)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Could not clean up lingering consult leg {consult_call_sid} "
+                                       f"in {consult_conference} for failed transfer of {call_sid}: {e}")
 
                 self.db.cancel_transfer(call_sid)
 
@@ -925,8 +930,9 @@ class TransferService:
                         live_confs = twilio_list(self.twilio.client.conferences,
                             friendly_name=original_conference, status='in-progress', limit=1)
                         caller_gone = len(live_confs) == 0
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Could not check if conference {original_conference} is still "
+                                       f"live for cancelled transfer of {call_sid} — assuming caller gone: {e}")
 
                 return {
                     'success': True,
@@ -956,8 +962,9 @@ class TransferService:
                 if recon and recon.get('dropped_call_sid'):
                     try:
                         self.twilio.client.calls(recon['dropped_call_sid']).update(status='completed')
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"Could not end in-flight reconnect leg "
+                                       f"{recon['dropped_call_sid']} on cancel: {e}")
                 if consult_call_sid:
                     self.db.record_leg_intent(consult_call_sid, 'cancel')
                 self.db.delete_reconnect_attempt(original_conference)
@@ -1012,8 +1019,9 @@ class TransferService:
                                 self.twilio.client.conferences(conferences[0].sid).participants(p.call_sid).update(
                                     end_conference_on_exit=True
                                 )
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.warning(f"Could not restore endConferenceOnExit for participant "
+                                               f"{p.call_sid} in {original_conference} after cancel: {e}")
                     except Exception as e:
                         logger.warning(f"Could not restore endConferenceOnExit after cancel: {e}")
             # 3-way cancel: agent and customer are already talking — nothing to undo.

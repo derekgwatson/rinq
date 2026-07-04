@@ -63,7 +63,7 @@ class TwilioService:
         return get_db()
 
     def _get_tenant_twilio_creds(self):
-        """Get Twilio creds for current tenant, falling back to thread capture, then global config."""
+        """Get Twilio creds for current tenant, falling back to thread binding, then global config."""
         try:
             from flask import g
             tenant = getattr(g, 'tenant', None)
@@ -71,19 +71,46 @@ class TwilioService:
                 return tenant['twilio_account_sid'], tenant['twilio_auth_token']
         except RuntimeError:
             pass
-        # In background threads, use captured creds
+        # Background threads: use the account bound via start_twilio_thread()
         thread_sid = getattr(self._thread_local, 'account_sid', None)
         if thread_sid and thread_sid in self._clients:
             return thread_sid, None  # Client already cached
+        # Last resort: the MASTER account's global credentials. For any
+        # non-master tenant this is a silent isolation leak — log it so a
+        # missed start_twilio_thread()/capture is visible in production.
+        logger.warning(
+            "TwilioService falling back to global (master) credentials — "
+            "no tenant context and no thread binding. Background threads "
+            "must be spawned via start_twilio_thread()."
+        )
         return config.twilio_account_sid, config.twilio_auth_token
 
     def capture_for_thread(self):
-        """Capture current tenant's Twilio client for use in background threads.
-        Call this from request context before spawning threads."""
+        """Capture the current tenant's Twilio account for a background thread.
+
+        Returns an opaque token (the account SID) after ensuring the bound
+        client is cached. Pass the token to bind_thread() INSIDE the new
+        thread — or, far easier, spawn via start_twilio_thread(), which does
+        both. Setting a threading.local on the calling thread (the old
+        contract) never worked: a spawned thread gets an empty thread-local,
+        so every background thread silently used the master account.
+        """
         account_sid, auth_token = self._get_tenant_twilio_creds()
-        if account_sid and auth_token:
-            if account_sid not in self._clients:
-                self._clients[account_sid] = Client(account_sid, auth_token)
+        if not account_sid:
+            return None
+        if account_sid not in self._clients:
+            if not auth_token:
+                return None
+            self._clients[account_sid] = Client(account_sid, auth_token)
+        return account_sid
+
+    def bind_thread(self, account_sid):
+        """Bind a captured account SID to the CURRENT thread.
+
+        Call inside a background thread with the token returned by
+        capture_for_thread() on the spawning thread.
+        """
+        if account_sid:
             self._thread_local.account_sid = account_sid
 
     @property
@@ -889,3 +916,31 @@ def get_twilio_service() -> TwilioService:
     if _service is None:
         _service = TwilioService()
     return _service
+
+
+def start_twilio_thread(target, daemon: bool = True) -> threading.Thread:
+    """Spawn a background thread that inherits the current tenant's Twilio client.
+
+    threading.local does NOT cross thread boundaries, so capturing on the
+    request thread alone (the old capture_for_thread() contract) left every
+    spawned thread resolving the MASTER account. This helper captures the
+    tenant's account on the calling thread and re-binds it inside the new
+    thread before running `target`, so `get_twilio_service().client` in the
+    closure resolves to the right subaccount.
+
+    Works from request context AND from inside another Twilio-bound thread
+    (nested spawns), since capture_for_thread() also reads the thread binding.
+
+    Note: only the Twilio client crosses the boundary. flask.g still does
+    not exist in the thread — capture db/base_url/sip_domain/tenant config
+    BEFORE spawning, as always (gotcha #2).
+    """
+    account_sid = get_twilio_service().capture_for_thread()
+
+    def _bootstrap():
+        get_twilio_service().bind_thread(account_sid)
+        target()
+
+    thread = threading.Thread(target=_bootstrap, daemon=daemon)
+    thread.start()
+    return thread

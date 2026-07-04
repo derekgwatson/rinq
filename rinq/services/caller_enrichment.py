@@ -130,7 +130,7 @@ class CallerEnrichmentService:
 
             return result
         except Exception as e:
-            logger.debug(f"Active-call enrichment reuse failed for {phone_number}: {e}")
+            logger.warning(f"Active-call enrichment reuse failed for {phone_number}: {e}")
             return None
 
     def _lookup_customer_by_phone(self, phone_number: str) -> Optional[dict]:
@@ -192,8 +192,9 @@ class CallerEnrichmentService:
                             break
                         elif not result.get('next_installation'):
                             result['next_installation'] = install_date_str
-                    except (ValueError, TypeError):
-                        pass
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Could not parse installation date {install_date_str!r} "
+                                       f"for order priority check: {e}")
 
             return result
 
@@ -211,7 +212,7 @@ class CallerEnrichmentService:
             db = get_db()
             return db.get_address_book_by_mobile(e164)
         except Exception as e:
-            logger.debug(f"Address book lookup failed for {phone_number}: {e}")
+            logger.warning(f"Address book lookup failed for {phone_number}: {e}")
             return None
 
     def _lookup_call_history(self, phone_number: str) -> dict:

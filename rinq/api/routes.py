@@ -25,7 +25,7 @@ try:
     from shared.auth.bot_api import api_or_session_auth, get_api_caller, get_api_caller_email
 except ImportError:
     from rinq.auth.decorators import api_or_session_auth, get_api_caller, get_api_caller_email
-from rinq.services.twilio_service import get_twilio_service, twilio_list
+from rinq.services.twilio_service import get_twilio_service, twilio_list, start_twilio_thread
 from rinq.services.auth import login_required, get_current_user
 from rinq.database.db import get_db, _parse_dt
 from rinq.config import config
@@ -487,12 +487,19 @@ def _is_queue_paused(queue: dict) -> bool:
     paused_from = queue.get('paused_from')
     if not paused_from:
         return False
-    now = datetime.now(timezone.utc).isoformat()
-    if now < paused_from:
-        return False  # Not started yet
-    paused_until = queue.get('paused_until')
-    if paused_until and now > paused_until:
-        return False  # Already expired
+    # Compare as datetimes, not strings — stored values mix 'T'/space and
+    # offset-suffix formats, and a lexicographic compare across formats
+    # silently mis-evaluates the window.
+    now = datetime.now(timezone.utc)
+    try:
+        if now < _parse_dt(paused_from):
+            return False  # Not started yet
+        paused_until = queue.get('paused_until')
+        if paused_until and now > _parse_dt(paused_until):
+            return False  # Already expired
+    except ValueError as e:
+        logger.warning(f"Unparseable queue pause window for queue {queue.get('id')}: {e}")
+        return False
     return True
 
 
@@ -515,8 +522,6 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
             voicemail if no agent can be rung. When False (a re-ring), do nothing on
             empty — the caller keeps waiting; queue_wait owns the give-up decision.
     """
-    import threading
-
     # Capture tenant-scoped resources while we still have Flask request context —
     # the background thread won't have access to flask.g
     sip_domain = _get_sip_domain()
@@ -651,9 +656,10 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
         except Exception as e:
             logger.exception(f"Error ringing agents for queue {queue_id}: {e}")
 
-    # Run in background thread to not block the webhook response
-    thread = threading.Thread(target=ring_agents, daemon=True)
-    thread.start()
+    # Run in background thread to not block the webhook response.
+    # start_twilio_thread binds the current tenant's Twilio account inside
+    # the new thread (a plain Thread would silently use the master account).
+    start_twilio_thread(ring_agents)
 
 
 def _ring_targets_into_conference(dial_targets: list, conference_name: str,
@@ -673,8 +679,6 @@ def _ring_targets_into_conference(dial_targets: list, conference_name: str,
         base_url: Webhook base URL (must be passed from request context)
         db: Database instance (must be captured from request context before spawning)
     """
-    import threading
-
     # Capture tenant config NOW — get_twilio_config() reads flask.g, which does
     # not exist inside the background thread (gotcha #2). Calling it in the
     # closure raises RuntimeError and kills the ring loop for PSTN targets.
@@ -759,8 +763,7 @@ def _ring_targets_into_conference(dial_targets: list, conference_name: str,
         except Exception as e:
             logger.exception(f"Error ringing targets for conference {conference_name}: {e}")
 
-    thread = threading.Thread(target=ring_targets, daemon=True)
-    thread.start()
+    start_twilio_thread(ring_targets)
 
 
 
@@ -929,7 +932,6 @@ def voice_incoming():
                 response_parts.append('    </Dial>')
                 response_parts.append(f'    <Redirect>{xml_escape(no_answer_url)}</Redirect>')
 
-                get_twilio_service().capture_for_thread()
                 _ring_targets_into_conference(dial_targets, conference_name, called_number, call_sid, base_url=config.webhook_base_url, db=db)
 
                 db.log_activity(
@@ -1009,7 +1011,6 @@ def voice_incoming():
                 response_parts.append('    </Dial>')
                 response_parts.append(f'    <Redirect>{xml_escape(no_answer_url)}</Redirect>')
 
-                get_twilio_service().capture_for_thread()
                 _ring_targets_into_conference(dial_targets, conference_name, called_number, call_sid, base_url=config.webhook_base_url, db=db)
 
                 db.log_activity(
@@ -1837,8 +1838,8 @@ def queue_no_answer(queue_id):
                     ).fetchone()
                     if row:
                         no_answer_action = row['open_no_answer_action'] or 'ai_receptionist'
-            except Exception:
-                logger.warning(f"Could not look up call flow for queue {queue_id}, using default: ai_receptionist")
+            except Exception as e:
+                logger.warning(f"Could not look up call flow for queue {queue_id}, using default ai_receptionist: {e}")
 
             logger.warning(f"No active agents in queue {queue.get('name')} - action: {no_answer_action}")
 
@@ -1899,11 +1900,9 @@ def queue_leave(queue_id):
     if queue_result == 'hangup':
         # Caller hung up while waiting - cancel any ringing agent calls
         logger.info(f"Caller hung up - cancelling agent calls for {call_sid}")
-        import threading
-        get_twilio_service().capture_for_thread()
         def cancel_calls(_db=db, _sid=call_sid):
             _cancel_agent_calls(_sid, db=_db)
-        threading.Thread(target=cancel_calls, daemon=True).start()
+        start_twilio_thread(cancel_calls)
 
         db.update_queued_call_status(call_sid, 'abandoned')
         db.update_call_log(call_sid, {
@@ -1919,11 +1918,9 @@ def queue_leave(queue_id):
         )
     elif queue_result in ('bridged', 'redirected', 'leave'):
         # Cancel any remaining ringing agent calls
-        import threading
-        get_twilio_service().capture_for_thread()
         def cancel_calls(_db=db, _sid=call_sid):
             _cancel_agent_calls(_sid, db=_db)
-        threading.Thread(target=cancel_calls, daemon=True).start()
+        start_twilio_thread(cancel_calls)
 
         queued_call = db.get_queued_call_by_sid(call_sid)
         was_answered = queued_call and queued_call.get('answered_by')
@@ -2325,12 +2322,9 @@ def queue_agent_answer(queue_id):
 </Response>'''
         return Response(twiml, mimetype='application/xml')
 
-    # Cancel other agent calls since this one won
-    import threading
-    get_twilio_service().capture_for_thread()
-    def cancel_others(_db=db, _sid=customer_call_sid, _except=agent_call_sid):
+    # Cancel other agent calls since this one won    def cancel_others(_db=db, _sid=customer_call_sid, _except=agent_call_sid):
         _cancel_agent_calls(_sid, except_call_sid=_except, db=_db)
-    threading.Thread(target=cancel_others, daemon=True).start()
+    start_twilio_thread(cancel_others)
 
     # Conference-based answer: same pattern as browser queue answer.
     # Redirect customer from queue into conference, agent joins same conference.
@@ -2399,8 +2393,7 @@ def _send_queue_caller_to_voicemail(queue_id: int, customer_call_sid: str, reaso
         logger.info(f"Customer {customer_call_sid} no longer waiting — skipping voicemail redirect")
         return
 
-    get_twilio_service().capture_for_thread()
-    threading.Thread(target=lambda: _cancel_agent_calls(customer_call_sid, db=db), daemon=True).start()
+    start_twilio_thread(lambda: _cancel_agent_calls(customer_call_sid, db=db))
 
     base = base_url or config.webhook_base_url
     voicemail_url = f"{base}/api/voice/queue/{queue_id}/rejected-voicemail"
@@ -2563,7 +2556,7 @@ def conference_join():
                     to = call.to or ''
                     if to.startswith('client:'):
                         identity = to[7:]
-                        email = identity.replace('_at_', '@').replace('_', '.')
+                        email = _browser_identity_to_email(identity)
                         user = db.get_user_by_email(email)
                         if user:
                             name = user.get('friendly_name')
@@ -2587,8 +2580,8 @@ def conference_join():
                         else:
                             caller_number = getattr(call, '_from', None) or to
                         name = caller_number
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Could not resolve participant name for {call_sid}: {e}")
                 db.add_participant(room, call_sid, resolved_role,
                                    name=name, email=email)
         except Exception as e:
@@ -2781,7 +2774,7 @@ def _resolve_agent_email(call_sid: str, service) -> str | None:
         to = call.to or ''
         if to.startswith('client:'):
             identity = to[7:]
-            return identity.replace('_at_', '@').replace('_', '.')
+            return _browser_identity_to_email(identity)
         if to.startswith('sip:'):
             sip_user = to[4:].split('@')[0]
             db = get_db()
@@ -3252,7 +3245,6 @@ def queue_wait(queue_id):
             # Auto-ring agents when caller enters queue
             # - SIP calls use customer's number so agents see who's calling on desk phone
             # - Mobile calls use our Twilio number (required - can only use numbers we own)
-            get_twilio_service().capture_for_thread()
             _ring_agents_for_queue(queue_id, queue.get('name'), from_number, called_number, call_sid, base_url=config.webhook_base_url)
 
     if not queue:
@@ -3332,9 +3324,8 @@ def queue_wait(queue_id):
                         if c.get('agent_email')}
                 try:
                     busy.update(db.get_active_agent_emails(active_sids=_get_active_call_sids()))
-                except Exception:
-                    pass
-                get_twilio_service().capture_for_thread()
+                except Exception as e:
+                    logger.warning(f"Re-ring busy-agent lookup failed for {call_sid}: {e}")
                 _ring_agents_for_queue(
                     queue_id, queue.get('name'), from_number, called_number,
                     call_sid, base_url=config.webhook_base_url,
@@ -3469,11 +3460,9 @@ def queue_escape(queue_id):
         logger.info(f"Caller {from_number} chose voicemail escape from queue {queue.get('name') if queue else queue_id}")
 
         # Cancel any auto-ring calls for this customer
-        import threading
-        get_twilio_service().capture_for_thread()
         def cancel_calls(_db=db, _sid=call_sid):
             _cancel_agent_calls(_sid, db=_db)
-        threading.Thread(target=cancel_calls, daemon=True).start()
+        start_twilio_thread(cancel_calls)
 
         # Update queued call status
         queued_call = db.get_queued_call_by_sid(call_sid)
@@ -3500,11 +3489,9 @@ def queue_escape(queue_id):
         logger.info(f"Caller {from_number} requested callback from queue {queue.get('name') if queue else queue_id}")
 
         # Cancel any auto-ring calls for this customer
-        import threading
-        get_twilio_service().capture_for_thread()
         def cancel_calls(_db=db, _sid=call_sid):
             _cancel_agent_calls(_sid, db=_db)
-        threading.Thread(target=cancel_calls, daemon=True).start()
+        start_twilio_thread(cancel_calls)
 
         # Get caller name from queued call data
         queued_call = db.get_queued_call_by_sid(call_sid)
@@ -3676,7 +3663,6 @@ def voice_extension_dial():
     conference_name = f"call_{call_sid}"
     db.set_call_conference(call_sid, conference_name)
 
-    get_twilio_service().capture_for_thread()
     _ring_targets_into_conference(dial_targets, conference_name, from_number, call_sid, base_url=config.webhook_base_url, db=db)
 
     no_answer_url = f"{config.webhook_base_url}/api/voice/extension-no-answer?called={quote(called_number, safe='')}&from={quote(from_number, safe='')}&flow_id={flow_id}"
@@ -4182,7 +4168,7 @@ def get_voice_token():
     logger.info(f"Token generation - API Key: {api_key[:10] if api_key else 'None'}...")
 
     # Create a unique identity for this user
-    identity = user.email.replace('@', '_at_').replace('.', '_')
+    identity = _email_to_browser_identity(user.email)
 
     # Create access token
     token = AccessToken(
@@ -4299,8 +4285,10 @@ def voice_call_ended():
                 f"warm transfer still consulting — customer is live in conference"
             )
             return jsonify({"success": True})
-    except Exception:
-        pass
+    except Exception as e:
+        # If this guard fails silently, the gotcha-32 class of bug ("endCall
+        # during consult kills the customer") can resurface with no trace.
+        logger.warning(f"voice_call_ended consult-guard check failed for {call_sid}: {e}")
 
     db.complete_call(call_sid=call_sid, status='answered')
 
@@ -4581,7 +4569,6 @@ def _handle_internal_extension_call(extension: str, from_identity: str, staff_em
                        name=caller_name, email=staff_email)
 
     # Ring recipient's devices via REST API into the conference
-    get_twilio_service().capture_for_thread()
     _ring_targets_into_conference(dial_targets, conference_name, dial_caller_id, call_sid,
                                  base_url=config.webhook_base_url, caller_identity=caller_identity, db=db)
 
@@ -4651,8 +4638,7 @@ def voice_outbound():
     staff_email = None
     if from_identity and from_identity.startswith('client:'):
         identity = from_identity[7:]  # Remove 'client:' prefix
-        # Convert back: user_at_domain_com -> user@domain.com
-        staff_email = identity.replace('_at_', '@').replace('_', '.')
+        staff_email = _browser_identity_to_email(identity)
 
     # Check if this is answering a queue call
     answer_queue_id = request.form.get('AnswerQueueId')
@@ -4686,11 +4672,9 @@ def voice_outbound():
 
         # We won the race — cancel any parallel ring legs (SIP/mobile) so
         # the other agents' phones stop ringing immediately.
-        import threading
-        get_twilio_service().capture_for_thread()
         def _cancel_others(_db=db, _sid=answer_call_sid):
             _cancel_agent_calls(_sid, db=_db)
-        threading.Thread(target=_cancel_others, daemon=True).start()
+        start_twilio_thread(_cancel_others)
 
         # Fetch queued call details for participant enrichment below.
         queued_call = db.get_queued_call_by_sid(answer_call_sid)
@@ -5110,8 +5094,8 @@ def get_presence():
     try:
         active_sids = _get_active_call_sids()
         on_call_emails.update(db.get_active_agent_emails(active_sids=active_sids))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Presence participant supplement failed: {e}")
 
     presence = {}
     for ext in extensions:

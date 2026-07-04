@@ -10,6 +10,7 @@ from flask import request, redirect, url_for, flash, jsonify, render_template
 from rinq.services.auth import admin_required, manager_required, get_current_user
 from rinq.database.db import get_db
 from rinq.config import config
+from rinq.web.util import flash_error
 
 _TZ = pytz.timezone('Australia/Sydney')
 
@@ -101,7 +102,7 @@ def register(bp):
             )
             flash(f"Created queue '{name}'", "success")
         except Exception as e:
-            flash(f"Failed to create queue: {e}", "error")
+            flash_error(f"Failed to create queue: {e}", e)
     
         return redirect(url_for('web.admin'))
     
@@ -141,7 +142,7 @@ def register(bp):
             if "UNIQUE constraint" in str(e):
                 flash(f"{user_email} is already in this queue", "error")
             else:
-                flash(f"Failed to add member: {e}", "error")
+                flash_error(f"Failed to add member: {e}", e)
     
         return redirect(url_for('web.admin_queues') + f'#queue_{queue_id}')
     
@@ -225,7 +226,7 @@ def register(bp):
             )
             flash(f"Updated queue '{name}'", "success")
         except Exception as e:
-            flash(f"Failed to update queue: {e}", "error")
+            flash_error(f"Failed to update queue: {e}", e)
     
         return redirect(url_for('web.admin_queues') + f'#queue_{queue_id}')
     
@@ -250,7 +251,7 @@ def register(bp):
             if "UNIQUE constraint" in str(e):
                 flash(f"{user_email} is already a manager of this queue.", "error")
             else:
-                flash(f"Failed to add manager: {e}", "error")
+                flash_error(f"Failed to add manager: {e}", e)
         return redirect(url_for('web.admin_queues') + f'#queue_{queue_id}')
 
 
@@ -384,7 +385,7 @@ def register(bp):
             )
             flash("Queue deleted", "success")
         except Exception as e:
-            flash(f"Failed to delete queue: {e}", "error")
+            flash_error(f"Failed to delete queue: {e}", e)
     
         return redirect(url_for('web.admin_queues'))
     

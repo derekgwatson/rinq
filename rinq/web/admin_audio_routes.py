@@ -14,6 +14,7 @@ from rinq.services.auth import login_required, admin_required, get_current_user
 from rinq.database.db import get_db
 from rinq.config import config
 from rinq.tenant.context import get_twilio_config
+from rinq.web.util import flash_error
 
 logger = logging.getLogger(__name__)
 
@@ -90,8 +91,9 @@ def register(bp):
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     duration_seconds = round(float(result.stdout.strip()))
-            except (FileNotFoundError, ValueError, subprocess.TimeoutExpired):
-                pass  # ffprobe not available or failed — duration stays None
+            except (FileNotFoundError, ValueError, subprocess.TimeoutExpired) as e:
+                # ffprobe not available or failed — duration stays None
+                logger.debug(f"ffprobe duration probe failed for {file_path}: {e}")
 
             # Store just the path - full URL is constructed at runtime
             file_url = f"/audio/{filename}"
@@ -118,7 +120,7 @@ def register(bp):
             )
             flash(f"Uploaded audio file '{name}'", "success")
         except Exception as e:
-            flash(f"Failed to upload audio: {e}", "error")
+            flash_error(f"Failed to upload audio: {e}", e)
 
         return redirect(url_for('web.admin_audio'))
 
@@ -169,7 +171,7 @@ def register(bp):
             )
             flash(f"Updated audio file '{name}'", "success")
         except Exception as e:
-            flash(f"Failed to update audio: {e}", "error")
+            flash_error(f"Failed to update audio: {e}", e)
 
         return redirect(url_for('web.admin_audio'))
 
@@ -203,7 +205,7 @@ def register(bp):
             )
             flash(f"Deleted audio file '{audio['name']}'", "success")
         except Exception as e:
-            flash(f"Failed to delete audio: {e}", "error")
+            flash_error(f"Failed to delete audio: {e}", e)
 
         return redirect(url_for('web.admin_audio'))
 

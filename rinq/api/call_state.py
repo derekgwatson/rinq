@@ -5,6 +5,8 @@ The phone UI polls this every 3 seconds to show who's in the current call.
 
 import logging
 
+from twilio.base.exceptions import TwilioRestException
+
 from rinq.database.db import get_db
 from rinq.services.twilio_service import get_twilio_service
 
@@ -37,21 +39,35 @@ def get_call_state(agent_call_sid: str, caller_email: str = None) -> dict:
         conf_name = db.get_call_conference(agent_call_sid)
 
     participants = db.get_participants(conf_name) if conf_name else []
-    logger.info(f"Call state poll: sid={agent_call_sid}, conf={conf_name}, participants={len(participants)}")
+    logger.debug(f"Call state poll: sid={agent_call_sid}, conf={conf_name}, participants={len(participants)}")
 
     if not conf_name:
         # No conference found — verify the call is still active
         try:
             twilio_service = get_twilio_service()
             twilio_service.client.calls(agent_call_sid).fetch()
-        except Exception:
+        except TwilioRestException as e:
+            if e.status == 404:
+                # Call no longer exists on Twilio — genuine call-ended path.
+                logger.debug(f"Call {agent_call_sid} not found on Twilio — treating as ended")
+            else:
+                # TODO: a transient Twilio error (e.g. 5xx) is misclassified as
+                # "call ended" here and tears down a live call UI. Preserving
+                # current behavior for now — just logging it.
+                logger.warning(f"Liveness probe for {agent_call_sid} failed "
+                               f"(Twilio status={e.status}) — returning in_call=False anyway: {e}")
+            return {"in_call": False}
+        except Exception as e:
+            # TODO: same misclassification — a non-Twilio error (network, config)
+            # also reads as "call ended". Preserving current behavior, just logging.
+            logger.warning(f"Liveness probe for {agent_call_sid} failed — "
+                           f"returning in_call=False anyway: {e}")
             return {"in_call": False}
         return result
 
     result['conference'] = conf_name
 
-    # Get participants from DB
-    participants = db.get_participants(conf_name)
+    # Build participant list from the DB result fetched above
     for p in participants:
         result['participants'].append({
             'call_sid': p['call_sid'],
@@ -105,8 +121,8 @@ def get_call_state(agent_call_sid: str, caller_email: str = None) -> dict:
                 recon = db.get_reconnect_attempt(conf_name)
                 if recon and recon.get('status') == 'reconnecting':
                     result['transfer']['reconnecting'] = True
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Could not check reconnect attempt for {conf_name}: {e}")
 
     # Also find customer_call_sid from child_sid if not set
     if not result.get('customer_call_sid'):

@@ -65,12 +65,15 @@ def init_integrations(provider: str = 'none', **kwargs):
         from rinq.integrations.zelda import ZeldaTicketService
         _ticket_service = ZeldaTicketService()
         logger.info("Ticket service: zelda (bot-team native)")
-    elif not _ticket_service:
-        # Auto-detect: if Zendesk env vars are set, use native Zendesk
-        if os.environ.get('ZENDESK_SUBDOMAIN'):
-            from rinq.integrations.zendesk import ZendeskTicketService
-            _ticket_service = ZendeskTicketService()
-            logger.info("Ticket service: zendesk (auto-detected from env)")
+    else:
+        if ticket_provider:
+            logger.error(f"Unknown RINQ_TICKET_PROVIDER={ticket_provider!r} — falling back to auto-detect")
+        if not _ticket_service:
+            # Auto-detect: if Zendesk env vars are set, use native Zendesk
+            if os.environ.get('ZENDESK_SUBDOMAIN'):
+                from rinq.integrations.zendesk import ZendeskTicketService
+                _ticket_service = ZendeskTicketService()
+                logger.info("Ticket service: zendesk (auto-detected from env)")
 
     # Email service
     email_provider = os.environ.get('RINQ_EMAIL_PROVIDER', '')
@@ -82,14 +85,17 @@ def init_integrations(provider: str = 'none', **kwargs):
         from rinq.integrations.resend import ResendEmailService
         _email_service = ResendEmailService()
         logger.info("Email service: resend (native API)")
-    elif os.environ.get('WATSON_MABEL_URL'):
-        from rinq.integrations.watson import WatsonMabelEmailService
-        _email_service = WatsonMabelEmailService()
-        logger.info("Email service: mabel (auto-detected from env)")
-    elif os.environ.get('RESEND_API_KEY'):
-        from rinq.integrations.resend import ResendEmailService
-        _email_service = ResendEmailService()
-        logger.info("Email service: resend (auto-detected from env)")
+    else:
+        if email_provider:
+            logger.error(f"Unknown RINQ_EMAIL_PROVIDER={email_provider!r} — falling back to auto-detect")
+        if os.environ.get('WATSON_MABEL_URL'):
+            from rinq.integrations.watson import WatsonMabelEmailService
+            _email_service = WatsonMabelEmailService()
+            logger.info("Email service: mabel (auto-detected from env)")
+        elif os.environ.get('RESEND_API_KEY'):
+            from rinq.integrations.resend import ResendEmailService
+            _email_service = ResendEmailService()
+            logger.info("Email service: resend (auto-detected from env)")
 
     # Staff directory — fall back to local (staff_extensions table)
     if not _staff_directory:
