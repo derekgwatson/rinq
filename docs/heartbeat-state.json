@@ -1,31 +1,31 @@
 {
   "_description": "System health snapshot for Rinq. Updated at end of sessions.",
-  "_last_updated": "2026-06-29",
-  "_last_updated_by": "wrap-up",
-  "_notes": "2026-06-29: Chris (Watson) asked to send unanswered incoming calls to voicemail after 20s. The ring-before-voicemail timeout already existed (queues.ring_timeout, default 30s) but had no UI control AND was being silently reset to 30 on every queue save (the admin update route omitted ring_timeout while db.update_queue defaults missing keys via data.get('ring_timeout', 30)). Two commits: 9295f70 added the field to the admin create/edit forms and wired it through both routes (fixes the silent reset); 38f816b added a least-privilege manager path (db.set_queue_ring_timeout single-column setter + @manager_required /admin/queue/<id>/ring-timeout route re-checking is_queue_manager + control on /queues) so Chris can set it without full admin. Derek then assigned Chris as Manager + queue manager via the deployed UI. NOTE: ring timeout only governs how long phones ring; after it expires the call goes to the queue's no-answer action (defaults to AI receptionist, NOT plain voicemail) — true plain-voicemail-after-20s needs the no-answer action changed on the Call Flows page (admin-only, NOT done).",
+  "_last_updated": "2026-07-04",
+  "_last_updated_by": "memory-updater",
+  "_notes": "2026-07-04: Full-codebase quality review (7 parallel review agents, ~170 findings) then fixes in 4 phases, all merged + DEPLOYED to production (7bdfb2f..5922337, deploy green, /health 200 on both domains). ba8f1ef Phase 0 live bugs (7: missing import json in admin_schedule_routes, dropped DND check in monkey-patched fetchQueueCallers, callback Call Back never dialled, undeclared consultTargetAnswered, get_twilio_config() in spawned ring thread killed PSTN forwards, blind transfer cancels ringing target on failed redirect, /setup -> admin_required). a30e1cf Phase 1 security/tenant (X-Twilio-Signature validation in LOG mode via RINQ_TWILIO_SIGNATURE_MODE — flip to enforce after watching logs; middleware membership check on domain adoption; get_current_user denies without tenant_users row; tenant-leak singletons removed; setup-tenant uses full provision_tenant(); phone.html name escaping; per-tenant voicemail_requester_email bot_setting). fd39ab0 Phase 2a (db._update_row() present-keys-only replaced 7 clobber-prone updaters — the June ring_timeout bug class; also live: queue saves reset welcome_audio_id/callback_reminder_audio_id/position_announcement/announcement_interval, Peter sync reset hide_mobile; twilio_list(raise_on_error=True) at transfer decision points). 5922337 Phase 2b/3 (capture_for_thread() NEVER worked — threading.local doesn't cross threads; every bg thread silently used master account, masked because watson IS master; new start_twilio_thread() re-binds tenant in-thread, 13 spawn sites converted, fallback logs warning; ~60 silent exception handlers now log via web/util.py flash_error(); _is_queue_paused datetime fix; identity encode/decode dedup). Watch items: flip signature mode to enforce; restore queue audio + hide_mobile values already lost to past clobbers; watch for master-credential fallback warnings; smoke-test transfers + queue ring. Deliberately unchanged: 'tina' ticket tags/permission keys, tenant-DB FK enforcement, call_state.py transient-error misclassification (TODO'd). Phase 4 deferred: routes.py/db.py/phone.html decomposition, CallSession state machine, async voicemail pipeline, etc.",
   "repo": {
     "branch": "main",
     "remote": "derekgwatson/rinq",
-    "status": "clean (ring-timeout work shipped: 9295f70, 38f816b)",
+    "status": "clean (quality-review fixes shipped + deployed: ba8f1ef, a30e1cf, fd39ab0, 5922337)",
     "local_origin": "git@github-work:derekgwatson/rinq.git",
     "server_origin": "git@github.com:derekgwatson/rinq.git",
     "recent_commits": [
+      "5922337 fix: Phase 2b/3 - working thread-context capture; error-logging sweep",
+      "fd39ab0 fix: Phase 2a - kill the default-clobber updater pattern; strict twilio_list at transfer decision points",
+      "a30e1cf fix: Phase 1 security and tenant-isolation fixes",
+      "ba8f1ef fix: Phase 0 quality-review bugs (7 fixes)",
+      "7bdfb2f feat: Zelda ticket provider (RINQ_TICKET_PROVIDER=zelda)",
+      "047f190 feat: re-ring free agents while a caller waits in queue (flagged)",
+      "94b1333 feat: auto-reconnect dropped softphone legs in warm-transfer consults (flagged)",
+      "51e8ce3 docs: session log 2026-06-29 (queue ring-timeout UI + silent-reset fix)",
       "38f816b feat: let queue managers set ring timeout from the /queues page (no admin needed)",
-      "9295f70 feat: make queue ring-timeout editable in admin UI (fixes silent reset to 30s)",
-      "1f881e7 docs: session log 2026-06-22 (Clara phone-search owner-ranking fix)",
-      "2d2583a fix: stop a concurrently-ringing call's customer details landing on the panel",
-      "93fe55a docs: issue #7 — Cid recurrence classified, stale-PWA + version-stamp shipped",
-      "c120bf7 feat: detect & surface stale client builds; stamp app_version in diagnostics",
-      "5f97222 diag: record PWA-vs-tab (display_mode) in call diagnostics (issue #7)",
-      "487370e fix: don't enrich anonymous/withheld callers (the 'DANE OLIVERI' bug)",
-      "0311386 docs: known-issue #7 — tab-freeze ruled out, scope quantified, PWA experiment",
-      "c616df7 docs: track warm-transfer recipient-leg drop (known issue #7)"
+      "9295f70 feat: make queue ring-timeout editable in admin UI (fixes silent reset to 30s)"
     ],
     "related_bot_team_commit": "c36bf79 fix(clara): rank phone search by who actually owns the number (deployed 2026-06-22 to do-work)"
   },
   "migrations": {
-    "latest": 76,
-    "notes": "076 adds alternate_caller_id (per-user *99 swap). 075 vendor-neutral ticket columns. 074 phone-number voicemail destination. (Heartbeat lapsed since 073 on 2026-04-22.)"
+    "latest": 77,
+    "notes": "077 leg_reconnect (auto-reconnect dropped consult legs, flagged). 076 adds alternate_caller_id (per-user *99 swap). 075 vendor-neutral ticket columns. No new migrations from the 2026-07-04 quality-review fixes (per-tenant settings went into bot_settings)."
   },
   "tenants": {
     "watson": {
@@ -61,6 +61,10 @@
     "notes": "Manual test focus for 2026-04-22 changes: outbound call to a busy/non-answering number should show prominent amber outcome banner above dialpad that persists after hangup; next Watson voicemail delivery should appear in the recordings group inbox sent from mabel.bot@watsonblinds.com.au."
   },
   "pending_operations": [
+    "2026-07-04: Flip RINQ_TWILIO_SIGNATURE_MODE from LOG to enforce after watching logs for signature-validation false negatives",
+    "2026-07-04: Recheck queue audio fields (welcome_audio_id, callback_reminder_audio_id, position_announcement, announcement_interval) and hide_mobile values already lost to past default-clobbers — fix prevents future resets, does not restore",
+    "2026-07-04: Watch logs for 'falling back to global (master) credentials' warnings from background threads",
+    "2026-07-04: Smoke-test transfers + queue ring via /admin/test-runsheet after the quality-review deploy",
     "2026-06-29: Plain voicemail after 20s for Chris/Watson — ring timeout now editable, but unanswered calls still hit the AI receptionist (queue no-answer action). To send to plain voicemail instead, change the queue's no-answer action on the Call Flows page (admin-only). Awaiting Derek's call.",
     "2026-06-22: Clara/Buz data hygiene — names-in-phone-fields like '0456477779 - Edward ( Tenant )' are dirty and likely numerous; consider a sync-time normalisation pass to strip names out of phone values (ranking fix handles it regardless). Separate bot-team job.",
     "Per-tenant email provider selection: deferred pending IP-ownership discussion for multi-tenant model",
@@ -81,8 +85,8 @@
     "api/routes.py ~5,100 lines — deeper service extraction deferred until automated tests exist",
     "database/db.py 3,528 lines — more mixin extractions possible (recordings, staff, participants, queues)",
     "transfer_service.py has ~400 lines of duplication between queue-based and universal transfer methods",
-    "7 bare except clauses in transfer_service.py — should at minimum log at debug",
     "No automated tests — all testing via /admin/test-runsheet",
+    "call_state.py misclassifies transient Twilio errors as call-ended — logged + TODO'd 2026-07-04, not fixed",
     "DND + empty queue hangs up instead of falling through to voicemail",
     "Internal caller ID shows extension number, not agent name",
     "Transfer modal doesn't auto-close when target answers",
