@@ -15,7 +15,7 @@ Architecture:
 import logging
 from datetime import datetime
 
-from twilio.base.exceptions import TwilioRestException
+from twilio.base.exceptions import TwilioException, TwilioRestException
 
 from urllib.parse import quote
 from xml.sax.saxutils import escape as xml_escape
@@ -327,12 +327,22 @@ class TransferService:
             else:
                 target_e164 = self.twilio._format_phone_number(target)
 
-            # Find the conference
-            conferences = twilio_list(self.twilio.client.conferences, 
-                friendly_name=conference_name,
-                status='in-progress',
-                limit=1
-            )
+            # Find the conference. Strict list mode: empty → fail_transfer, so
+            # a transient API error must raise rather than look like "ended".
+            try:
+                conferences = twilio_list(self.twilio.client.conferences,
+                    friendly_name=conference_name,
+                    status='in-progress',
+                    limit=1,
+                    raise_on_error=True
+                )
+            except (TwilioRestException, TwilioException) as e:
+                logger.error(f"Could not look up conference for blind transfer of {call_sid}: {e}")
+                return {
+                    'success': False,
+                    'error': 'Could not verify the call state (Twilio API error) — try again.',
+                    'retryable': True
+                }
 
             if not conferences:
                 self.db.fail_transfer(call_sid, 'Conference not found')
@@ -743,11 +753,24 @@ class TransferService:
 
             # Single-conference model: Agent 2 is already in the main conference.
             # Just unhold the customer and tell Agent 1 to hang up.
-            conferences = twilio_list(self.twilio.client.conferences,
-                friendly_name=original_conference,
-                status='in-progress',
-                limit=1
-            )
+            # Strict list mode: an empty result here is interpreted as "the
+            # caller hung up" and fails the transfer — a swallowed transient
+            # API error must not masquerade as that.
+            try:
+                conferences = twilio_list(self.twilio.client.conferences,
+                    friendly_name=original_conference,
+                    status='in-progress',
+                    limit=1,
+                    raise_on_error=True
+                )
+            except (TwilioRestException, TwilioException) as e:
+                logger.error(f"Could not verify conference state for hand-off of {call_sid}: {e}")
+                return {
+                    'success': False,
+                    'error': 'Could not verify the call state (Twilio API error). '
+                             'The customer may still be on hold — try Hand off again.',
+                    'retryable': True
+                }
 
             if not conferences:
                 self.db.fail_transfer(call_sid, 'Original caller disconnected')
@@ -764,7 +787,10 @@ class TransferService:
             # If the consult target already left we must NOT remove the agent —
             # that would leave the customer alone. Abort and put them back together.
             try:
-                participants = twilio_list(self.twilio.client.conferences(conference.sid).participants)
+                participants = twilio_list(
+                    self.twilio.client.conferences(conference.sid).participants,
+                    raise_on_error=True
+                )
                 present_sids = {p.call_sid for p in participants}
 
                 if call_sid not in present_sids:

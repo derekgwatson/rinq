@@ -23,13 +23,19 @@ from rinq.tenant.context import get_twilio_config
 logger = logging.getLogger(__name__)
 
 
-def twilio_list(resource, **kwargs):
+def twilio_list(resource, raise_on_error=False, **kwargs):
     """Safely call .list() on any Twilio resource.
 
     The Twilio Python SDK has a bug where .list() throws TwilioException
     (the base class) instead of TwilioRestException when pagination
     encounters an HTTP error. This wrapper catches both and returns an
     empty list on failure, with a warning log.
+
+    Pass raise_on_error=True at DECISION points where an empty list drives
+    destructive action (e.g. "conference empty → caller hung up → fail the
+    transfer"): swallowing a transient API error there misreports "nobody
+    there" and falsely kills the flow. Keep the default lenient mode for
+    display/list endpoints where an empty result is a safe degradation.
 
     Usage:
         twilio_list(client.sip.domains)
@@ -38,6 +44,8 @@ def twilio_list(resource, **kwargs):
     try:
         return resource.list(**kwargs)
     except (TwilioRestException, TwilioException) as e:
+        if raise_on_error:
+            raise
         logger.warning(f"Twilio list failed on {resource}: {e}")
         return []
 

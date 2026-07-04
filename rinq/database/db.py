@@ -61,6 +61,43 @@ class Database(StatsMixin, CallLogMixin):
     # Shared helpers
     # =========================================================================
 
+    def _update_row(self, table: str, key_col: str, key_val, data: dict,
+                    allowed_cols: frozenset, updated_by: str = None,
+                    audit_cols: bool = True) -> None:
+        """UPDATE only the columns present in `data` (present-keys-only).
+
+        Guards against the default-clobber bug class: an UPDATE built with
+        `data.get(key, default)` silently resets every column the caller
+        omits (this reset queue ring_timeout to 30s on every save in
+        production, 2026-06). With this helper, omitted keys preserve the
+        stored value; a key explicitly set to None writes NULL; unknown
+        keys raise ValueError instead of being silently dropped.
+
+        `table`/`key_col`/`allowed_cols` must be hardcoded constants at the
+        call site — never user input.
+        """
+        updates, params = [], []
+        for key, val in data.items():
+            if key not in allowed_cols:
+                raise ValueError(f"Invalid {table} column: {key}")
+            updates.append(f"{key} = ?")
+            # Normalize bools for SQLite consistency with the old updaters
+            params.append(int(val) if isinstance(val, bool) else val)
+        if not updates:
+            return
+        if audit_cols:
+            updates.append("updated_at = ?")
+            params.append(datetime.now(timezone.utc).isoformat())
+            updates.append("updated_by = ?")
+            params.append(updated_by)
+        params.append(key_val)
+        with self._get_conn() as conn:
+            conn.execute(
+                f"UPDATE {table} SET {', '.join(updates)} WHERE {key_col} = ?",
+                params
+            )
+            conn.commit()
+
     @staticmethod
     def _fill_hourly(rows, hour_key='hour'):
         """Build a 24-hour list from query rows, zero-filling missing hours."""
@@ -948,18 +985,12 @@ class Database(StatsMixin, CallLogMixin):
             conn.commit()
             return cursor.lastrowid
 
+    _AUDIO_FILE_UPDATE_COLS = frozenset({'name', 'description', 'file_type', 'tts_text'})
+
     def update_audio_file(self, audio_id: int, data: dict, updated_by: str) -> None:
-        """Update an audio file's metadata (name, description, type, spoken text)."""
-        now = datetime.now(timezone.utc).isoformat()
-        with self._get_conn() as conn:
-            conn.execute("""
-                UPDATE audio_files
-                SET name = ?, description = ?, file_type = ?, tts_text = ?,
-                    updated_at = ?, updated_by = ?
-                WHERE id = ?
-            """, (data['name'], data.get('description'), data['file_type'],
-                  data.get('tts_text'), now, updated_by, audio_id))
-            conn.commit()
+        """Update an audio file's metadata. Only columns present in `data` are written."""
+        self._update_row('audio_files', 'id', audio_id, data,
+                         self._AUDIO_FILE_UPDATE_COLS, updated_by)
 
     def deactivate_audio_file(self, audio_id: int) -> None:
         """Soft delete an audio file by setting is_active = 0."""
@@ -1036,23 +1067,16 @@ class Database(StatsMixin, CallLogMixin):
             conn.commit()
             return cursor.lastrowid
 
+    _SCHEDULE_UPDATE_COLS = frozenset({
+        'name', 'description', 'timezone', 'business_hours',
+        'default_closure_action', 'default_closure_audio_id',
+        'default_closure_forward_to',
+    })
+
     def update_schedule(self, schedule_id: int, data: dict, updated_by: str) -> None:
-        """Update a schedule."""
-        now = datetime.now(timezone.utc).isoformat()
-        with self._get_conn() as conn:
-            conn.execute("""
-                UPDATE schedules
-                SET name = ?, description = ?, timezone = ?, business_hours = ?,
-                    default_closure_action = ?, default_closure_audio_id = ?,
-                    default_closure_forward_to = ?,
-                    updated_at = ?, updated_by = ?
-                WHERE id = ?
-            """, (data['name'], data.get('description'), data.get('timezone'),
-                  data.get('business_hours'),
-                  data.get('default_closure_action'), data.get('default_closure_audio_id'),
-                  data.get('default_closure_forward_to'),
-                  now, updated_by, schedule_id))
-            conn.commit()
+        """Update a schedule. Only columns present in `data` are written."""
+        self._update_row('schedules', 'id', schedule_id, data,
+                         self._SCHEDULE_UPDATE_COLS, updated_by)
 
     def get_call_flows_using_schedule(self, schedule_id: int) -> list[dict]:
         """Get all call flows that use this schedule.
@@ -1120,26 +1144,22 @@ class Database(StatsMixin, CallLogMixin):
             conn.commit()
             return cursor.lastrowid
 
+    _SCHEDULE_HOLIDAY_UPDATE_COLS = frozenset({
+        'name', 'date', 'audio_id', 'recurrence', 'day_of_week',
+        'start_time', 'end_time', 'action', 'forward_to',
+    })
+
     def update_schedule_holiday(self, holiday_id: int, data: dict, updated_by: str) -> None:
-        """Update a holiday/closure.
+        """Update a holiday/closure. Only columns present in `data` are written.
 
         Args:
             holiday_id: ID of the holiday to update
             data: Dict with fields to update (name, date, audio_id, recurrence,
                   day_of_week, start_time, end_time, action, forward_to)
-            updated_by: Audit trail
+            updated_by: Audit trail (unused — table has no audit columns)
         """
-        with self._get_conn() as conn:
-            conn.execute("""
-                UPDATE schedule_holidays
-                SET name = ?, date = ?, audio_id = ?, recurrence = ?,
-                    day_of_week = ?, start_time = ?, end_time = ?, action = ?, forward_to = ?
-                WHERE id = ?
-            """, (data['name'], data.get('date'), data.get('audio_id'),
-                  data.get('recurrence', 'once'), data.get('day_of_week'),
-                  data.get('start_time'), data.get('end_time'), data.get('action'),
-                  data.get('forward_to'), holiday_id))
-            conn.commit()
+        self._update_row('schedule_holidays', 'id', holiday_id, data,
+                         self._SCHEDULE_HOLIDAY_UPDATE_COLS, audit_cols=False)
 
     def get_schedule_holiday(self, holiday_id: int) -> dict | None:
         """Get a single holiday/closure by ID."""
@@ -1446,8 +1466,10 @@ class Database(StatsMixin, CallLogMixin):
                 """, (template_id, schedule_id, now, created_by))
                 conn.commit()
                 return True
-            except Exception:
-                # Already linked (UNIQUE constraint)
+            except sqlite3.IntegrityError:
+                # Already linked (UNIQUE constraint). Anything else —
+                # locked DB, disk error — must propagate, not report
+                # "already linked".
                 return False
 
     def unlink_template_from_schedule(self, template_id: int, schedule_id: int) -> bool:
@@ -1718,34 +1740,19 @@ class Database(StatsMixin, CallLogMixin):
             conn.commit()
             return cursor.lastrowid
 
+    _QUEUE_UPDATE_COLS = frozenset({
+        'name', 'description', 'hold_music_id', 'position_announcement',
+        'announcement_interval', 'ring_strategy', 'ring_timeout',
+        'offer_callback', 'callback_threshold', 'allow_self_service',
+        'reject_action', 'allow_voicemail_escape', 'welcome_audio_id',
+        'callback_reminder_audio_id', 'escape_announcement_delay',
+        'escape_repeat_interval', 'max_wait_time',
+    })
+
     def update_queue(self, queue_id: int, data: dict, updated_by: str) -> None:
-        """Update a queue."""
-        now = datetime.now(timezone.utc).isoformat()
-        with self._get_conn() as conn:
-            conn.execute("""
-                UPDATE queues
-                SET name = ?, description = ?, hold_music_id = ?, position_announcement = ?,
-                    announcement_interval = ?, ring_strategy = ?, ring_timeout = ?,
-                    offer_callback = ?, callback_threshold = ?, allow_self_service = ?,
-                    reject_action = ?, allow_voicemail_escape = ?,
-                    welcome_audio_id = ?, callback_reminder_audio_id = ?,
-                    escape_announcement_delay = ?, escape_repeat_interval = ?,
-                    max_wait_time = ?,
-                    updated_at = ?, updated_by = ?
-                WHERE id = ?
-            """, (data['name'], data.get('description'), data.get('hold_music_id'),
-                  data.get('position_announcement', 1), data.get('announcement_interval', 60),
-                  data.get('ring_strategy', 'simultaneous'), data.get('ring_timeout', 30),
-                  data.get('offer_callback', 0), data.get('callback_threshold', 60),
-                  1 if data.get('allow_self_service') else 0,
-                  data.get('reject_action', 'continue'),
-                  1 if data.get('allow_voicemail_escape') else 0,
-                  data.get('welcome_audio_id'), data.get('callback_reminder_audio_id'),
-                  data.get('escape_announcement_delay', 60),
-                  data.get('escape_repeat_interval', 120),
-                  data.get('max_wait_time'),
-                  now, updated_by, queue_id))
-            conn.commit()
+        """Update a queue. Only columns present in `data` are written."""
+        self._update_row('queues', 'id', queue_id, data,
+                         self._QUEUE_UPDATE_COLS, updated_by)
 
     # =========================================================================
     # Queue Managers
@@ -2031,36 +2038,20 @@ class Database(StatsMixin, CallLogMixin):
             conn.commit()
             return cursor.lastrowid
 
+    _CALL_FLOW_UPDATE_COLS = frozenset({
+        'name', 'description', 'greeting_audio_id', 'schedule_id',
+        'open_action', 'open_queue_id', 'open_forward_number', 'open_audio_id',
+        'open_no_answer_action', 'no_answer_audio_id',
+        'closed_action', 'closed_audio_id', 'closed_forward_number',
+        'closed_message_parts', 'voicemail_email', 'voicemail_destination_id',
+        'extension_prompt_audio_id', 'extension_no_answer_action',
+        'extension_invalid_audio_id',
+    })
+
     def update_call_flow(self, flow_id: int, data: dict, updated_by: str) -> None:
-        """Update a call flow."""
-        now = datetime.now(timezone.utc).isoformat()
-        with self._get_conn() as conn:
-            conn.execute("""
-                UPDATE call_flows
-                SET name = ?, description = ?, greeting_audio_id = ?, schedule_id = ?,
-                    open_action = ?, open_queue_id = ?, open_forward_number = ?, open_audio_id = ?,
-                    open_no_answer_action = ?, no_answer_audio_id = ?,
-                    closed_action = ?, closed_audio_id = ?, closed_forward_number = ?,
-                    closed_message_parts = ?,
-                    voicemail_email = ?, voicemail_destination_id = ?,
-                    extension_prompt_audio_id = ?, extension_no_answer_action = ?,
-                    extension_invalid_audio_id = ?,
-                    updated_at = ?, updated_by = ?
-                WHERE id = ?
-            """, (data['name'], data.get('description'), data.get('greeting_audio_id'),
-                  data.get('schedule_id'), data.get('open_action', 'queue'),
-                  data.get('open_queue_id'), data.get('open_forward_number'), data.get('open_audio_id'),
-                  data.get('open_no_answer_action', 'ai_receptionist'),
-                  data.get('no_answer_audio_id'),
-                  data.get('closed_action', 'message'), data.get('closed_audio_id'),
-                  data.get('closed_forward_number'),
-                  data.get('closed_message_parts'),
-                  data.get('voicemail_email'),
-                  data.get('voicemail_destination_id'),
-                  data.get('extension_prompt_audio_id'), data.get('extension_no_answer_action', 'voicemail'),
-                  data.get('extension_invalid_audio_id'),
-                  now, updated_by, flow_id))
-            conn.commit()
+        """Update a call flow. Only columns present in `data` are written."""
+        self._update_row('call_flows', 'id', flow_id, data,
+                         self._CALL_FLOW_UPDATE_COLS, updated_by)
 
     def delete_call_flow(self, flow_id: int) -> bool:
         """Delete a call flow.
@@ -2543,27 +2534,16 @@ class Database(StatsMixin, CallLogMixin):
             conn.commit()
         return self.get_staff_extension(email)
 
+    _STAFF_EXTENSION_UPDATE_COLS = frozenset({'forward_to', 'forward_mode', 'hide_mobile'})
+
     def update_staff_extension(self, email: str, data: dict, updated_by: str) -> None:
-        """Update a staff member's extension settings."""
-        now = datetime.now(timezone.utc).isoformat()
-        with self._get_conn() as conn:
-            conn.execute("""
-                UPDATE staff_extensions
-                SET forward_to = ?,
-                    forward_mode = ?,
-                    hide_mobile = ?,
-                    updated_at = ?,
-                    updated_by = ?
-                WHERE email = ?
-            """, (
-                data.get('forward_to'),
-                data.get('forward_mode', 'always'),
-                1 if data.get('hide_mobile') else 0,
-                now,
-                updated_by,
-                email.lower()
-            ))
-            conn.commit()
+        """Update a staff member's extension settings.
+
+        Only columns present in `data` are written — the Peter sync passes
+        just forward_to/forward_mode and used to reset hide_mobile to 0.
+        """
+        self._update_row('staff_extensions', 'email', email.lower(), data,
+                         self._STAFF_EXTENSION_UPDATE_COLS, updated_by)
 
     def update_staff_reports_to(self, email: str, reports_to: str | None, updated_by: str) -> bool:
         """Set who a staff member reports to (manager email)."""
@@ -2882,20 +2862,15 @@ class Database(StatsMixin, CallLogMixin):
             conn.commit()
             return cursor.lastrowid
 
+    _VOICEMAIL_DEST_UPDATE_COLS = frozenset({
+        'name', 'email', 'description', 'ticket_group_id', 'routing_type',
+    })
+
     def update_voicemail_destination(self, destination_id: int, data: dict,
                                      updated_by: str) -> None:
-        """Update a voicemail destination."""
-        now = datetime.now(timezone.utc).isoformat()
-        with self._get_conn() as conn:
-            conn.execute("""
-                UPDATE voicemail_destinations
-                SET name = ?, email = ?, description = ?, ticket_group_id = ?,
-                    routing_type = ?, updated_at = ?, updated_by = ?
-                WHERE id = ?
-            """, (data['name'], data.get('email'), data.get('description'),
-                  data.get('ticket_group_id'), data.get('routing_type', 'email'),
-                  now, updated_by, destination_id))
-            conn.commit()
+        """Update a voicemail destination. Only columns present in `data` are written."""
+        self._update_row('voicemail_destinations', 'id', destination_id, data,
+                         self._VOICEMAIL_DEST_UPDATE_COLS, updated_by)
 
     def delete_voicemail_destination(self, destination_id: int) -> bool:
         """Delete a voicemail destination.

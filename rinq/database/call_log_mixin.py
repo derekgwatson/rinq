@@ -4,7 +4,10 @@ Mixin class — mixed into Database via multiple inheritance.
 All methods access self._get_conn() and self._fill_hourly() from the Database base class.
 """
 
+import logging
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 
 class CallLogMixin:
@@ -75,6 +78,10 @@ class CallLogMixin:
         values = []
         for key, value in updates.items():
             if key not in self._CALL_LOG_UPDATE_FIELDS:
+                # Don't raise (some callers pass superset dicts), but a typo'd
+                # field silently no-oping has already cost debugging time —
+                # make the drop visible.
+                logger.warning(f"update_call_log: ignoring unknown field '{key}' for {call_sid}")
                 continue
             set_clauses.append(f"{key} = ?")
             # Convert 'CURRENT_TIMESTAMP' string to actual datetime
