@@ -5,8 +5,16 @@ on:
     branches: [main]
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for undefined names and syntax errors
+        run: pipx run ruff check --select F821 rinq/
+
   deploy:
     runs-on: ubuntu-latest
+    needs: lint
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
