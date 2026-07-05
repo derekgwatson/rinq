@@ -2322,7 +2322,8 @@ def queue_agent_answer(queue_id):
 </Response>'''
         return Response(twiml, mimetype='application/xml')
 
-    # Cancel other agent calls since this one won    def cancel_others(_db=db, _sid=customer_call_sid, _except=agent_call_sid):
+    # Cancel other agent calls since this one won
+    def cancel_others(_db=db, _sid=customer_call_sid, _except=agent_call_sid):
         _cancel_agent_calls(_sid, except_call_sid=_except, db=_db)
     start_twilio_thread(cancel_others)
 
