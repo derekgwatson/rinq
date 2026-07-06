@@ -20,6 +20,16 @@ TENANT_EXEMPT_PREFIXES = (
     '/login', '/auth/', '/logout', '/health', '/info', '/static/',
 )
 
+# Media-TwiML endpoints exempt from signature validation. Twilio fetches
+# these as conference wait/hold URLs with no call parameters, so tenant
+# resolution yields None and there is no auth token to validate against —
+# under enforce mode they would 403 and hold audio would go silent. Both
+# return a static <Play> and change no state, so unsigned access is harmless.
+SIGNATURE_EXEMPT_PATHS = (
+    '/api/voice/hold-music',
+    '/api/voice/ringback',
+)
+
 
 def _check_twilio_signature(tenant):
     """Validate X-Twilio-Signature on unauthenticated webhook requests.
@@ -45,6 +55,8 @@ def _check_twilio_signature(tenant):
     """
     mode = os.environ.get('RINQ_TWILIO_SIGNATURE_MODE', 'log').lower()
     if mode == 'off':
+        return True
+    if request.path in SIGNATURE_EXEMPT_PATHS:
         return True
     if session.get('user_id') or request.headers.get('X-API-Key'):
         return True  # app caller, not Twilio
