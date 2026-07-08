@@ -2448,43 +2448,69 @@ def queue_agent_ring_status(queue_id):
         logger.debug(f"No tracking info for agent call {agent_call_sid}")
         return Response('OK', status=200)
 
-    # Only handle rejection (busy) — "busy" means the agent explicitly rejected
-    if call_status != 'busy':
-        logger.debug(f"Agent call {agent_call_sid} ended with {call_status} - not a rejection")
+    # Act on two terminal outcomes:
+    #   busy             → agent explicitly rejected
+    #   no-answer/failed → agent's phone rang out (never picked up)
+    # Anything else (completed/canceled — a leg torn down after another agent
+    # answered) is not a give-up signal.
+    rejected = call_status == 'busy'
+    rang_out = call_status in ('no-answer', 'failed')
+    if not (rejected or rang_out):
+        logger.debug(f"Agent call {agent_call_sid} ended with {call_status} - no action")
         return Response('OK', status=200)
 
     queue = db.get_queue(queue_id)
     if not queue:
-        logger.warning(f"Queue {queue_id} not found for rejection handling")
+        logger.warning(f"Queue {queue_id} not found for ring-status handling")
         return Response('OK', status=200)
 
     reject_action = queue.get('reject_action', 'continue')
+    bounce_on_no_answer = bool(queue.get('voicemail_on_no_answer'))
     agent_email = call_info.get('user_email', 'unknown')
-    logger.info(f"Queue {queue.get('name')} reject_action={reject_action}, agent {agent_email} rejected")
-
     remaining = db.get_ring_attempts(customer_call_sid)
 
-    if reject_action == 'voicemail':
-        # Any rejection → voicemail immediately, cancel remaining rings
+    if rejected:
+        logger.info(f"Queue {queue.get('name')} reject_action={reject_action}, agent {agent_email} rejected")
+        if reject_action == 'voicemail':
+            # Any rejection → voicemail immediately, cancel remaining rings
+            _send_queue_caller_to_voicemail(
+                queue_id, customer_call_sid,
+                reason=f"Agent {agent_email} rejected (queue set to voicemail-on-reject)",
+                db=db
+            )
+        elif remaining:
+            # Others still ringing — let them answer
+            db.log_activity(
+                action="agent_rejected_call",
+                target=f"queue_{queue_id}",
+                details=f"Agent {agent_email} rejected, {len(remaining)} agent(s) still ringing",
+                performed_by="twilio"
+            )
+        else:
+            # Last agent rejected — no point leaving caller in queue
+            _send_queue_caller_to_voicemail(
+                queue_id, customer_call_sid,
+                reason=f"Agent {agent_email} rejected and no agents remain",
+                db=db
+            )
+        return Response('OK', status=200)
+
+    # Rang out (no-answer/failed). Only give up if this queue is configured to
+    # bounce AND no other agent is still ringing — this fires on the last leg of
+    # the ring, so the whole team has rung out. Queues without the flag keep the
+    # caller holding (dashboard pickup / max_wait_time own the give-up decision).
+    # _send_queue_caller_to_voicemail no-ops unless the caller is still 'waiting',
+    # so a call another agent answered can't be bounced by a stray callback.
+    if bounce_on_no_answer and not remaining:
         _send_queue_caller_to_voicemail(
             queue_id, customer_call_sid,
-            reason=f"Agent {agent_email} rejected (queue set to voicemail-on-reject)",
+            reason=f"Agent {agent_email} rang out and no agents remain (voicemail-on-no-answer)",
             db=db
-        )
-    elif remaining:
-        # Others still ringing — let them answer
-        db.log_activity(
-            action="agent_rejected_call",
-            target=f"queue_{queue_id}",
-            details=f"Agent {agent_email} rejected, {len(remaining)} agent(s) still ringing",
-            performed_by="twilio"
         )
     else:
-        # Last agent rejected — no point leaving caller in queue
-        _send_queue_caller_to_voicemail(
-            queue_id, customer_call_sid,
-            reason=f"Agent {agent_email} rejected and no agents remain",
-            db=db
+        logger.debug(
+            f"Agent {agent_email} rang out ({call_status}); bounce={bounce_on_no_answer}, "
+            f"remaining={len(remaining)} — caller keeps waiting"
         )
     return Response('OK', status=200)
 

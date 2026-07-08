@@ -1727,8 +1727,9 @@ class Database(StatsMixin, CallLogMixin):
                                     reject_action, allow_voicemail_escape,
                                     welcome_audio_id, callback_reminder_audio_id,
                                     escape_announcement_delay, escape_repeat_interval,
+                                    voicemail_on_no_answer,
                                     created_at, created_by, updated_at, updated_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (data['name'], data.get('description'), data.get('hold_music_id'),
                   data.get('position_announcement', 1), data.get('announcement_interval', 60),
                   data.get('ring_strategy', 'simultaneous'), data.get('ring_timeout', 30),
@@ -1739,6 +1740,7 @@ class Database(StatsMixin, CallLogMixin):
                   data.get('welcome_audio_id'), data.get('callback_reminder_audio_id'),
                   data.get('escape_announcement_delay', 60),
                   data.get('escape_repeat_interval', 120),
+                  1 if data.get('voicemail_on_no_answer') else 0,
                   now, created_by, now, created_by))
             conn.commit()
             return cursor.lastrowid
@@ -1749,7 +1751,7 @@ class Database(StatsMixin, CallLogMixin):
         'offer_callback', 'callback_threshold', 'allow_self_service',
         'reject_action', 'allow_voicemail_escape', 'welcome_audio_id',
         'callback_reminder_audio_id', 'escape_announcement_delay',
-        'escape_repeat_interval', 'max_wait_time',
+        'escape_repeat_interval', 'max_wait_time', 'voicemail_on_no_answer',
     })
 
     def update_queue(self, queue_id: int, data: dict, updated_by: str) -> None:

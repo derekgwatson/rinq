@@ -66,9 +66,10 @@ def register(bp):
         escape_repeat_interval = request.form.get('escape_repeat_interval', '120')
         escape_repeat_interval = int(escape_repeat_interval) if escape_repeat_interval else 120
         reject_action = request.form.get('reject_action', 'continue')
+        voicemail_on_no_answer = request.form.get('voicemail_on_no_answer') == '1'
         hold_music_id = request.form.get('hold_music_id')
         hold_music_id = int(hold_music_id) if hold_music_id else None
-    
+
         if not name:
             flash("Queue name is required", "error")
             return redirect(url_for('web.admin'))
@@ -90,6 +91,7 @@ def register(bp):
                     'escape_announcement_delay': escape_announcement_delay,
                     'escape_repeat_interval': escape_repeat_interval,
                     'reject_action': reject_action,
+                    'voicemail_on_no_answer': voicemail_on_no_answer,
                     'hold_music_id': hold_music_id,
                 },
                 created_by=_audit_tag(user)
@@ -186,6 +188,7 @@ def register(bp):
         escape_repeat_interval = request.form.get('escape_repeat_interval', '120')
         escape_repeat_interval = int(escape_repeat_interval) if escape_repeat_interval else 120
         reject_action = request.form.get('reject_action', 'continue')
+        voicemail_on_no_answer = request.form.get('voicemail_on_no_answer') == '1'
         hold_music_id = request.form.get('hold_music_id')
         hold_music_id = int(hold_music_id) if hold_music_id else None
         max_wait_plays = request.form.get('max_wait_plays', '').strip()
@@ -213,6 +216,7 @@ def register(bp):
                     'escape_announcement_delay': escape_announcement_delay,
                     'escape_repeat_interval': escape_repeat_interval,
                     'reject_action': reject_action,
+                    'voicemail_on_no_answer': voicemail_on_no_answer,
                     'hold_music_id': hold_music_id,
                     'max_wait_time': max_wait_time,
                 },

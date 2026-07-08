@@ -251,6 +251,17 @@
                         </div>
                     </div>
                     <div style="margin-bottom: 15px;">
+                        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                            <input type="checkbox" name="voicemail_on_no_answer" value="1"
+                                   {% if queue.voicemail_on_no_answer %}checked{% endif %}>
+                            <span style="font-weight: 600; font-size: 0.9em;">Send to voicemail if no one answers</span>
+                        </label>
+                        <p class="text-muted" style="margin: 5px 0 0 22px; font-size: 0.85em;">
+                            When the team's phones ring out with no answer, send the caller straight to voicemail instead of holding them in the queue.
+                            Use this for desk-phone teams who don't watch the dashboard. Leave off for teams who pick up held callers from the dashboard.
+                        </p>
+                    </div>
+                    <div style="margin-bottom: 15px;">
                         <label style="font-size: 0.85em; color: #666;">Send to voicemail after
                             <input type="number" name="max_wait_plays" value="{{ queue.max_wait_time if queue.max_wait_time else '' }}"
                                    min="1" max="30" placeholder="—"
@@ -488,6 +499,10 @@
             <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                 <input type="checkbox" name="offer_callback" value="1">
                 <span style="font-size: 0.9em;">Offer callback (press 2)</span>
+            </label>
+            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                <input type="checkbox" name="voicemail_on_no_answer" value="1">
+                <span style="font-size: 0.9em;">Voicemail if no one answers (no holding)</span>
             </label>
             <button type="submit" class="btn">Create Queue</button>
         </div>
