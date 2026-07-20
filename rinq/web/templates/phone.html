@@ -3030,6 +3030,12 @@ async function initPhone() {
             _wireCallDiagnostics(call);
             let from = call.parameters.From || 'Unknown';
             const callSid = call.parameters.CallSid;
+            // Stash the caller identity on the call object — for queue rings
+            // From is the customer's number and the only way to tell WHICH
+            // queued caller this leg is for (the leg's CallSid is the agent's
+            // own ring leg, never the customer's). answerQueueCall reads this
+            // to label the call it actually accepts.
+            call._resolvedFrom = from !== 'Unknown' ? from : null;
 
             // REST-API-created calls to this Client (e.g. extension directory
             // ringing a browser) don't always surface From via the SDK, so it
@@ -3043,7 +3049,10 @@ async function initPhone() {
                     );
                     if (r.ok && currentCall === call) {
                         const data = await r.json();
-                        if (data.from_number) from = data.from_number;
+                        if (data.from_number) {
+                            from = data.from_number;
+                            call._resolvedFrom = from;
+                        }
                     }
                 } catch (err) {
                     console.warn('Incoming caller fallback failed:', err);
@@ -3830,6 +3839,7 @@ function updateMuteButton() {
 
 // toggleHold kept for internal use (e.g. auto-hold on transfer)
 // Hold is now exposed via per-participant cards in the conference panel.
+let _holdNoticeShown = false;
 async function toggleHold() {
     if (!currentCall) return;
 
@@ -3855,7 +3865,15 @@ async function toggleHold() {
         if (!response.ok) {
             const data = await response.json();
             console.error('Hold API error:', data.error);
+            // Surface the failure — a silent return here looks like a dead
+            // button and burned an agent for a whole call before anyone knew
+            showCallNotice(`Couldn't ${newHoldState ? 'hold' : 'unhold'} the caller — please try again.`);
+            _holdNoticeShown = true;
             return;
+        }
+        if (_holdNoticeShown) {
+            clearCallNotice();
+            _holdNoticeShown = false;
         }
         isOnHold = newHoldState;
         _cardHeld[targetSid] = newHoldState;
@@ -3864,6 +3882,8 @@ async function toggleHold() {
         if (!newHoldState && isMuted) currentCall.mute(true);
     } catch (error) {
         console.error('Error toggling hold:', error);
+        showCallNotice(`Couldn't ${newHoldState ? 'hold' : 'unhold'} the caller — please try again.`);
+        _holdNoticeShown = true;
     }
 }
 
@@ -5444,9 +5464,6 @@ async function answerQueueCall(callSid) {
         return;
     }
 
-    // Fetch customer context in the background — don't block the call
-    fetchCustomerContext(caller.caller_number);
-
     // Queue calls now ring the browser softphone directly (see backend
     // _ring_agents_for_queue). If that ring is still pending, accept the
     // existing inbound leg rather than creating a parallel device.connect —
@@ -5459,6 +5476,28 @@ async function answerQueueCall(callSid) {
             pendingIncoming = currentCall;
         }
     } catch (e) { /* SDK quirk — fall through to connect */ }
+
+    // Accepting a pending ring connects us to whoever that leg is for — NOT
+    // necessarily the row the agent clicked (two callers can be queued at
+    // once). The ring's From is the customer's number, so when it provably
+    // identifies a DIFFERENT waiting caller, label the call with that caller
+    // — otherwise hold/transfer target someone still parked in the queue and
+    // silently no-op. Empty or ambiguous From (withheld caller ID, two
+    // callers sharing a number) keeps the clicked row; the call-state poll
+    // reconciles the SID from the server shortly after if it's wrong.
+    let answeredCaller = caller;
+    if (pendingIncoming) {
+        const ringKey = _ctxDigits(pendingIncoming._resolvedFrom);
+        if (ringKey.length >= 6 && _ctxDigits(caller.caller_number) !== ringKey) {
+            const matches = (window._lastCallers || []).filter(c =>
+                c.status === 'waiting' && _ctxDigits(c.caller_number) === ringKey);
+            if (matches.length === 1) {
+                answeredCaller = matches[0];
+                _recordDiagnostic('queue-answer-click-mismatch',
+                    { clicked: callSid, ringing: answeredCaller.call_sid });
+            }
+        }
+    }
 
     answeringCallSid = callSid;
     renderQueueCallers(window._lastCallers || []);
@@ -5474,11 +5513,17 @@ async function answerQueueCall(callSid) {
         pendingIncoming.on('accept', () => {
             setStatus('Connected', 'busy');
             startCallTimer();
-            callNumber.textContent = caller.customer_name || caller.caller_number || 'Queue Caller';
+            callNumber.textContent = answeredCaller.customer_name || answeredCaller.caller_number || 'Queue Caller';
             callInfo.classList.add('active');
             contextPane.classList.add('has-call');
             answeringCallSid = null;
-            currentQueueCallerSid = callSid;  // Track for hold/unhold/transfer
+            currentQueueCallerSid = answeredCaller.call_sid;  // Track for hold/unhold/transfer
+            // Paint the context pane only now we know which leg connected.
+            // The ring-time lookup usually painted this caller already —
+            // skip the re-fetch when it did.
+            if (customerContextNumber !== _ctxDigits(answeredCaller.caller_number)) {
+                fetchCustomerContext(answeredCaller.caller_number);
+            }
             startCallStatePolling();
             fetchQueueCallers();
         });
@@ -5486,6 +5531,10 @@ async function answerQueueCall(callSid) {
         pendingIncoming.accept();
         return;
     }
+
+    // No pending ring: the server bridges the CLICKED caller via
+    // AnswerCallSid below, so here the click is authoritative.
+    fetchCustomerContext(caller.caller_number);
 
     try {
         setStatus('Connecting...', 'busy');
@@ -5996,6 +6045,44 @@ async function pollCallState() {
         // the customer's SID instead of the agent's SID, leaving talk_seconds NULL.
         if (state.customer_call_sid && !currentQueueCallerSid && !currentOutboundCallSid) {
             currentQueueCallerSid = state.customer_call_sid;
+        }
+
+        // Reconcile a WRONG customer SID against the server. call_participants
+        // (written by the agent-answer webhook, keyed on our own leg) is
+        // authoritative about who we're actually talking to; the client value
+        // can be wrong when the agent clicked one queue row while the ring was
+        // for another. Every guard is load-bearing: outbound calls must keep
+        // currentQueueCallerSid null (see comment above / CLAUDE.md gotcha 30)
+        // and endCall() clears it mid-consult on purpose (gotcha 32) — this
+        // must never write it back in either state. In every other flow the
+        // two values are filled from this same field, so a mismatch IS the bug.
+        if (state.customer_call_sid
+            && currentQueueCallerSid
+            && !currentOutboundCallSid
+            && !isConsulting
+            && state.customer_call_sid !== currentQueueCallerSid) {
+            const wrongSid = currentQueueCallerSid;
+            const correctedSid = state.customer_call_sid;
+            console.warn('Queue customer SID corrected by server:', wrongSid, '->', correctedSid);
+            _recordDiagnostic('queue-customer-sid-corrected', { was: wrongSid, now: correctedSid });
+            currentQueueCallerSid = correctedSid;
+            // Re-label from the corrected participant. The poll payload has
+            // the name but not the number, and the answered caller has left
+            // the queue list by now — fetch the number for the context pane
+            // via the incoming-caller lookup (returns the call's From, which
+            // for an inbound queue call is the customer's number).
+            const correctedCust = (state.participants || []).find(p => p.call_sid === correctedSid);
+            if (correctedCust && correctedCust.name) {
+                callNumber.textContent = correctedCust.name;
+            }
+            fetch(`/api/voice/incoming-caller?call_sid=${encodeURIComponent(correctedSid)}`, {
+                credentials: 'same-origin'
+            }).then(r => r.ok ? r.json() : null).then(d => {
+                // Re-check we still describe the same call once the fetch lands
+                if (d && d.from_number && currentQueueCallerSid === correctedSid) {
+                    fetchCustomerContext(d.from_number);
+                }
+            }).catch(() => {});
         }
 
         // Customer answered — update status and start recording
