@@ -477,22 +477,33 @@ class RecordingService:
         """Set whether a user has recording enabled by default."""
         self.db.set_user_recording_default(email, enabled, updated_by)
 
-    def purge_stale_recordings(self, days: int = 30) -> dict:
+    def purge_stale_recordings(self, days: int = 30, dry_run: bool = False) -> dict:
         """Purge local recording files that haven't been accessed recently.
 
         Deletes local cached files for recordings not accessed in the given
         number of days. The Google Group archive remains the permanent store.
 
+        Only recordings that have a Google Drive copy are purged — playback
+        falls back to Drive and re-caches on a local miss, so those files are
+        genuinely cache. A recording with no drive_file_id has the local file
+        as its only playable copy (the Google Groups archive is cold storage
+        and can't be streamed), so deleting it would lose the audio.
+
         Args:
             days: Number of days since last access before purging (default 30)
+            dry_run: Report what would be purged without deleting anything
 
         Returns:
-            Dict with 'success', 'purged_count', and 'errors'
+            Dict with 'success', 'purged_count', 'purged_bytes',
+            'skipped_no_archive', 'dry_run', and 'errors'
         """
         stale_recordings = self.db.get_stale_recordings(days=days)
-        logger.info(f"Found {len(stale_recordings)} recordings to purge (not accessed in {days} days)")
+        logger.info(f"Found {len(stale_recordings)} recordings to purge (not accessed in {days} days)"
+                    + (" [dry run]" if dry_run else ""))
 
         purged_count = 0
+        purged_bytes = 0
+        skipped_no_archive = 0
         errors = []
 
         for rec in stale_recordings:
@@ -502,15 +513,22 @@ class RecordingService:
             if not local_path:
                 continue
 
+            if not rec.get('drive_file_id'):
+                skipped_no_archive += 1
+                continue
+
             try:
                 # Build full path and delete file
                 full_path = os.path.join(self.RECORDINGS_DIR, local_path)
                 if os.path.exists(full_path):
-                    os.remove(full_path)
-                    logger.info(f"Deleted local file for recording {recording_sid}")
+                    purged_bytes += os.path.getsize(full_path)
+                    if not dry_run:
+                        os.remove(full_path)
+                        logger.info(f"Deleted local file for recording {recording_sid}")
 
                 # Clear the local_file_path in database
-                self.db.clear_recording_local_file(recording_sid)
+                if not dry_run:
+                    self.db.clear_recording_local_file(recording_sid)
                 purged_count += 1
 
             except OSError as e:
@@ -518,11 +536,21 @@ class RecordingService:
                 logger.error(error_msg)
                 errors.append(error_msg)
 
-        logger.info(f"Purged {purged_count} recordings, {len(errors)} errors")
+        if skipped_no_archive:
+            logger.warning(
+                f"Skipped {skipped_no_archive} stale recordings with no Drive copy — "
+                f"the local file is the only playable copy"
+            )
+        verb = "Would purge" if dry_run else "Purged"
+        logger.info(f"{verb} {purged_count} recordings "
+                    f"({purged_bytes / 1_000_000:.0f} MB), {len(errors)} errors")
 
         return {
             'success': len(errors) == 0,
             'purged_count': purged_count,
+            'purged_bytes': purged_bytes,
+            'skipped_no_archive': skipped_no_archive,
+            'dry_run': dry_run,
             'errors': errors if errors else None,
         }
 

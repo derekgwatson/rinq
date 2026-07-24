@@ -315,17 +315,55 @@ def register(bp):
     @bp.route('/recordings/purge', methods=['POST'])
     @api_or_session_auth
     def purge_stale_recordings():
-        """Purge local recording cache files not accessed recently."""
+        """Purge local recording cache files not accessed recently.
+
+        From a session (admin user), purges the current tenant. From the
+        nightly cron there is no session and therefore no ambient tenant, so
+        iterate every tenant explicitly — see iter_tenant_contexts().
+        """
+        from flask import session
         from rinq.services.recording_service import recording_service
+        from rinq.tenant.context import iter_tenant_contexts
 
         data = request.get_json() or {}
         days = data.get('days', 21)
         if not isinstance(days, int) or days < 1:
             return jsonify({"error": "days must be a positive integer"}), 400
+        dry_run = bool(data.get('dry_run'))
 
-        result = recording_service.purge_stale_recordings(days=days)
-        status = 200 if result['success'] else 207
-        return jsonify(result), status
+        if session.get('user_id'):
+            result = recording_service.purge_stale_recordings(days=days, dry_run=dry_run)
+            status = 200 if result['success'] else 207
+            return jsonify(result), status
+
+        totals = {'purged_count': 0, 'purged_bytes': 0, 'skipped_no_archive': 0}
+        errors = []
+        by_tenant = {}
+        for tenant in iter_tenant_contexts():
+            try:
+                result = recording_service.purge_stale_recordings(days=days, dry_run=dry_run)
+            except Exception as e:
+                # One tenant's failure must not stop the rest, but it also
+                # must not vanish — cron discards this response body.
+                logger.error(f"Recording purge failed for tenant {tenant['id']}: {e}",
+                             exc_info=True)
+                errors.append(f"{tenant['id']}: {e}")
+                continue
+            totals['purged_count'] += result['purged_count']
+            totals['purged_bytes'] += result['purged_bytes']
+            totals['skipped_no_archive'] += result['skipped_no_archive']
+            errors.extend(result['errors'] or [])
+            by_tenant[tenant['id']] = result['purged_count']
+
+        logger.info(f"Recording purge (all tenants, {days}d, dry_run={dry_run}): "
+                    f"{totals['purged_count']} recordings / "
+                    f"{totals['purged_bytes'] / 1_000_000:.0f} MB, "
+                    f"{totals['skipped_no_archive']} skipped, {len(errors)} errors, "
+                    f"by tenant: {by_tenant}")
+
+        payload = {'success': not errors, **totals, 'dry_run': dry_run,
+                   'by_tenant': by_tenant, 'errors': errors or None}
+        return jsonify(payload), 200 if not errors else 207
 
     @bp.route('/recordings/purge-drive', methods=['POST'])
     @api_or_session_auth

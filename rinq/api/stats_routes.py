@@ -42,29 +42,57 @@ def register(bp):
         Returns:
             {"success": true, "date": "YYYY-MM-DD", "daily_records": N, "hourly_records": N}
         """
+        from flask import session
         from rinq.services.reporting_service import get_reporting_service
+        from rinq.tenant.context import iter_tenant_contexts
 
         data = request.get_json() or {}
         target_date = data.get('date')  # None = yesterday
 
-        service = get_reporting_service()
-        result = service.aggregate_stats_for_date(target_date)
-
         caller = get_api_caller()
-        db = get_db()
-        db.log_activity(
-            'stats_aggregated',
-            result['date'],
-            f"Aggregated {result['daily_records']} daily, {result['hourly_records']} hourly records",
-            caller
-        )
+        service = get_reporting_service()
+
+        def _aggregate_current_tenant():
+            result = service.aggregate_stats_for_date(target_date)
+            get_db().log_activity(
+                'stats_aggregated',
+                result['date'],
+                f"Aggregated {result['daily_records']} daily, {result['hourly_records']} hourly records",
+                caller
+            )
+            return result
+
+        if session.get('user_id'):
+            result = _aggregate_current_tenant()
+            return jsonify({
+                'success': True,
+                'date': result['date'],
+                'daily_records': result['daily_records'],
+                'hourly_records': result['hourly_records'],
+            })
+
+        # Cron (unix socket, no session) — no ambient tenant, so iterate.
+        totals = {'daily_records': 0, 'hourly_records': 0}
+        errors = []
+        date_run = None
+        for tenant in iter_tenant_contexts():
+            try:
+                result = _aggregate_current_tenant()
+            except Exception as e:
+                logger.error(f"Stats aggregation failed for tenant {tenant['id']}: {e}",
+                             exc_info=True)
+                errors.append(f"{tenant['id']}: {e}")
+                continue
+            date_run = result['date']
+            totals['daily_records'] += result['daily_records']
+            totals['hourly_records'] += result['hourly_records']
 
         return jsonify({
-            'success': True,
-            'date': result['date'],
-            'daily_records': result['daily_records'],
-            'hourly_records': result['hourly_records'],
-        })
+            'success': not errors,
+            'date': date_run,
+            **totals,
+            'errors': errors or None,
+        }), 200 if not errors else 207
 
 
     @bp.route('/stats/summary')
