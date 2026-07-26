@@ -130,39 +130,59 @@ def register(bp):
         Returns:
             {"success": true, "deleted_count": N}
         """
+        from flask import session
+        from rinq.tenant.context import iter_tenant_contexts
+
         data = request.get_json() or {}
         hours = data.get('hours', 24)
 
         if not isinstance(hours, int) or hours < 1:
             return jsonify({"error": "hours must be a positive integer"}), 400
 
-        db = get_db()
-        deleted_count = db.cleanup_old_queued_calls(hours=hours)
-
-        # Clean up stale ring attempts (safety net for missed callbacks)
-        stale_ring_count = db.cleanup_old_ring_attempts(max_age_minutes=10)
-
-        # Clean up old participant records
-        stale_participants = db.cleanup_old_participants(hours=hours)
-
-        # Clean up stale leg-drop reconnect state (safety net for missed callbacks)
-        stale_intents = db.cleanup_old_leg_intents(max_age_minutes=30)
-        stale_reconnects = db.cleanup_old_reconnect_attempts(max_age_minutes=30)
-
         caller = get_api_caller()
-        db.log_activity(
-            'queue_cleanup',
-            f'{hours}h',
-            f"Deleted {deleted_count} old queued_calls, {stale_ring_count} stale ring_attempts, "
-            f"{stale_participants} old participants, {stale_intents} leg_intents, "
-            f"{stale_reconnects} reconnect_attempts",
-            caller
-        )
+
+        def _cleanup_current_tenant():
+            db = get_db()
+            deleted_count = db.cleanup_old_queued_calls(hours=hours)
+
+            # Clean up stale ring attempts (safety net for missed callbacks)
+            stale_ring_count = db.cleanup_old_ring_attempts(max_age_minutes=10)
+
+            # Clean up old participant records
+            stale_participants = db.cleanup_old_participants(hours=hours)
+
+            # Clean up stale leg-drop reconnect state (safety net for missed callbacks)
+            stale_intents = db.cleanup_old_leg_intents(max_age_minutes=30)
+            stale_reconnects = db.cleanup_old_reconnect_attempts(max_age_minutes=30)
+
+            db.log_activity(
+                'queue_cleanup',
+                f'{hours}h',
+                f"Deleted {deleted_count} old queued_calls, {stale_ring_count} stale ring_attempts, "
+                f"{stale_participants} old participants, {stale_intents} leg_intents, "
+                f"{stale_reconnects} reconnect_attempts",
+                caller
+            )
+            return deleted_count
+
+        if session.get('user_id'):
+            return jsonify({'success': True, 'deleted_count': _cleanup_current_tenant()})
+
+        # Cron (unix socket, no session) — no ambient tenant, so iterate.
+        deleted_total = 0
+        errors = []
+        for tenant in iter_tenant_contexts():
+            try:
+                deleted_total += _cleanup_current_tenant()
+            except Exception as e:
+                logger.error(f"Queue cleanup failed for tenant {tenant['id']}: {e}", exc_info=True)
+                errors.append(f"{tenant['id']}: {e}")
 
         return jsonify({
-            'success': True,
-            'deleted_count': deleted_count,
-        })
+            'success': not errors,
+            'deleted_count': deleted_total,
+            'errors': errors or None,
+        }), 200 if not errors else 207
 
 
     @bp.route('/voicemail/cleanup', methods=['POST'])
