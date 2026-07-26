@@ -20,10 +20,36 @@ from rinq.config import config
 from rinq.integrations import init_integrations
 
 # Configure logging
+_LOG_LEVELS = {
+    'CRITICAL': logging.CRITICAL,
+    'ERROR': logging.ERROR,
+    'WARNING': logging.WARNING,
+    'WARN': logging.WARNING,
+    'INFO': logging.INFO,
+    'DEBUG': logging.DEBUG,
+}
+
+
+def _log_level(env_var, default):
+    """Resolve a log level from an env var, falling back to `default`."""
+    return _LOG_LEVELS.get(os.environ.get(env_var, '').strip().upper(), default)
+
+
 logging.basicConfig(
-    level=logging.INFO,
+    level=_log_level('RINQ_LOG_LEVEL', logging.INFO),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+
+# basicConfig sets the level on the ROOT logger, so every third-party library
+# inherits it. The Twilio SDK's http client logs the request line plus every
+# request and response header at INFO — ~13 syslog lines per API call, which
+# measured ~29 MB/day of syslog on production. Cap the chatty ones at WARNING so
+# their errors still surface. Set RINQ_HTTP_LOG_LEVEL=INFO (or DEBUG) to turn
+# the raw HTTP traffic back on when debugging Twilio API calls.
+_HTTP_LOG_LEVEL = _log_level('RINQ_HTTP_LOG_LEVEL', logging.WARNING)
+for _noisy_logger in ('twilio.http_client', 'urllib3', 'urllib3.connectionpool'):
+    logging.getLogger(_noisy_logger).setLevel(_HTTP_LOG_LEVEL)
+
 logger = logging.getLogger(__name__)
 
 # Create Flask app

@@ -72,3 +72,32 @@ def get_twilio_config(key: str, default=None):
         raise RuntimeError(f"No tenant in context when reading {key}")
     val = tenant.get(key)
     return val if val is not None else default
+
+
+def iter_tenant_contexts():
+    """Yield every provisioned tenant with `g.tenant` bound for that iteration.
+
+    Cron jobs POST to the unix socket with no session, and `resolve_tenant()`
+    only resolves from a session or from phone numbers on /api/voice|sip paths.
+    Everything else is left with `g.tenant = None`, so the first `get_db()`
+    inside the handler raises RuntimeError and the job dies silently (cron
+    redirects output to /dev/null). Endpoints that run system-wide work should
+    loop over this instead of relying on the ambient tenant.
+
+    Tenants with no database on disk are skipped rather than provisioned, so
+    iterating never creates an empty DB as a side effect. The previous
+    `g.tenant` is restored when the loop finishes.
+    """
+    from rinq.config import config
+    from rinq.database.master import get_master_db
+
+    previous = getattr(g, 'tenant', None)
+    try:
+        for tenant in get_master_db().get_tenants():
+            db_path = os.path.join(config.tenants_dir, tenant['id'], 'rinq.db')
+            if not os.path.exists(db_path):
+                continue
+            g.tenant = tenant
+            yield tenant
+    finally:
+        g.tenant = previous

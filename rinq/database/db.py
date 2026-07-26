@@ -798,6 +798,11 @@ class Database(StatsMixin, CallLogMixin):
         Returns recordings that have local files but haven't been accessed
         recently. Used for cache cleanup.
 
+        Recordings nobody has ever played age from their creation date. Most
+        recordings are never played (182 of 20,913 on the watson tenant), so
+        treating a NULL last_accessed_at as "stale now" would evict this
+        morning's calls before anyone had a chance to listen to them.
+
         Args:
             days: Number of days since last access (default 30)
 
@@ -811,8 +816,8 @@ class Database(StatsMixin, CallLogMixin):
                 SELECT * FROM recording_log
                 WHERE local_file_path IS NOT NULL
                   AND local_file_path != ''
-                  AND (last_accessed_at IS NULL OR last_accessed_at < ?)
-                ORDER BY last_accessed_at ASC
+                  AND COALESCE(last_accessed_at, created_at) < ?
+                ORDER BY COALESCE(last_accessed_at, created_at) ASC
             """, (cutoff,)).fetchall()
             return [dict(row) for row in rows]
 
