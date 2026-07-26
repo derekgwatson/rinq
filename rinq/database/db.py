@@ -792,6 +792,25 @@ class Database(StatsMixin, CallLogMixin):
             """, (now, recording_sid))
             conn.commit()
 
+    def get_recording_storage_stats(self) -> dict:
+        """Archive coverage counts for the admin Storage page.
+
+        `local_only` is the number that cannot be purged safely — a local
+        file with no Drive copy is the only playable copy of that call.
+        """
+        with self._get_conn() as conn:
+            row = conn.execute("""
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN local_file_path IS NOT NULL AND local_file_path != ''
+                             THEN 1 ELSE 0 END) AS with_local,
+                    SUM(CASE WHEN drive_file_id IS NOT NULL THEN 1 ELSE 0 END) AS with_drive,
+                    SUM(CASE WHEN local_file_path IS NOT NULL AND local_file_path != ''
+                              AND drive_file_id IS NULL THEN 1 ELSE 0 END) AS local_only
+                FROM recording_log
+            """).fetchone()
+            return {k: (v or 0) for k, v in dict(row).items()}
+
     def get_stale_recordings(self, days: int = 30) -> list[dict]:
         """Get recordings not accessed in the given number of days.
 
@@ -948,6 +967,29 @@ class Database(StatsMixin, CallLogMixin):
                 LIMIT ?
             """, (limit,)).fetchall()
             return [dict(row) for row in rows]
+
+    def get_last_activity(self, actions: list[str]) -> dict:
+        """Most recent activity_log entry for each of the given actions.
+
+        Used by the admin Storage page to show when each scheduled job last
+        did anything. A missing key means that job has never logged a run —
+        which is the signal that matters, since a failing cron logs nothing.
+
+        Returns:
+            Dict of action -> row dict, omitting actions with no entries
+        """
+        if not actions:
+            return {}
+        placeholders = ','.join('?' * len(actions))
+        with self._get_conn() as conn:
+            # SQLite fills the bare columns from the row holding MAX().
+            rows = conn.execute(f"""
+                SELECT action, target, details, performed_by, MAX(performed_at) AS performed_at
+                FROM activity_log
+                WHERE action IN ({placeholders})
+                GROUP BY action
+            """, tuple(actions)).fetchall()
+            return {row['action']: dict(row) for row in rows}
 
     # =========================================================================
     # Audio Files

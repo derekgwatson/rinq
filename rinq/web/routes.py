@@ -364,7 +364,17 @@ def admin():
         logger.warning(f"Failed to get staff list for admin dropdown: {e}")
         available_staff = []
 
+    # Surfaced on the Storage tile so a filling disk is visible from the
+    # admin index, not only once someone opens the page.
+    try:
+        from rinq.services.recording_service import recording_service
+        disk_percent = recording_service.get_storage_overview()['disk_percent']
+    except Exception as e:
+        logger.warning(f"Could not read disk usage for admin tile: {e}")
+        disk_percent = None
+
     return render_template('admin.html',
+                         disk_percent=disk_percent,
                          phone_numbers_count=len(phone_numbers),
                          verified_caller_ids_count=len(db.get_verified_caller_ids(active_only=False)),
                          queues=db.get_queues(),
@@ -2512,3 +2522,6 @@ _register_schedule_routes(web_bp)
 
 from rinq.web.admin_audio_routes import register as _register_audio_routes
 _register_audio_routes(web_bp)
+
+from rinq.web.admin_storage_routes import register as _register_storage_routes
+_register_storage_routes(web_bp)
