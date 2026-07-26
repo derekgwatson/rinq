@@ -1,0 +1,392 @@
+{% extends "base.html" %}
+
+{% block title_suffix %} — Storage{% endblock %}
+
+{% block extra_css %}
+.storage-section + .storage-section {
+    margin-top: 32px;
+    padding-top: 24px;
+    border-top: 1px solid #e9ecef;
+}
+.storage-section h3 {
+    margin: 0 0 4px 0;
+    font-size: 1.05em;
+}
+.storage-section .section-hint {
+    margin: 0 0 16px 0;
+    color: #6c757d;
+    font-size: 0.9em;
+}
+
+/* Disk meter */
+.disk-meter {
+    height: 12px;
+    background: #e9ecef;
+    border-radius: 6px;
+    overflow: hidden;
+    margin: 8px 0;
+}
+.disk-meter-fill {
+    height: 100%;
+    background: #27ae60;
+    transition: width 0.3s;
+}
+.disk-meter-fill.warn { background: #f39c12; }
+.disk-meter-fill.critical { background: #e74c3c; }
+.disk-legend {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.9em;
+    color: #6c757d;
+}
+
+/* Figure row */
+.figure-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 16px;
+    margin-top: 24px;
+}
+.figure {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 8px;
+    padding: 16px;
+}
+.figure-value {
+    font-size: 1.6em;
+    font-weight: 600;
+    color: #2c3e50;
+    line-height: 1.2;
+}
+.figure-value.at-risk { color: #e74c3c; }
+.figure-label {
+    color: #6c757d;
+    font-size: 0.85em;
+    margin-top: 4px;
+}
+
+/* Retention form */
+.retention-form {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+}
+.retention-form input {
+    padding: 8px 10px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    width: 90px;
+    font-size: 1em;
+}
+.retention-form label {
+    display: block;
+    font-size: 0.85em;
+    margin-bottom: 4px;
+    color: #495057;
+}
+
+/* Jobs table */
+.job-status {
+    display: inline-block;
+    font-size: 0.75em;
+    padding: 3px 9px;
+    border-radius: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.job-status.ok { background: #d4edda; color: #155724; }
+.job-status.stale { background: #fff3cd; color: #856404; }
+.job-status.never { background: #f8d7da; color: #721c24; }
+.job-name { font-weight: 600; }
+.job-purpose {
+    color: #6c757d;
+    font-size: 0.85em;
+    margin-top: 2px;
+}
+.job-details {
+    color: #6c757d;
+    font-size: 0.85em;
+}
+
+/* Purge panel */
+.purge-panel {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 8px;
+    padding: 20px;
+}
+.purge-actions {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+/* No global disabled style exists — without this the destructive button
+   looks live before a preview has been run. */
+.purge-actions .btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.purge-result {
+    display: none;
+    margin-top: 16px;
+    padding: 14px 16px;
+    border-radius: 6px;
+    font-size: 0.95em;
+}
+.purge-result.preview { background: #e7f3ff; border: 1px solid #b8daff; color: #004085; }
+.purge-result.done { background: #d4edda; border: 1px solid #c3e6cb; color: #155724; }
+.purge-result.error { background: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; }
+
+@media (max-width: 640px) {
+    .jobs-table th:nth-child(2),
+    .jobs-table td:nth-child(2) { display: none; }
+}
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; gap: 16px; flex-wrap: wrap;">
+        <div>
+            <h2 style="margin: 0;">Storage</h2>
+            <p class="text-muted" style="margin: 5px 0 0 0;">
+                Disk, recording cache, and the jobs that keep them in check.
+            </p>
+        </div>
+        <a href="{{ url_for('web.admin') }}" class="btn" style="background: #6c757d;">Back to Admin</a>
+    </div>
+
+    <!-- Disk -->
+    <div class="storage-section">
+        <h3>Server disk</h3>
+        {% if overview.disk_percent is not none %}
+        <p class="section-hint">Shared by everything on this server, not just recordings.</p>
+        <div class="disk-meter">
+            <div class="disk-meter-fill {% if overview.disk_percent >= 90 %}critical{% elif overview.disk_percent >= 75 %}warn{% endif %}"
+                 style="width: {{ overview.disk_percent }}%;"></div>
+        </div>
+        <div class="disk-legend">
+            <span>{{ overview.disk_used | filesizeformat }} used ({{ overview.disk_percent }}%)</span>
+            <span>{{ overview.disk_free | filesizeformat }} free of {{ overview.disk_total | filesizeformat }}</span>
+        </div>
+        {% else %}
+        <p class="section-hint">Disk usage is unavailable on this host.</p>
+        {% endif %}
+
+        <div class="figure-row">
+            <div class="figure">
+                <div class="figure-value">{{ overview.cache_bytes | filesizeformat }}</div>
+                <div class="figure-label">Recordings cached on disk</div>
+            </div>
+            <div class="figure">
+                <div class="figure-value">{{ '{:,}'.format(overview.cache_files) }}</div>
+                <div class="figure-label">Cached files</div>
+            </div>
+            <div class="figure">
+                <div class="figure-value">
+                    {% if archived_percent is not none %}{{ archived_percent }}%{% else %}—{% endif %}
+                </div>
+                <div class="figure-label">Safely archived to Drive</div>
+            </div>
+            <div class="figure">
+                <div class="figure-value {% if counts.local_only %}at-risk{% endif %}">
+                    {{ '{:,}'.format(counts.local_only) }}
+                </div>
+                <div class="figure-label">
+                    {% if counts.local_only %}Only copy is on disk{% else %}No unarchived recordings{% endif %}
+                </div>
+            </div>
+        </div>
+
+        {% if counts.local_only %}
+        <p class="text-muted" style="margin: 12px 0 0 0; font-size: 0.9em;">
+            {{ counts.local_only }} recording{% if counts.local_only != 1 %}s have{% else %} has{% endif %}
+            no Google Drive copy, so the local file is the only playable audio.
+            The purge always skips {% if counts.local_only != 1 %}these{% else %}this{% endif %}.
+        </p>
+        {% endif %}
+    </div>
+
+    <!-- Retention -->
+    <div class="storage-section">
+        <h3>Retention</h3>
+        <p class="section-hint">
+            Recordings are cached on disk for fast playback and archived to Google Drive for keeps.
+            Past the window below, the local copy is dropped — the recording still plays, streamed
+            back from Drive on demand. Nothing is deleted from Drive.
+        </p>
+        <form class="retention-form" method="POST" action="{{ url_for('web.admin_storage_set_retention') }}">
+            <div>
+                <label for="retention_days">Keep on disk for</label>
+                <input type="number" id="retention_days" name="retention_days"
+                       value="{{ retention_days }}"
+                       min="{{ min_retention_days }}" max="{{ max_retention_days }}" required>
+            </div>
+            <div style="padding-bottom: 9px; color: #6c757d;">days</div>
+            <button type="submit" class="btn">Save</button>
+        </form>
+    </div>
+
+    <!-- Purge -->
+    <div class="storage-section">
+        <h3>Free up space now</h3>
+        <p class="section-hint">
+            The nightly job does this automatically. Run it early if the disk is filling.
+        </p>
+        <div class="purge-panel">
+            <div class="purge-actions">
+                <button class="btn" id="previewBtn" onclick="runPurge(true)">Preview</button>
+                <button class="btn btn-danger" id="purgeBtn" onclick="runPurge(false)" disabled>Purge now</button>
+                <span class="text-muted" style="font-size: 0.9em;" id="purgeHint">
+                    Preview first — nothing is deleted until you confirm.
+                </span>
+            </div>
+            <div class="purge-result" id="purgeResult"></div>
+        </div>
+    </div>
+
+    <!-- Jobs -->
+    <div class="storage-section">
+        <h3>Scheduled jobs</h3>
+        <p class="section-hint">
+            Last time each job actually did something. A job that stops running logs nothing,
+            so "Never" and "Stale" both mean it needs a look.
+        </p>
+        <table class="data-table jobs-table">
+            <thead>
+                <tr>
+                    <th>Job</th>
+                    <th>Schedule</th>
+                    <th>Last run</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for job in jobs %}
+                <tr>
+                    <td>
+                        <div class="job-name">{{ job.name }}</div>
+                        <div class="job-purpose">{{ job.purpose }}</div>
+                    </td>
+                    <td class="text-muted">{{ job.schedule }}</td>
+                    <td>
+                        {% if job.last_run %}
+                        <span data-utc="{{ job.last_run }}">{{ job.last_run }}</span>
+                        {% if job.details %}<div class="job-details">{{ job.details }}</div>{% endif %}
+                        {% else %}
+                        <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if job.status == 'ok' %}
+                        <span class="job-status ok">Running</span>
+                        {% elif job.status == 'stale' %}
+                        <span class="job-status stale">Stale</span>
+                        {% else %}
+                        <span class="job-status never">Never run</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Render the UTC timestamps the server rendered into local time.
+document.querySelectorAll('[data-utc]').forEach(function(el) {
+    var iso = el.getAttribute('data-utc');
+    if (!iso) return;
+    // Timestamps are written as naive UTC — mark them as such before parsing.
+    var d = new Date(/[Z+]|-\d{2}:\d{2}$/.test(iso) ? iso : iso + 'Z');
+    if (isNaN(d.getTime())) return;
+    el.textContent = d.toLocaleString([], {
+        day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false
+    });
+});
+
+function fmtBytes(bytes) {
+    if (!bytes) return '0 MB';
+    var gb = bytes / 1e9;
+    return gb >= 1 ? gb.toFixed(1) + ' GB' : Math.round(bytes / 1e6) + ' MB';
+}
+
+async function runPurge(dryRun) {
+    var previewBtn = document.getElementById('previewBtn');
+    var purgeBtn = document.getElementById('purgeBtn');
+    var hint = document.getElementById('purgeHint');
+    var result = document.getElementById('purgeResult');
+
+    previewBtn.disabled = true;
+    purgeBtn.disabled = true;
+    hint.textContent = dryRun ? 'Checking…' : 'Purging…';
+
+    try {
+        var resp = await fetch('/api/recordings/purge', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({dry_run: dryRun})
+        });
+        var data = await resp.json();
+
+        if (!resp.ok && !data.purged_count) {
+            result.className = 'purge-result error';
+            result.textContent = data.error || 'Purge failed. Check the server logs.';
+            result.style.display = 'block';
+            hint.textContent = '';
+            previewBtn.disabled = false;
+            return;
+        }
+
+        var skipped = data.skipped_no_archive
+            ? ' ' + data.skipped_no_archive + ' skipped (no Drive copy).'
+            : '';
+
+        if (dryRun) {
+            result.className = 'purge-result preview';
+            if (data.purged_count === 0) {
+                result.textContent = 'Nothing to purge — no cached recordings are older than '
+                    + data.days + ' days.' + skipped;
+                purgeBtn.disabled = true;
+                hint.textContent = '';
+            } else {
+                result.textContent = 'Would free ' + fmtBytes(data.purged_bytes) + ' across '
+                    + data.purged_count.toLocaleString() + ' recording'
+                    + (data.purged_count === 1 ? '' : 's')
+                    + ' older than ' + data.days + ' days.' + skipped
+                    + ' They stay playable from Drive.';
+                purgeBtn.disabled = false;
+                hint.textContent = 'Confirm to delete the local copies.';
+            }
+        } else {
+            result.className = 'purge-result done';
+            result.textContent = 'Freed ' + fmtBytes(data.purged_bytes) + ' across '
+                + data.purged_count.toLocaleString() + ' recording'
+                + (data.purged_count === 1 ? '' : 's') + '.' + skipped
+                + ' Reload to see updated figures.';
+            purgeBtn.disabled = true;
+            hint.textContent = '';
+        }
+
+        if (data.errors && data.errors.length) {
+            result.textContent += ' ' + data.errors.length + ' error'
+                + (data.errors.length === 1 ? '' : 's') + ' — check the logs.';
+        }
+        result.style.display = 'block';
+    } catch (e) {
+        result.className = 'purge-result error';
+        result.textContent = 'Request failed: ' + e.message;
+        result.style.display = 'block';
+        hint.textContent = '';
+    } finally {
+        previewBtn.disabled = false;
+    }
+}
+</script>
+{% endblock %}

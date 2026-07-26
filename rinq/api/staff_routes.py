@@ -620,10 +620,21 @@ def register(bp):
         def _sync_tenant(tenant_db):
             try:
                 source = PeterAddressBookSource(WatsonStaffDirectory())
-                return _sync(tenant_db, source=source)
+                result = _sync(tenant_db, source=source)
             except Exception as e:
                 logger.warning(f"Address book sync not available: {e}")
                 return None
+            if result:
+                # Recorded so /admin/storage can show when this job last ran —
+                # a job that stops running otherwise leaves no trace at all.
+                added, updated, removed = result
+                tenant_db.log_activity(
+                    'address_book_synced',
+                    'peter',
+                    f"Added {added}, updated {updated}, removed {removed}",
+                    get_api_caller()
+                )
+            return result
 
         import os
         from rinq.config import config as rinq_config

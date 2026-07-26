@@ -11,6 +11,7 @@ Handles:
 import base64
 import logging
 import os
+import shutil
 import requests
 from datetime import datetime, timezone
 
@@ -21,6 +22,28 @@ from rinq.database.db import get_db
 from rinq.services.twilio_service import get_twilio_service, twilio_list
 
 logger = logging.getLogger(__name__)
+
+# How long a recording stays cached on local disk before the nightly purge
+# drops it. Per-tenant, editable at /admin/storage; the constant is only the
+# fallback for a tenant that has never set one.
+RETENTION_SETTING_KEY = 'recording_retention_days'
+DEFAULT_RETENTION_DAYS = 21
+
+
+def get_retention_days(db) -> int:
+    """Read the tenant's local-cache retention window in days.
+
+    Falls back to DEFAULT_RETENTION_DAYS for an unset, non-numeric or
+    nonsensical value — a bad setting must never widen the purge window.
+    """
+    raw = db.get_bot_setting(RETENTION_SETTING_KEY)
+    try:
+        days = int(raw)
+    except (TypeError, ValueError):
+        if raw is not None:
+            logger.warning(f"Ignoring non-numeric {RETENTION_SETTING_KEY}: {raw!r}")
+        return DEFAULT_RETENTION_DAYS
+    return days if days >= 1 else DEFAULT_RETENTION_DAYS
 
 
 class RecordingService:
@@ -476,6 +499,42 @@ class RecordingService:
                                        updated_by: str) -> None:
         """Set whether a user has recording enabled by default."""
         self.db.set_user_recording_default(email, enabled, updated_by)
+
+    def get_storage_overview(self) -> dict:
+        """Disk and local-cache figures for the admin Storage page.
+
+        The recordings directory is shared across tenants (recording SIDs are
+        globally unique), so the file count and bytes here are system-wide,
+        not per-tenant.
+
+        Returns:
+            Dict with disk_total/disk_used/disk_free/disk_percent and
+            cache_files/cache_bytes. Disk figures are None if unavailable.
+        """
+        cache_files = 0
+        cache_bytes = 0
+        try:
+            with os.scandir(self.RECORDINGS_DIR) as entries:
+                for entry in entries:
+                    if entry.is_file():
+                        cache_files += 1
+                        cache_bytes += entry.stat().st_size
+        except OSError as e:
+            logger.error(f"Could not scan recordings directory: {e}")
+
+        disk = {'disk_total': None, 'disk_used': None, 'disk_free': None, 'disk_percent': None}
+        try:
+            usage = shutil.disk_usage(self.RECORDINGS_DIR)
+            disk = {
+                'disk_total': usage.total,
+                'disk_used': usage.used,
+                'disk_free': usage.free,
+                'disk_percent': round(usage.used / usage.total * 100) if usage.total else None,
+            }
+        except OSError as e:
+            logger.error(f"Could not read disk usage: {e}")
+
+        return {'cache_files': cache_files, 'cache_bytes': cache_bytes, **disk}
 
     def purge_stale_recordings(self, days: int = 30, dry_run: bool = False) -> dict:
         """Purge local recording files that haven't been accessed recently.

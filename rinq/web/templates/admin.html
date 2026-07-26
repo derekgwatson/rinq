@@ -180,6 +180,13 @@
                 View all SIP credentials
             </p>
         </a>
+        <a href="{{ url_for('web.admin_storage') }}" class="admin-card">
+            <h3>Storage</h3>
+            <p class="text-muted" style="margin: 0;">
+                {% if disk_percent is not none %}Disk {{ disk_percent }}% used{% else %}Disk usage{% endif %}
+                · Recording retention &amp; job health
+            </p>
+        </a>
         <a href="{{ url_for('web.activity') }}" class="admin-card">
             <h3>Activity Log</h3>
             <p class="text-muted" style="margin: 0;">

@@ -320,19 +320,40 @@ def register(bp):
         From a session (admin user), purges the current tenant. From the
         nightly cron there is no session and therefore no ambient tenant, so
         iterate every tenant explicitly — see iter_tenant_contexts().
+
+        Request body (all optional):
+            {"days": N}      - override retention; defaults to the tenant's
+                               recording_retention_days setting, then 21
+            {"dry_run": true} - report what would be purged, delete nothing
         """
         from flask import session
-        from rinq.services.recording_service import recording_service
+        from rinq.services.recording_service import get_retention_days, recording_service
         from rinq.tenant.context import iter_tenant_contexts
 
         data = request.get_json() or {}
-        days = data.get('days', 21)
-        if not isinstance(days, int) or days < 1:
+        requested_days = data.get('days')
+        if requested_days is not None and (not isinstance(requested_days, int) or requested_days < 1):
             return jsonify({"error": "days must be a positive integer"}), 400
         dry_run = bool(data.get('dry_run'))
 
-        if session.get('user_id'):
+        def _purge_current_tenant():
+            db = get_db()
+            days = requested_days or get_retention_days(db)
             result = recording_service.purge_stale_recordings(days=days, dry_run=dry_run)
+            if not dry_run:
+                db.log_activity(
+                    'recordings_purged',
+                    f'{days}d',
+                    f"Purged {result['purged_count']} recordings "
+                    f"({result['purged_bytes'] / 1_000_000:.0f} MB), "
+                    f"{result['skipped_no_archive']} skipped (no Drive copy)",
+                    get_api_caller()
+                )
+            result['days'] = days
+            return result
+
+        if session.get('user_id'):
+            result = _purge_current_tenant()
             status = 200 if result['success'] else 207
             return jsonify(result), status
 
@@ -341,7 +362,7 @@ def register(bp):
         by_tenant = {}
         for tenant in iter_tenant_contexts():
             try:
-                result = recording_service.purge_stale_recordings(days=days, dry_run=dry_run)
+                result = _purge_current_tenant()
             except Exception as e:
                 # One tenant's failure must not stop the rest, but it also
                 # must not vanish — cron discards this response body.
@@ -355,7 +376,7 @@ def register(bp):
             errors.extend(result['errors'] or [])
             by_tenant[tenant['id']] = result['purged_count']
 
-        logger.info(f"Recording purge (all tenants, {days}d, dry_run={dry_run}): "
+        logger.info(f"Recording purge (all tenants, dry_run={dry_run}): "
                     f"{totals['purged_count']} recordings / "
                     f"{totals['purged_bytes'] / 1_000_000:.0f} MB, "
                     f"{totals['skipped_no_archive']} skipped, {len(errors)} errors, "
