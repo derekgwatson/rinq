@@ -330,7 +330,10 @@ def register(bp):
         from rinq.services.recording_service import get_retention_days, recording_service
         from rinq.tenant.context import iter_tenant_contexts
 
-        data = request.get_json() or {}
+        # silent=True: the nightly cron POSTs no body and no Content-Type, and
+        # a bare get_json() rejects that with 415 before this handler runs —
+        # which is one of the two reasons this job never once purged anything.
+        data = request.get_json(silent=True) or {}
         requested_days = data.get('days')
         if requested_days is not None and (not isinstance(requested_days, int) or requested_days < 1):
             return jsonify({"error": "days must be a positive integer"}), 400
@@ -392,7 +395,7 @@ def register(bp):
         """Purge old recordings from Google Drive."""
         from rinq.services.drive_service import drive_service
 
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
         days = data.get('days', 365)
         if not isinstance(days, int) or days < 1:
             return jsonify({"error": "days must be a positive integer"}), 400

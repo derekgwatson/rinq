@@ -46,7 +46,9 @@ def register(bp):
         from rinq.services.reporting_service import get_reporting_service
         from rinq.tenant.context import iter_tenant_contexts
 
-        data = request.get_json() or {}
+        # silent=True: the cron POSTs an empty body with no Content-Type, and
+        # a bare get_json() answers that with 415 before the handler runs.
+        data = request.get_json(silent=True) or {}
         target_date = data.get('date')  # None = yesterday
 
         caller = get_api_caller()
@@ -133,7 +135,9 @@ def register(bp):
         from flask import session
         from rinq.tenant.context import iter_tenant_contexts
 
-        data = request.get_json() or {}
+        # silent=True — see the note on /stats/aggregate: a bodyless cron POST
+        # gets a 415 from a bare get_json().
+        data = request.get_json(silent=True) or {}
         hours = data.get('hours', 24)
 
         if not isinstance(hours, int) or hours < 1:
