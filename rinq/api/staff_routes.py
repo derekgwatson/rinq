@@ -667,3 +667,50 @@ def register(bp):
                     totals['removed'] += removed
 
         return jsonify({'ok': True, **totals})
+
+    # =========================================================================
+    # Offboarding
+    # =========================================================================
+
+    @bp.route('/staff/offboard', methods=['POST'])
+    @api_or_session_auth
+    def offboard_staff_member():
+        """Revoke a departing person's phone-system access.
+
+        Built for Olive (the offboarding orchestrator) to call as one step of a
+        wider workflow, but it is a plain endpoint with no knowledge of Olive.
+
+        Idempotent — Olive retries steps individually, so calling this twice is
+        safe and the second call reports every step as 'already_clear'.
+
+        Request body:
+            {"email": "person@example.com"}
+            {"email": "...", "dry_run": true}  - report what would change
+
+        Returns 200 when everything succeeded, 207 when some steps failed and
+        the rest were applied. The body always names each step and its outcome
+        so a retry can be scoped to what is still outstanding.
+        """
+        from rinq.services.offboarding import offboard_staff, preview_offboard_staff
+
+        # silent=True: never let a caller that omits Content-Type get a 415
+        # before the handler runs (gotcha 36).
+        data = request.get_json(silent=True) or {}
+        email = (data.get('email') or '').strip()
+        if not email:
+            return jsonify({'success': False, 'error': 'email is required'}), 400
+        if '@' not in email:
+            return jsonify({'success': False, 'error': f'Not an email address: {email!r}'}), 400
+
+        performed_by = get_api_caller() or 'api'
+
+        try:
+            if data.get('dry_run'):
+                return jsonify(preview_offboard_staff(email))
+            result = offboard_staff(email, performed_by=performed_by)
+        except Exception as e:
+            logger.exception(f"Offboarding {email} failed: {e}")
+            return jsonify({'success': False, 'email': email, 'error': str(e)}), 500
+
+        return jsonify(result), (200 if result['success'] else 207)
+
