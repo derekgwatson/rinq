@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 from rinq.services.auth import login_required, admin_required, manager_required, get_current_user
 from rinq.services.twilio_service import get_twilio_service
-from rinq.database.db import get_db
+from rinq.database.db import get_db, sip_reachability
 from rinq.config import config
 from rinq.tenant.context import get_twilio_config
 from rinq.web.util import flash_error
@@ -1947,13 +1947,23 @@ def desk_phones():
         if domains:
             sip_domain = domains[0]['domain_name']
 
-    # Get users from local database
-    users = db.get_users() if configured else []
+    # Each credential is annotated with whether a handset actually answers when
+    # we ring it. Twilio can't tell us who is registered, so this is derived
+    # from ring outcomes — a credential set to ring with no responding handset
+    # is a desk phone that was never set up, or is logged in as someone else.
+    users = db.get_desk_phone_health() if configured else []
+
+    # Only alert on a phone that demonstrably worked and then stopped. Users
+    # who never had one responding are almost always browser-only — ring_sip
+    # defaults on, so flagging those would bury the real faults.
+    needs_attention = [u for u in users
+                       if u['expects_desk_phone'] and u['sip_status']['regressed']]
 
     return render_template('desk_phones.html',
                          configured=configured,
                          sip_domain=sip_domain,
                          users=users,
+                         needs_attention=needs_attention,
                          current_user=get_current_user())
 
 
@@ -2392,6 +2402,7 @@ def my_devices():
                          callable_numbers=callable_numbers,
                          ring_settings=ring_settings,
                          staff_ext=staff_ext,
+                         sip_status=sip_reachability(staff_ext or {}),
                          current_user=user)
 
 

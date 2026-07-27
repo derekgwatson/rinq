@@ -167,6 +167,60 @@ def _redirect_to_ai_receptionist(response_parts, called_number, from_number, cal
 # Account & Status
 # =============================================================================
 
+@api_bp.route('/health/desk-phones')
+@api_or_session_auth
+def desk_phone_health():
+    """Report desk phones that are set to ring but never do.
+
+    Published as a plain fact for anything that wants to watch it (a monitoring
+    bot, a dashboard, a cron that emails someone). Rinq deliberately does not
+    know or care who consumes this — it imports no alerting client and has no
+    notion of who to tell. That keeps the check working for tenants who run
+    none of Watson's bots: the detection is entirely local, built from
+    users.ring_sip and SIP ring outcomes.
+
+    With a session, reports the current tenant. Without one (an external poller
+    hitting the socket or API), reports every tenant — see gotcha 35.
+    """
+    from flask import session
+    from rinq.tenant.context import iter_tenant_contexts
+
+    def _current_tenant_report():
+        return [
+            {
+                'user': u.get('friendly_name') or u.get('username'),
+                'email': u.get('staff_email'),
+                'state': u['sip_status']['state'],
+                'label': u['sip_status']['label'],
+                'last_rang': (u['sip_status']['last_rang'].isoformat()
+                              if u['sip_status']['last_rang'] else None),
+            }
+            for u in get_db().get_desk_phone_health()
+            if u['expects_desk_phone'] and u['sip_status']['regressed']
+        ]
+
+    if session.get('user_id'):
+        unreachable = _current_tenant_report()
+        return jsonify({'success': True, 'unreachable': unreachable,
+                        'count': len(unreachable)})
+
+    by_tenant = {}
+    errors = []
+    for tenant in iter_tenant_contexts():
+        try:
+            by_tenant[tenant['id']] = _current_tenant_report()
+        except Exception as e:
+            # One tenant's failure must not hide the others, but it also must
+            # not vanish — an external poller discards this body on error.
+            logger.error(f"Desk phone health check failed for tenant {tenant['id']}: {e}",
+                         exc_info=True)
+            errors.append(f"{tenant['id']}: {e}")
+
+    total = sum(len(v) for v in by_tenant.values())
+    return jsonify({'success': not errors, 'by_tenant': by_tenant,
+                    'count': total, 'errors': errors}), (200 if not errors else 207)
+
+
 @api_bp.route('/status')
 @api_or_session_auth
 def status():
@@ -572,16 +626,26 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
 
                     if sip_uri:
                         try:
+                            # Carry the identity on the callback URL rather than
+                            # relying on ring_attempts metadata: store_ring_attempts()
+                            # only runs after this whole loop, and Twilio's early
+                            # 'initiated'/'ringing' callbacks routinely beat it. A
+                            # device that fails instantly (the unregistered case we
+                            # most want to catch) fires both before the store.
+                            sip_status_callback_url = (
+                                f"{status_callback_url}&sip_user={quote(user_email)}"
+                            )
                             call = service.client.calls.create(
                                 to=sip_uri,
                                 from_=customer_caller_id,
                                 url=answer_url,
                                 timeout=30,
-                                status_callback=status_callback_url,
+                                status_callback=sip_status_callback_url,
                                 status_callback_event=['initiated', 'ringing', 'answered', 'completed']
                             )
                             logger.info(f"Initiated SIP call to {sip_uri} for queue {queue_name}: {call.sid}")
                             db.stamp_sip_activity(user_email)
+                            db.stamp_sip_ring_attempt(user_email)
                             agent_call_sids.append(call.sid)
                             metadata_by_sid[call.sid] = json.dumps({
                                 'customer_call_sid': customer_call_sid,
@@ -2412,6 +2476,29 @@ def _send_queue_caller_to_voicemail(queue_id: int, customer_call_sid: str, reaso
         logger.exception(f"Failed to redirect customer {customer_call_sid} to voicemail: {e}")
 
 
+def _record_sip_ring_outcome(sip_user: str, call_status: str, db) -> None:
+    """Record that a SIP ring leg reached the handset.
+
+    A leg reaching 'ringing' means the handset returned a 180 — proof it is
+    registered. That gets stamped here; the matching attempt is stamped at
+    call-creation time. The gap between the two is how /desk-phones and
+    /my-devices tell a working desk phone from one nobody is logged in to —
+    see sip_reachability() in database/db.py.
+
+    `sip_user` comes from the callback query string, not ring_attempts
+    metadata, because the metadata is stored after the ring loop finishes and
+    early callbacks beat it.
+
+    Best-effort: a failure here must never break call routing.
+    """
+    if not sip_user or call_status != 'ringing':
+        return
+    try:
+        db.stamp_sip_ringing(sip_user)
+    except Exception as e:
+        logger.warning(f"Failed to record SIP ring outcome for {sip_user}: {e}")
+
+
 @api_bp.route('/voice/queue/<int:queue_id>/agent-ring-status', methods=['POST'])
 def queue_agent_ring_status(queue_id):
     """Handle status callbacks for auto-ring outbound calls.
@@ -2432,6 +2519,11 @@ def queue_agent_ring_status(queue_id):
     customer_call_sid = request.args.get('customer_call_sid', '')
 
     logger.info(f"Agent ring status: {agent_call_sid} -> {call_status} (customer: {customer_call_sid})")
+
+    # Before the ring-attempt lookup below: a leg that fails instantly (the
+    # unregistered-handset case) can deliver every callback before the ring
+    # attempts are stored, so the `if not call_info: return` would drop it.
+    _record_sip_ring_outcome(request.args.get('sip_user', ''), call_status, db)
 
     # Only remove the ring attempt once the call reaches a terminal state.
     # Intermediate callbacks (initiated, ringing, in-progress) arrive before

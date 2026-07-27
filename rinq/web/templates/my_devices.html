@@ -26,6 +26,47 @@
     margin-bottom: 15px;
 }
 
+.sip-status {
+    border-radius: 6px;
+    border: 1px solid #dee2e6;
+    border-left: 3px solid #adb5bd;
+    padding: 12px 16px;
+    margin-bottom: 16px;
+    background: #f8f9fa;
+}
+
+.sip-status-label {
+    font-weight: 600;
+    color: #2c3e50;
+    margin-bottom: 4px;
+}
+
+.sip-status p {
+    margin: 0;
+    font-size: 0.9rem;
+    color: #5a5a5a;
+}
+
+.sip-status .hint {
+    margin-top: 4px;
+    font-size: 0.85rem;
+    color: #8a8a8a;
+}
+
+.sip-status-ok {
+    border-left-color: #28a745;
+    background: #f6fbf7;
+}
+
+.sip-status-unreachable {
+    border-left-color: #dc3545;
+    background: #fdf7f7;
+}
+
+.sip-status-unreachable .sip-status-label {
+    color: #8a2731;
+}
+
 .credential-row {
     display: flex;
     justify-content: space-between;
@@ -213,6 +254,21 @@
         SIP credentials have not been configured for this system. Contact your administrator.
     </div>
     {% else %}
+
+    {% if ring_settings.ring_sip %}
+    <div class="sip-status sip-status-{{ sip_status.state }}">
+        <div class="sip-status-label">{{ sip_status.label }}</div>
+        {% if sip_status.state == 'ok' %}
+        <p>Your desk phone answered the last time we rang it{% if sip_status.last_rang %},
+            on {{ sip_status.last_rang.strftime('%-d %b at %H:%M') }}{% endif %}.</p>
+        {% else %}
+        <p>{{ sip_status.detail }}</p>
+        {% if sip_status.last_rang %}
+        <p class="hint">It last rang on {{ sip_status.last_rang.strftime('%-d %b at %H:%M') }}.</p>
+        {% endif %}
+        {% endif %}
+    </div>
+    {% endif %}
 
     <div class="credentials-box">
         <div class="credential-row">

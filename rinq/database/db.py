@@ -29,6 +29,94 @@ def _parse_dt(value: str) -> datetime:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
 
+
+# A SIP leg that reached 'ringing' this long before the most recent ring
+# attempt means the newer attempts aren't reaching the handset at all. Sized to
+# clear one full 30s ring timeout plus status-callback delivery lag.
+SIP_RING_STALE_SECONDS = 120
+
+
+def sip_reachability(staff_ext: dict) -> dict:
+    """Classify whether a staff member's SIP desk phone is actually reachable.
+
+    Twilio has no API for live SIP registrations, so this is derived from ring
+    outcomes: a leg reaching 'ringing' proves a handset returned a 180, and
+    attempts that never reach 'ringing' prove Twilio had nowhere to deliver
+    the INVITE.
+
+    Returns a dict with:
+        state  — 'ok' | 'unreachable' | 'unknown'
+        label  — short human-readable status
+        detail — one-line explanation, or None
+        last_rang — datetime the device last rang, or None
+        regressed — True only when a phone that used to ring has stopped
+
+    `regressed` is the alertable signal. A user who has *never* had a handset
+    respond is usually just browser-only: users.ring_sip defaults to 1, so
+    almost everyone nominally "expects" a desk phone whether or not they own
+    one, and treating that as a fault would bury the real ones. A phone that
+    demonstrably worked and then stopped is unambiguous.
+
+    Note 'unreachable' can also mean a registered handset that rejects calls
+    outright (handset-level DND returns busy without ringing). Either way the
+    user is not receiving calls, which is what the page is reporting.
+    """
+    attempt_raw = staff_ext.get('sip_last_ring_attempt_at') if staff_ext else None
+    ringing_raw = staff_ext.get('sip_last_ringing_at') if staff_ext else None
+
+    last_rang = None
+    if ringing_raw:
+        try:
+            last_rang = _parse_dt(ringing_raw)
+        except (ValueError, TypeError):
+            logger.warning(f"Unparseable sip_last_ringing_at: {ringing_raw!r}")
+
+    if not attempt_raw:
+        return {
+            'state': 'unknown',
+            'label': 'Not yet tested',
+            'detail': "No call has rung this desk phone yet, so we can't tell if it's set up.",
+            'last_rang': last_rang,
+            'regressed': False,
+        }
+
+    try:
+        last_attempt = _parse_dt(attempt_raw)
+    except (ValueError, TypeError):
+        logger.warning(f"Unparseable sip_last_ring_attempt_at: {attempt_raw!r}")
+        return {'state': 'unknown', 'label': 'Not yet tested',
+                'detail': None, 'last_rang': last_rang, 'regressed': False}
+
+    if last_rang is None:
+        return {
+            'state': 'unreachable',
+            'label': 'No desk phone',
+            'detail': ("We've rung this desk phone but it has never responded. "
+                       "Check a handset is switched on and logged in as this user."),
+            'last_rang': None,
+            'regressed': False,
+        }
+
+    gap = (last_attempt - last_rang).total_seconds()
+    if gap > SIP_RING_STALE_SECONDS:
+        return {
+            'state': 'unreachable',
+            'label': 'Not responding',
+            'detail': ("Recent calls haven't reached this desk phone. It may be "
+                       "switched off, off the network, or logged in as someone else."),
+            'last_rang': last_rang,
+            'regressed': True,
+        }
+
+    return {
+        'state': 'ok',
+        'label': 'Desk phone active',
+        'detail': None,
+        'last_rang': last_rang,
+        'regressed': False,
+    }
+
+
 try:
     from shared.migrations import MigrationRunner
 except ImportError:
@@ -418,6 +506,46 @@ class Database(StatsMixin, CallLogMixin):
                 ORDER BY friendly_name
             """).fetchall()
             return [dict(row) for row in rows]
+
+    def get_desk_phone_health(self) -> list[dict]:
+        """Report which desk phones are configured to ring but never do.
+
+        Joins three purely local signals — no staff directory or external
+        service required, so this works for any tenant:
+
+            users.ring_sip              is a desk phone *expected* to ring?
+            staff_extensions.sip_last_* does one actually answer when we ring?
+            users.is_active             is the credential still in use?
+
+        A user with ring_sip on and an unreachable handset is a
+        misconfiguration: every queue call spends a ring cycle on a phone that
+        cannot answer. That also catches departed staff automatically — once
+        nobody is logged in as them, nothing responds — without Rinq needing to
+        know anything about who is still employed.
+
+        Returns one dict per user with a SIP credential, each containing the
+        user fields plus 'expects_desk_phone' and 'sip_status'.
+        """
+        with self._get_conn() as conn:
+            rows = conn.execute("""
+                SELECT u.*,
+                       e.sip_last_ringing_at,
+                       e.sip_last_ring_attempt_at
+                FROM users u
+                LEFT JOIN staff_extensions e ON e.email = u.staff_email
+                ORDER BY u.friendly_name
+            """).fetchall()
+
+        report = []
+        for row in rows:
+            user = dict(row)
+            # ring_sip defaults to on, matching get_user_ring_settings()
+            user['expects_desk_phone'] = (
+                user.get('ring_sip') is None or bool(user.get('ring_sip'))
+            )
+            user['sip_status'] = sip_reachability(user)
+            report.append(user)
+        return report
 
     def get_user(self, sid: str) -> dict | None:
         """Get a user by SID."""
@@ -2651,15 +2779,51 @@ class Database(StatsMixin, CallLogMixin):
             return {'success': True}
 
     def stamp_sip_activity(self, email: str) -> None:
-        """Record that a SIP device was used by this staff member.
+        """Record that we tried to reach this staff member's SIP device.
 
-        Called when we see a SIP call (inbound ring or outbound dial).
-        Used to distinguish real desk phone users from people who just have credentials.
+        Called when we ring a SIP device or see a call from one. Note this
+        stamps on *attempt*, not success — a user with no registered handset
+        still gets a fresh timestamp every time we try them. Do not use it to
+        judge whether a desk phone is working; use stamp_sip_ringing() and
+        get_sip_reachability() for that.
         """
         now = datetime.now(timezone.utc).isoformat()
         with self._get_conn() as conn:
             conn.execute(
                 "UPDATE staff_extensions SET sip_registered_at = ? WHERE email = ?",
+                (now, email.lower())
+            )
+            conn.commit()
+
+    def stamp_sip_ring_attempt(self, email: str) -> None:
+        """Record that we started ringing this staff member's SIP device."""
+        self._stamp_sip_column('sip_last_ring_attempt_at', email)
+
+    def stamp_sip_ringing(self, email: str) -> None:
+        """Record that this staff member's SIP device actually rang.
+
+        Only called when a SIP leg reaches Twilio status 'ringing', which means
+        the handset returned a 180 — proof it is registered and audibly
+        ringing. This is the only positive evidence of registration available;
+        Twilio exposes no API for live SIP registrations.
+        """
+        self._stamp_sip_column('sip_last_ringing_at', email)
+
+    def _stamp_sip_column(self, column: str, email: str) -> None:
+        """Move a SIP timestamp column forward, never backward.
+
+        Twilio delivers status callbacks out of order (an 'initiated' can land
+        after the 'no-answer' for the same leg), so a plain assignment would
+        let a stale callback rewind the value. Timestamps are ISO-8601 UTC with
+        a fixed '+00:00' suffix, so lexical MAX is chronological.
+        """
+        if column not in ('sip_last_ring_attempt_at', 'sip_last_ringing_at'):
+            raise ValueError(f"Not a SIP timestamp column: {column}")
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            conn.execute(
+                f"UPDATE staff_extensions "
+                f"SET {column} = MAX(COALESCE({column}, ''), ?) WHERE email = ?",
                 (now, email.lower())
             )
             conn.commit()
