@@ -43,6 +43,51 @@
 .btn-sync:hover {
     background: #138496;
 }
+
+.alert-unreachable {
+    border: 1px solid #f0d0d0;
+    border-left: 3px solid #dc3545;
+    border-radius: 8px;
+    background: #fdf7f7;
+    padding: 16px 20px;
+    margin-bottom: 24px;
+}
+
+.alert-unreachable h3 {
+    margin: 0 0 8px 0;
+    font-size: 1rem;
+    color: #8a2731;
+}
+
+.alert-unreachable p {
+    margin: 0 0 8px 0;
+    color: #5a5a5a;
+    font-size: 0.9rem;
+}
+
+.alert-unreachable ul {
+    margin: 0 0 8px 0;
+    padding-left: 20px;
+    color: #2c3e50;
+    font-size: 0.9rem;
+}
+
+.alert-unreachable li {
+    margin-bottom: 4px;
+}
+
+.alert-unreachable .hint {
+    margin: 0;
+    color: #8a8a8a;
+    font-size: 0.85rem;
+}
+
+.last-rang {
+    margin-top: 4px;
+    font-size: 0.8rem;
+    color: #8a8a8a;
+    white-space: nowrap;
+}
 {% endblock %}
 
 {% block content %}
@@ -69,6 +114,30 @@
     </div>
     {% else %}
 
+    {% if needs_attention %}
+    <div class="alert-unreachable">
+        <h3>{{ needs_attention|length }} desk phone{{ 's' if needs_attention|length != 1 }} not answering</h3>
+        <p>
+            {{ 'These users are' if needs_attention|length != 1 else 'This user is' }}
+            set to ring a desk phone, but no handset responds when we call.
+            Calls to {{ 'them' if needs_attention|length != 1 else 'them' }} spend a full
+            ring cycle on a phone that can't pick up.
+        </p>
+        <ul>
+            {% for user in needs_attention %}
+            <li>
+                <strong>{{ user.friendly_name or user.username }}</strong>
+                — {{ user.sip_status.label|lower }}
+                {%- if user.sip_status.last_rang %}, last rang {{ user.sip_status.last_rang.strftime('%-d %b') }}{% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+        <p class="hint">
+            Usually the handset is switched off, off the network, or still logged in as a previous user.
+        </p>
+    </div>
+    {% endif %}
+
     <div class="help-tip" style="margin-bottom: 20px;">
         <strong>Self-Service:</strong> Users can set up their own desk phone credentials via the
         <strong>Desk Phone</strong> nav link. Credentials are auto-created on first visit.
@@ -84,6 +153,7 @@
                     <th>Username</th>
                     <th>Linked Email</th>
                     <th>Status</th>
+                    <th>Desk phone</th>
                     <th>Actions</th>
                 </tr>
             </thead>
@@ -98,6 +168,22 @@
                             <span class="badge badge-success">Active</span>
                         {% else %}
                             <span class="badge badge-danger">Inactive</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if not user.expects_desk_phone %}
+                            <span class="text-muted">Not used</span>
+                        {% elif user.sip_status.state == 'ok' %}
+                            <span class="badge badge-success">Ringing</span>
+                        {% elif user.sip_status.regressed %}
+                            <span class="badge badge-danger" title="{{ user.sip_status.detail }}">{{ user.sip_status.label }}</span>
+                        {% elif user.sip_status.state == 'unreachable' %}
+                            <span class="badge badge-secondary" title="{{ user.sip_status.detail }}">None responding</span>
+                        {% else %}
+                            <span class="badge badge-secondary" title="{{ user.sip_status.detail }}">Not yet tested</span>
+                        {% endif %}
+                        {% if user.sip_status.last_rang %}
+                        <div class="last-rang">Last rang {{ user.sip_status.last_rang.strftime('%-d %b %H:%M') }}</div>
                         {% endif %}
                     </td>
                     <td style="white-space: nowrap;">
