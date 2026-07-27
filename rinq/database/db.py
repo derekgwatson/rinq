@@ -2737,6 +2737,89 @@ class Database(StatsMixin, CallLogMixin):
             conn.commit()
             return cursor.rowcount > 0
 
+    def remove_user_from_all_queues(self, email: str) -> list[str]:
+        """Delete every queue membership for a user and return the queue names.
+
+        Unlike get_queues_for_user(), this ignores is_active on both the
+        membership and the queue. Offboarding must not leave a dormant row
+        behind that silently comes back when a queue is reactivated.
+        """
+        email = email.lower()
+        with self._get_conn() as conn:
+            rows = conn.execute("""
+                SELECT q.name FROM queue_members qm
+                JOIN queues q ON q.id = qm.queue_id
+                WHERE qm.user_email = ?
+                ORDER BY q.name
+            """, (email,)).fetchall()
+            conn.execute("DELETE FROM queue_members WHERE user_email = ?", (email,))
+            conn.commit()
+            return [row['name'] for row in rows]
+
+    def remove_user_from_all_queue_manager_roles(self, email: str) -> list[str]:
+        """Delete every queue-manager role for a user and return queue names.
+
+        Ignores queue is_active for the same reason as
+        remove_user_from_all_queues().
+        """
+        email = email.lower()
+        with self._get_conn() as conn:
+            rows = conn.execute("""
+                SELECT q.name FROM queue_managers qm
+                JOIN queues q ON q.id = qm.queue_id
+                WHERE qm.user_email = ?
+                ORDER BY q.name
+            """, (email,)).fetchall()
+            conn.execute("DELETE FROM queue_managers WHERE user_email = ?", (email,))
+            conn.commit()
+            return [row['name'] for row in rows]
+
+    def count_queue_links_for_user(self, email: str) -> int:
+        """Count a user's queue rows (member or manager), active or not.
+
+        Used by offboarding's has-anything-to-do check, which must see dormant
+        rows too or it would skip a tenant and leave them in place.
+        """
+        email = email.lower()
+        with self._get_conn() as conn:
+            row = conn.execute("""
+                SELECT (SELECT COUNT(*) FROM queue_members WHERE user_email = ?)
+                     + (SELECT COUNT(*) FROM queue_managers WHERE user_email = ?)
+                     AS total
+            """, (email, email)).fetchone()
+            return row['total'] if row else 0
+
+    def get_staff_reporting_to(self, email: str) -> list[dict]:
+        """Get staff whose reports_to points at this email.
+
+        Used by offboarding to flag reporting lines left dangling by a
+        departure — who should inherit them is a human decision, so they are
+        reported rather than reassigned automatically.
+        """
+        with self._get_conn() as conn:
+            rows = conn.execute("""
+                SELECT email, extension FROM staff_extensions
+                WHERE reports_to = ?
+                ORDER BY email
+            """, (email.lower().strip(),)).fetchall()
+            return [dict(row) for row in rows]
+
+    def clear_staff_extension_forwarding(self, email: str, updated_by: str) -> bool:
+        """Clear a staff member's mobile forwarding.
+
+        Offboarding uses this so company calls stop being forwarded to a
+        departed person's personal mobile.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            cursor = conn.execute("""
+                UPDATE staff_extensions
+                SET forward_to = NULL, updated_at = ?, updated_by = ?
+                WHERE email = ?
+            """, (now, updated_by, email.lower()))
+            conn.commit()
+            return cursor.rowcount > 0
+
     def update_staff_name_audio(self, email: str, name_audio_path: str,
                                 name_audio_text: str, updated_by: str) -> None:
         """Update the name audio path and text for a staff extension."""

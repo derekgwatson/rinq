@@ -213,6 +213,29 @@ class MasterDatabase:
         finally:
             conn.close()
 
+    def remove_user_from_tenant(self, tenant_id: str, user_id: int) -> bool:
+        """Revoke a user's access to a tenant.
+
+        Returns True if a membership row was removed, False if there was none
+        — callers retry offboarding step by step, so an absent row is the
+        desired end state rather than an error.
+
+        Login is Google OAuth with domain auto-provisioning, so this alone does
+        not lock someone out: an active Google account on a matching domain
+        will be re-provisioned on next login. Revoking here removes their role
+        (an ex-manager stops being a manager) and is the right cleanup, but
+        the durable lock is disabling the Google account.
+        """
+        conn = self._get_conn()
+        try:
+            cursor = conn.execute("""
+                DELETE FROM tenant_users WHERE tenant_id = ? AND user_id = ?
+            """, (tenant_id, user_id))
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
     def get_user_role_in_tenant(self, user_id: int, tenant_id: str):
         conn = self._get_conn()
         try:

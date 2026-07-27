@@ -701,12 +701,23 @@ class TwilioService:
             return {"success": False, "error": str(e)}
 
     def delete_user_credential(self, credential_list_sid: str, credential_sid: str) -> dict:
-        """Delete a SIP credential (for offboarding)."""
+        """Delete a SIP credential (for offboarding).
+
+        A credential Twilio has never heard of reports success with
+        already_absent=True: offboarding is retried step-by-step by callers
+        (Olive), so "it's already gone" is the desired end state, not a failure.
+        """
         try:
             self.client.sip.credential_lists(credential_list_sid).credentials(credential_sid).delete()
             logger.info(f"Deleted SIP credential {credential_sid}")
-            return {"success": True}
-        except (TwilioRestException, TwilioException) as e:
+            return {"success": True, "already_absent": False}
+        except TwilioRestException as e:
+            if e.status == 404:
+                logger.info(f"SIP credential {credential_sid} already absent from Twilio")
+                return {"success": True, "already_absent": True}
+            logger.error(f"Failed to delete SIP credential: {e}")
+            return {"success": False, "error": str(e)}
+        except TwilioException as e:
             logger.error(f"Failed to delete SIP credential: {e}")
             return {"success": False, "error": str(e)}
 
