@@ -15,6 +15,20 @@
 .source-badge.none { background: #f8d7da; color: #721c24; }
 .caller-id-select { width: 100%; padding: 4px 6px; border: 1px solid #dee2e6; border-radius: 4px; font-size: 0.9em; }
 .caller-id-select.changed { border-color: #007bff; background: #e8f0fe; }
+.cid-alert {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    padding: 16px;
+    margin-bottom: 24px;
+    border: 1px solid #f5c2c7;
+    border-left: 4px solid #dc3545;
+    border-radius: 6px;
+    background: #fdf2f3;
+}
+.cid-alert-title { font-weight: 600; color: #721c24; margin-bottom: 4px; }
+.cid-alert-body { color: #6b4045; font-size: 0.9em; line-height: 1.5; }
+tr.cid-unresolved { background: #fdf2f3; }
 {% endblock %}
 
 {% block content %}
@@ -32,6 +46,22 @@
         Use the Manual Override column to set a specific caller ID, or leave on "Auto" to use the resolved default.
     </p>
 
+    {% if unresolved_count %}
+    <div class="cid-alert">
+        <div>
+            <div class="cid-alert-title">
+                {{ unresolved_count }} user{{ 's' if unresolved_count != 1 else '' }} cannot make outbound calls
+            </div>
+            <div class="cid-alert-body">
+                No caller ID resolves for the highlighted user{{ 's' if unresolved_count != 1 else '' }} below, so their
+                outbound calls are refused &mdash; they hear a spoken message asking them to contact an administrator.
+                Set a Manual Override for them{% if not tenant_default %}, or set an account-wide default caller ID so
+                everyone has a fallback{% endif %}.
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     {% if staff %}
     <form id="caller-id-form" method="POST" action="{{ url_for('web.admin_caller_id_save') }}">
     <table>
@@ -46,7 +76,7 @@
         </thead>
         <tbody>
             {% for person in staff %}
-            <tr>
+            <tr {% if person.unresolved %}class="cid-unresolved"{% endif %}>
                 <td>
                     {{ person.name }}
                     <div class="text-muted" style="font-size: 0.85em;">{{ person.email }}</div>
@@ -55,7 +85,7 @@
                     {% if person.caller_id %}
                         {{ person.caller_id_display }}
                     {% else %}
-                        <span class="text-muted">-</span>
+                        <span style="color: #721c24;">None &mdash; calls blocked</span>
                     {% endif %}
                 </td>
                 <td>

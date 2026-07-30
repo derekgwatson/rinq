@@ -3497,10 +3497,26 @@ async function makeCall() {
 
     clearOutboundOutcome();
 
+    const callerId = document.getElementById('callerId').value;
+
+    // No caller ID resolves for this user — the server would refuse the call
+    // and speak the reason. Say so on screen instead of dialling, so the error
+    // is readable and actionable rather than just heard once.
+    if (!callerId) {
+        showOutboundOutcome(
+            'Call not placed — no caller ID set',
+            null,
+            'Your extension has no outbound caller ID, so calls cannot be placed. ' +
+            'Ask an administrator to set one (Admin → Caller ID overview).',
+            true
+        );
+        setStatus('Ready', 'ready');
+        return;
+    }
+
     // Fetch customer context in parallel — don't block the call
     fetchCustomerContext(phoneNumber);
 
-    const callerId = document.getElementById('callerId').value;
     currentCallerId = callerId;  // Track for transfers
 
     try {
@@ -3794,16 +3810,20 @@ function endCall() {
 }
 
 let _outboundOutcomeTimer = null;
-function showOutboundOutcome(title, number) {
+// detailOverride replaces the default "Last call to X" line — used for
+// configuration errors where the number dialled isn't the useful detail.
+// persist keeps the panel up until dismissed, since a config error won't
+// resolve itself in 20 seconds.
+function showOutboundOutcome(title, number, detailOverride, persist) {
     const el = document.getElementById('outboundOutcome');
     const titleEl = document.getElementById('outboundOutcomeTitle');
     const detailEl = document.getElementById('outboundOutcomeDetail');
     if (!el || !titleEl || !detailEl) return;
     titleEl.textContent = title;
-    detailEl.textContent = number ? `Last call to ${number}` : '';
+    detailEl.textContent = detailOverride || (number ? `Last call to ${number}` : '');
     el.style.display = 'flex';
     if (_outboundOutcomeTimer) clearTimeout(_outboundOutcomeTimer);
-    _outboundOutcomeTimer = setTimeout(clearOutboundOutcome, 20000);
+    _outboundOutcomeTimer = persist ? null : setTimeout(clearOutboundOutcome, 20000);
 }
 
 function clearOutboundOutcome() {

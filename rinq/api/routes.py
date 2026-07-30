@@ -4904,18 +4904,45 @@ def voice_outbound():
                     if lookup_email:
                         db.stamp_sip_activity(lookup_email)
 
+        # Use the shared resolver so assignments and sections actually apply.
+        # This branch used to check only staff_extensions.default_caller_id and
+        # then jump straight to "first number we own", skipping priorities 2 and
+        # 3 — so the caller ID shown on the admin overview could disagree with
+        # what the customer's phone really displayed.
         if lookup_email:
-            staff_ext = db.get_staff_extension(lookup_email)
-            if staff_ext and staff_ext.get('default_caller_id'):
-                caller_id = staff_ext['default_caller_id']
-                logger.info(f"Using user's default caller ID: {caller_id}")
+            from rinq.services.caller_id import resolve_caller_id
+            cid = resolve_caller_id(lookup_email, db)
+            caller_id = cid['caller_id']
+            if caller_id:
+                logger.info(f"Caller ID for {lookup_email}: {caller_id} "
+                            f"(source={cid['source']})")
 
         if not caller_id:
-            # Fall back to first available number
-            numbers = db.get_phone_numbers()
-            if numbers:
-                caller_id = numbers[0]['phone_number']
-            logger.info(f"No default caller ID for user, using fallback: {caller_id}")
+            # Refuse rather than dial from an arbitrarily chosen number. A desk
+            # phone has no screen, so the reason has to be spoken — this same
+            # endpoint serves browser softphone, mobile SIP and desk phones.
+            ext_row = db.get_staff_extension(lookup_email) if lookup_email else None
+            ext_number = (ext_row or {}).get('extension')
+            who = lookup_email or from_identity or 'unknown caller'
+            logger.error(
+                f"Refusing outbound call to {to_e164}: no caller ID resolves for "
+                f"{who} (extension {ext_number or 'unknown'}). Set one in "
+                f"Admin -> Caller ID overview, or set the tenant default."
+            )
+            db.log_activity(
+                action="outbound_call_refused",
+                target=to_e164,
+                details=f"No caller ID configured for {who} "
+                        f"(extension {ext_number or 'unknown'})",
+                performed_by=f"session:{lookup_email}" if lookup_email else "twilio"
+            )
+            spoken_ext = f" for extension {ext_number}" if ext_number else ""
+            twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Nicole">This call cannot be placed because no outbound caller I D is set{xml_escape(spoken_ext)}. Please ask your administrator to set one in Rinq, under Caller I D overview.</Say>
+    <Hangup/>
+</Response>'''
+            return Response(twiml, mimetype='application/xml')
 
     # Log the outbound call
     conference_name = f"call_{call_sid}"
@@ -5513,15 +5540,21 @@ def answer_queued_caller(call_sid):
     if not agent_number:
         return jsonify({"error": "No SIP credentials found for agent"}), 400
 
-    # Get caller ID for the outbound call
+    # Get caller ID for the outbound call. No "first phone we own" fallback —
+    # see resolve_caller_id() for why sort order must not decide this.
     caller_id = get_twilio_config('twilio_default_caller_id')
-    if not caller_id:
-        phones = db.get_all_phones()
-        if phones:
-            caller_id = phones[0].get('phone_number')
 
     if not caller_id:
-        return jsonify({"error": "No caller ID configured"}), 500
+        logger.error(
+            f"Cannot ring agent {agent_email} for queued call {call_sid}: the "
+            f"tenant has no twilio_default_caller_id set."
+        )
+        return jsonify({
+            "error": "No caller ID configured for this account, so the agent "
+                     "cannot be rung. An administrator needs to set a default "
+                     "caller ID in Admin -> Caller ID overview.",
+            "reason": "no_caller_id"
+        }), 500
 
     # Initiate call to agent
     queue_id = queued_call.get('queue_id')
