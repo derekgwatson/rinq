@@ -887,22 +887,30 @@ def admin_caller_id_overview():
             number_by_section[n['section']] = n
 
     def _number_display(phone_number):
-        """Get friendly display for a phone number."""
+        """Get friendly display for a phone number.
+
+        phone_numbers.friendly_name is usually just the number's own digits
+        (Twilio seeds it that way), which reads as no name at all. Prefer a
+        genuinely different label — the office names live in
+        verified_caller_ids — and only fall back to the raw number.
+        """
         if not phone_number:
             return None
+        wanted = ''.join(c for c in phone_number if c.isdigit())
+
+        def _label(row):
+            if not row:
+                return None
+            name = (row.get('friendly_name') or '').strip()
+            if not name or ''.join(c for c in name if c.isdigit()) == wanted:
+                return None
+            return name
+
         pn = phone_by_number.get(phone_number)
-        if pn:
-            name = pn.get('friendly_name') or phone_number
-            if pn.get('section'):
-                return f"{name} ({pn['section']})"
-            return name
         vcid = vcid_by_number.get(phone_number)
-        if vcid:
-            name = vcid.get('friendly_name') or phone_number
-            if vcid.get('section'):
-                return f"{name} ({vcid['section']})"
-            return name
-        return phone_number
+        name = _label(pn) or _label(vcid) or phone_number
+        section = (pn or {}).get('section') or (vcid or {}).get('section')
+        return f"{name} ({section})" if section else name
 
     # Resolve caller ID for each active user
     staff = []
@@ -936,14 +944,14 @@ def admin_caller_id_overview():
                 caller_id = number_by_section[user_section]['phone_number']
                 source = 'section'
 
-        # Priority 4: System default / first available number
+        # Priority 4: Explicit tenant default only. No "first number we own"
+        # fallback — see resolve_caller_id() for why sort order must not decide
+        # this. Anyone left unresolved is flagged below so an admin can fix it
+        # before the person tries to dial and gets refused.
         if not caller_id:
             tenant_default = get_twilio_config('twilio_default_caller_id')
             if tenant_default:
                 caller_id = tenant_default
-            elif phone_numbers:
-                caller_id = phone_numbers[0]['phone_number']
-            if caller_id:
                 source = 'default'
 
         source_labels = {
@@ -951,7 +959,7 @@ def admin_caller_id_overview():
             'assigned': 'Assigned',
             'section': 'Section',
             'default': 'System Default',
-            'none': 'None',
+            'none': 'Not set — outbound calls blocked',
         }
 
         # Build assigned numbers display list
@@ -977,6 +985,7 @@ def admin_caller_id_overview():
             'caller_id_display': _number_display(caller_id) if caller_id else None,
             'source': source,
             'source_label': source_labels[source],
+            'unresolved': not caller_id,
             'assigned_numbers': assigned_display,
         })
 
@@ -996,6 +1005,8 @@ def admin_caller_id_overview():
     return render_template('admin_caller_id_overview.html',
                          staff=staff,
                          caller_id_options=caller_id_options,
+                         unresolved_count=sum(1 for s in staff if s['unresolved']),
+                         tenant_default=get_twilio_config('twilio_default_caller_id'),
                          current_user=user)
 
 
