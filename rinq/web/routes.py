@@ -328,8 +328,6 @@ def toggle_queue(queue_id):
 @admin_required
 def admin():
     """Admin dashboard - tiles linking to admin sub-pages."""
-    from rinq.integrations import get_permission_service, get_staff_directory
-
     service = get_twilio_service()
     user = get_current_user()
 
@@ -341,28 +339,6 @@ def admin():
     # Get counts for tiles
     phone_numbers = service.get_phone_numbers()
     account_info = service.get_account_info()
-
-    # Get current admins for the admin management section
-    perms = get_permission_service()
-    admins = [p for p in (perms.get_permissions('tina') if perms else [])
-              if p.get('role') == 'admin']
-    admins.sort(key=lambda p: p.get('email', ''))
-
-    # Get staff list for the add-admin dropdown
-    admin_emails = {p.get('email', '').lower() for p in admins}
-    staff_dir = get_staff_directory()
-    try:
-        all_staff = staff_dir.get_active_staff() if staff_dir else []
-        available_staff = []
-        for s in all_staff:
-            staff_email = (s.get('work_email') or s.get('google_primary_email') or s.get('email') or '').lower()
-            if staff_email and staff_email not in admin_emails:
-                s['_email'] = staff_email
-                available_staff.append(s)
-        available_staff.sort(key=lambda s: s.get('name', ''))
-    except Exception as e:
-        logger.warning(f"Failed to get staff list for admin dropdown: {e}")
-        available_staff = []
 
     # Surfaced on the Storage tile so a filling disk is visible from the
     # admin index, not only once someone opens the page.
@@ -384,8 +360,6 @@ def admin():
                          audio_files=db.get_audio_files(),
                          holiday_templates=db.get_holiday_templates(),
                          account_info=account_info,
-                         admins=admins,
-                         available_staff=available_staff,
                          current_user=user)
 
 
@@ -1629,56 +1603,6 @@ def leaderboard():
                          format_duration=service.format_duration,
                          current_user=user,
                          active_nav='leaderboard')
-
-
-@web_bp.route('/admin/admins/add', methods=['POST'])
-@admin_required
-def admin_add():
-    """Add an admin via permission service."""
-    from rinq.integrations import get_permission_service
-
-    user = get_current_user()
-    email = request.form.get('email', '').strip().lower()
-
-    if not email:
-        flash('Email is required.', 'danger')
-        return redirect(url_for('web.admin'))
-
-    perms = get_permission_service()
-    if not perms:
-        flash('No permission service configured.', 'danger')
-    elif perms.add_permission(email, 'tina', 'admin', user.email):
-        flash(f'Added {email} as admin.', 'success')
-    else:
-        flash(f'Failed to add {email} — check server logs for details.', 'danger')
-
-    return redirect(url_for('web.admin'))
-
-
-@web_bp.route('/admin/admins/remove', methods=['POST'])
-@admin_required
-def admin_remove():
-    """Remove an admin via permission service."""
-    from rinq.integrations import get_permission_service
-
-    user = get_current_user()
-    email = request.form.get('email', '').strip().lower()
-
-    if not email:
-        flash('Email is required.', 'danger')
-        return redirect(url_for('web.admin'))
-
-    if email == user.email.lower():
-        flash("You can't remove yourself.", 'danger')
-        return redirect(url_for('web.admin'))
-
-    perms = get_permission_service()
-    if perms and perms.remove_permission(email, 'tina', user.email):
-        flash(f'Removed {email} as admin.', 'success')
-    else:
-        flash('Failed to remove admin.', 'danger')
-
-    return redirect(url_for('web.admin'))
 
 
 @web_bp.route('/queues')
