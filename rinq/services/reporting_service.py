@@ -41,7 +41,7 @@ class ReportingService:
         Returns:
             Dict with summary, agent_stats, queue_stats, hourly_distribution
         """
-        parsed = self._parse_period(period)
+        parsed = self.parse_period(period)
         start_utc = parsed['start_utc']
         end_utc = parsed['end_utc']
         start_date = parsed['start_date']
@@ -94,7 +94,7 @@ class ReportingService:
             'max_hourly_calls': max_hourly_calls,
         }
 
-    def _parse_period(self, period: str) -> dict:
+    def parse_period(self, period: str) -> dict:
         """Parse period string into date boundaries.
 
         Args:
@@ -264,6 +264,51 @@ class ReportingService:
             hours = seconds // 3600
             minutes = (seconds % 3600) // 60
             return f"{hours}h {minutes}m"
+
+
+def resolve_visible_emails(user) -> tuple[list[str] | None, str]:
+    """Work out whose calls a user is allowed to see.
+
+    Shared by the /reports dashboard and the CSV exports so the two can
+    never drift apart — a scoping bug here would hand a regular user the
+    whole company's call data.
+
+    Returns (team_emails, team_label). For a non-manager the list is always
+    concrete, so callers can pass it straight into a filter without needing
+    an "unscoped" fallback. None means "no filter" (managers/admins only).
+    """
+    from rinq.integrations import get_staff_directory
+
+    staff_dir = get_staff_directory()
+
+    if user.is_manager:
+        # Admins and managers see all staff
+        team_emails = None
+        if staff_dir:
+            try:
+                staff_list = staff_dir.get_active_staff()
+                team_emails = [s.get('email') for s in staff_list if s.get('email')]
+            except Exception as e:
+                logger.warning(f"Failed to get staff list: {e}", exc_info=True)
+        return team_emails, 'All Staff'
+
+    # Check if user has reportees via the reports_to hierarchy
+    reportees = []
+    if staff_dir:
+        try:
+            reportees = staff_dir.get_reportees(user.email, recursive=True)
+        except Exception as e:
+            logger.warning(f"Failed to get reportees for {user.email}: {e}", exc_info=True)
+
+    if reportees:
+        # User has people reporting to them — show team view
+        team_emails = [r.get('email') for r in reportees if r.get('email')]
+        if user.email not in team_emails:
+            team_emails.append(user.email)
+        return team_emails, 'My Team'
+
+    # Regular users see just their own calls
+    return [user.email], 'My Calls'
 
 
 # Singleton instance

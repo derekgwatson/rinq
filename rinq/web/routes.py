@@ -1586,46 +1586,13 @@ def reports():
     Admins see all staff, users with reportees see their team,
     everyone else sees just their own stats.
     """
-    from rinq.services.reporting_service import get_reporting_service
-    from rinq.integrations import get_staff_directory
+    from rinq.services.reporting_service import get_reporting_service, resolve_visible_emails
 
     period = request.args.get('period', 'today')
     user = get_current_user()
 
-    # Build team_emails based on admin status / reportees
-    team_emails = None
-    team_label = None
-    staff_dir = get_staff_directory()
-
-    if user.is_manager:
-        # Admins and managers see all staff
-        if staff_dir:
-            try:
-                staff_list = staff_dir.get_active_staff()
-                team_emails = [s.get('email') for s in staff_list if s.get('email')]
-            except Exception as e:
-                logger.warning(f"Failed to get staff list: {e}")
-        team_label = 'All Staff'
-
-    else:
-        # Check if user has reportees via reports_to hierarchy
-        reportees = []
-        if staff_dir:
-            try:
-                reportees = staff_dir.get_reportees(user.email, recursive=True)
-            except Exception as e:
-                logger.warning(f"Failed to get reportees for {user.email}: {e}", exc_info=True)
-
-        if reportees:
-            # User has people reporting to them — show team view
-            team_emails = [r.get('email') for r in reportees if r.get('email')]
-            if user.email not in team_emails:
-                team_emails.append(user.email)
-            team_label = 'My Team'
-        else:
-            # Regular users see just their own stats
-            team_emails = [user.email]
-            team_label = 'My Calls'
+    # Scoping is shared with the CSV exports — see resolve_visible_emails()
+    team_emails, team_label = resolve_visible_emails(user)
 
     service = get_reporting_service()
     report_data = service.get_report_data(period, team_emails=team_emails)
