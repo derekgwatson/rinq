@@ -524,6 +524,22 @@
         <a href="{{ url_for('web.reports', period='last_month') }}" {% if report.period == 'last_month' %}class="active"{% endif %}>Last Month</a>
     </div>
     <span style="padding: 6px 12px; background: #e9ecef; border-radius: 4px; font-size: 0.85em; color: #495057; font-weight: 500;">{{ team_label }}</span>
+
+    <!-- Raw data export — row-level CSV for analysis outside this dashboard -->
+    <div style="margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+        <span style="font-size: 0.85em; color: #6c757d;">Export {{ report.period_label|lower }}</span>
+        <a class="btn btn-small btn-secondary"
+           href="{{ url_for('api.export_calls_csv', period=report.period) }}"
+           title="One row per call for {{ report.period_label|lower }}, scoped to {{ team_label|lower }}">Calls CSV</a>
+        {% if current_user.is_manager %}
+        <a class="btn btn-small btn-secondary"
+           href="{{ url_for('api.export_queue_calls_csv', period=report.period) }}"
+           title="One row per queued caller — wait times, abandons and priority">Queue CSV</a>
+        {% endif %}
+        <a href="{{ url_for('api.export_data_dictionary') }}"
+           style="font-size: 0.85em; color: var(--bot-primary); text-decoration: none;"
+           title="Column meanings and counting rules — read this before analysing the CSV">Data dictionary</a>
+    </div>
 </div>
 
 {% if report.summary.total_calls == 0 %}

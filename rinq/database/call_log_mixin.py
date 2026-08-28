@@ -622,3 +622,88 @@ class CallLogMixin:
                 'calls': calls,
                 'last_call_date': calls[0]['started_at'] if calls else None
             }
+
+    # ------------------------------------------------------------------
+    # Row-level exports (CSV)
+    #
+    # These stream one row per call rather than aggregating. Callers must
+    # not hold the results in memory — the point is that a year of watson
+    # volume never lands in a list.
+    # ------------------------------------------------------------------
+
+    CALL_LOG_EXPORT_COLUMNS = [
+        'call_sid', 'parent_call_sid', 'direction', 'call_type', 'status',
+        'agent_email', 'queue_name', 'started_at', 'answered_at', 'ended_at',
+        'ring_seconds', 'talk_seconds', 'total_seconds',
+        'transfer_status', 'transfer_type', 'transfer_target', 'transferred_by',
+        'transferred_at', 'transfer_failure_reason', 'is_recorded',
+    ]
+
+    # Anything that identifies the person on the other end of the call.
+    CALL_LOG_CUSTOMER_COLUMNS = [
+        'from_number', 'to_number', 'customer_id', 'customer_name', 'customer_email',
+    ]
+
+    def iter_call_log_export(self, start_utc: str, end_utc: str, team_emails: list = None):
+        """Yield call_log rows for a UTC range, oldest first.
+
+        Args:
+            start_utc, end_utc: inclusive UTC timestamp bounds
+            team_emails: restrict to these agents (plus their SIP identities).
+                         None means no agent filter — callers must only pass
+                         None for users allowed to see everyone.
+
+        Yields:
+            sqlite3.Row per call, streamed.
+        """
+        columns = list(self.CALL_LOG_EXPORT_COLUMNS)
+        # from_number/to_number are always selected: the export derives a
+        # non-identifying customer_ref from them even when they're withheld.
+        select = columns + self.CALL_LOG_CUSTOMER_COLUMNS
+
+        where = "started_at >= ? AND started_at <= ?"
+        params = [start_utc, end_utc]
+        if team_emails is not None:
+            filter_clause, filter_params = self._build_team_filter(team_emails)
+            if not filter_clause:
+                # An empty team list must match nothing, never everything.
+                return
+            where += filter_clause
+            params.extend(filter_params)
+
+        with self._get_conn() as conn:
+            cursor = conn.execute(
+                f"SELECT {', '.join(select)} FROM call_log WHERE {where} ORDER BY started_at ASC",
+                params,
+            )
+            for row in cursor:
+                yield row
+
+    QUEUED_CALLS_EXPORT_COLUMNS = [
+        'call_sid', 'queue_name', 'status', 'priority', 'priority_reason',
+        'enqueued_at', 'answered_at', 'answered_by', 'ended_at', 'wait_seconds',
+        'transfer_status', 'transfer_type', 'transfer_target', 'transferred_by',
+        'transferred_at', 'transfer_failure_reason',
+    ]
+
+    QUEUED_CALLS_CUSTOMER_COLUMNS = [
+        'caller_number', 'called_number', 'customer_id', 'customer_name', 'customer_email',
+    ]
+
+    def iter_queued_calls_export(self, start_utc: str, end_utc: str):
+        """Yield queued_calls rows for a UTC range, oldest first.
+
+        Unscoped by agent on purpose: abandoned calls have no answered_by, so
+        an agent filter would silently drop exactly the rows that make this
+        dataset worth exporting. Callers must gate this on manager access.
+        """
+        select = list(self.QUEUED_CALLS_EXPORT_COLUMNS) + list(self.QUEUED_CALLS_CUSTOMER_COLUMNS)
+
+        with self._get_conn() as conn:
+            cursor = conn.execute(
+                f"SELECT {', '.join(select)} FROM queued_calls "
+                "WHERE enqueued_at >= ? AND enqueued_at <= ? ORDER BY enqueued_at ASC",
+                [start_utc, end_utc],
+            )
+            for row in cursor:
+                yield row

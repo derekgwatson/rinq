@@ -5857,3 +5857,9 @@ _register_stats_routes(api_bp)
 # =============================================================================
 from rinq.api.staff_routes import register as _register_staff_routes
 _register_staff_routes(api_bp)
+
+# =============================================================================
+# CSV Data Exports (extracted to export_routes.py)
+# =============================================================================
+from rinq.api.export_routes import register as _register_export_routes
+_register_export_routes(api_bp)
