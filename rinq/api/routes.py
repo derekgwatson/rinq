@@ -2706,6 +2706,20 @@ def conference_join():
         except Exception as e:
             logger.debug(f"Could not track participant {call_sid} in {room}: {e}")
 
+    # Start recording, if the tenant records everything. This webhook fires
+    # when a leg is ANSWERED, so it is the moment the conversation connects —
+    # and because it is server-side it fires for a desk phone and a SIP
+    # softphone exactly as it does for the browser. No-op while the tenant
+    # flag is off.
+    if call_sid and call_sid != '?' and room:
+        from rinq.services.recording_service import recording_service
+        recording_service.start_conversation_recording(
+            conference_name=room,
+            joining_call_sid=call_sid,
+            role='caller' if role == 'caller' else 'agent',
+            call_type='inbound',
+        )
+
     if not room:
         twiml = '''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -3006,6 +3020,17 @@ def outbound_customer_join():
     customer_name = db.get_call_log_field(customer_call_sid, 'customer_name') or customer_number
     db.add_participant(conference_name, customer_call_sid, 'customer',
                        name=customer_name, phone_number=customer_number)
+
+    # Outbound calls connect here, whatever the staff member dialled from.
+    # role='caller' because this leg IS the customer. No-op while the
+    # tenant-wide recording flag is off.
+    from rinq.services.recording_service import recording_service
+    recording_service.start_conversation_recording(
+        conference_name=conference_name,
+        joining_call_sid=customer_call_sid,
+        role='caller',
+        call_type='outbound',
+    )
 
     twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>

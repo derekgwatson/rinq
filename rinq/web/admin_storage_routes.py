@@ -17,8 +17,10 @@ from rinq.database.db import get_db
 from rinq.services.auth import admin_required, get_current_user
 from rinq.services.recording_service import (
     DEFAULT_RETENTION_DAYS,
+    RECORD_ALL_SETTING_KEY,
     RETENTION_SETTING_KEY,
     get_retention_days,
+    record_all_enabled,
     recording_service,
 )
 from rinq.web.util import flash_error
@@ -130,6 +132,7 @@ def register(bp):
             counts=counts,
             archived_percent=archived_percent,
             retention_days=get_retention_days(db),
+            record_all_calls=record_all_enabled(db),
             default_retention_days=DEFAULT_RETENTION_DAYS,
             min_retention_days=MIN_RETENTION_DAYS,
             max_retention_days=MAX_RETENTION_DAYS,
@@ -160,4 +163,34 @@ def register(bp):
         db.log_activity('retention_changed', f'{days}d',
                         f"Recording cache retention set to {days} days", user.email)
         flash(f'Recordings now stay on disk for {days} days.', 'success')
+        return redirect(url_for('web.admin_storage'))
+
+    @bp.route('/admin/storage/record-all', methods=['POST'])
+    @admin_required
+    def admin_storage_set_record_all():
+        """Turn tenant-wide call recording on or off.
+
+        On means the server starts a recording as each call connects, so it no
+        longer matters which device answered. Off restores the browser-only
+        behaviour, where each person's own preference decides — and where
+        anyone on a desk phone or SIP softphone is never recorded at all.
+        """
+        enable = request.form.get('record_all') == '1'
+
+        user = get_current_user()
+        db = get_db()
+        db.set_bot_setting(RECORD_ALL_SETTING_KEY, '1' if enable else '0', user.email)
+        db.log_activity(
+            'record_all_changed',
+            'on' if enable else 'off',
+            f"Tenant-wide call recording turned {'on' if enable else 'off'}",
+            user.email,
+        )
+        if enable:
+            flash('All calls are now recorded, on every device. '
+                  'Check the greetings tell callers so.', 'success')
+        else:
+            flash('Tenant-wide recording is off. Only calls answered in the '
+                  'browser will be recorded, and only for staff who have it '
+                  'switched on themselves.', 'success')
         return redirect(url_for('web.admin_storage'))

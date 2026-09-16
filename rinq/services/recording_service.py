@@ -14,6 +14,7 @@ import os
 import shutil
 import requests
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 from twilio.base.exceptions import TwilioException
 
@@ -28,6 +29,70 @@ logger = logging.getLogger(__name__)
 # fallback for a tenant that has never set one.
 RETENTION_SETTING_KEY = 'recording_retention_days'
 DEFAULT_RETENTION_DAYS = 21
+
+# Tenant-wide recording. When on, the SERVER starts a recording as each
+# conversation connects, so it does not matter whether the staff member
+# answered in the browser, on a desk phone or in a SIP softphone app.
+#
+# Default OFF, and while it is off nothing changes: the browser keeps
+# auto-recording per the user's own preference, exactly as before. Turning it
+# on is what makes recording device-independent — and it is also the point at
+# which every customer is being recorded, so the greetings need to say so
+# first. That is why this ships off rather than on.
+RECORD_ALL_SETTING_KEY = 'record_all_calls'
+
+
+def record_all_enabled(db) -> bool:
+    """Is tenant-wide, device-independent recording switched on?
+
+    Anything other than an explicit '1' reads as off. A setting we cannot read
+    must never be treated as consent to record.
+    """
+    try:
+        return db.get_bot_setting(RECORD_ALL_SETTING_KEY, '0') == '1'
+    except Exception as e:
+        logger.warning(f"Could not read {RECORD_ALL_SETTING_KEY} — treating as off: {e}")
+        return False
+
+
+def customer_leg_for_conference(conference_name: str, joining_call_sid: str,
+                                role: str) -> str | None:
+    """Work out which call leg to record for a conversation.
+
+    We record the CUSTOMER's leg, because it lasts the whole conversation —
+    agents come and go through transfers, and their legs end with them.
+
+    The conference name carries the answer, but the prefix means different
+    things on different paths, so this is a lookup table rather than a guess:
+
+      hold_room_<sid>  inbound, <sid> is the CUSTOMER  (queue / auto-ring answer)
+      call_<sid>       reached by an agent joining -> direct inbound, <sid> is
+                       the CUSTOMER. An OUTBOUND conference is also named
+                       call_<agent sid>, but on that path the agent joins with
+                       inline TwiML and never reaches conference_join, so an
+                       agent arriving here can only be direct inbound.
+      anything else    a hold room or a transfer/consult room — a mid-call
+                       move, not the start of a conversation. Recording is
+                       already running on the customer leg, which survives the
+                       move, so there is nothing to start.
+
+    Returns the call SID to record, or None to do nothing.
+    """
+    if role == 'caller':
+        # The leg arriving IS the customer — no derivation needed.
+        return joining_call_sid
+
+    if not conference_name:
+        return None
+
+    if conference_name.startswith('hold_room_'):
+        return conference_name[len('hold_room_'):] or None
+
+    # 'hold_' is a different room from 'hold_room_' and must not match here.
+    if conference_name.startswith('call_'):
+        return conference_name[len('call_'):] or None
+
+    return None
 
 
 def get_retention_days(db) -> int:
@@ -353,6 +418,136 @@ class RecordingService:
         logger.warning(f"Failed to delete recording from Twilio: {delete_result.get('error')}")
         return False
 
+    def _status_callback_url(self, conference_name: str = None,
+                             call_type: str = None) -> str:
+        """Build the recording-status callback URL.
+
+        When we know what the call is, we say so on the URL rather than
+        leaving the webhook to work it out. Its fallback path re-derives the
+        answer from the activity log and the conference-name prefix, and that
+        prefix is ambiguous — a direct inbound call sits in a conference named
+        `call_<sid>`, which the prefix rule reads as outbound. Passing the
+        facts we already hold keeps the filed recording honest.
+        """
+        url = f"{config.webhook_base_url}/api/voice/recording-status"
+        params = []
+        if conference_name:
+            params.append(f"conf={quote(conference_name, safe='')}")
+        if call_type:
+            params.append(f"ctype={quote(call_type, safe='')}")
+        return f"{url}?{'&'.join(params)}" if params else url
+
+    def start_conversation_recording(self, conference_name: str,
+                                     joining_call_sid: str, role: str,
+                                     call_type: str, db=None) -> dict:
+        """Start recording a conversation as it connects, server-side.
+
+        This is the device-independent path: it runs on a Twilio webhook, so
+        it works the same whether the staff member answered in the browser, on
+        a desk phone or in a SIP softphone app. Called at the moment of
+        connection from conference_join and outbound_customer_join.
+
+        Does nothing unless the tenant has switched tenant-wide recording on.
+        Never raises — a recording problem must not take a live call down.
+        """
+        try:
+            # Inside the try: this resolves the tenant database, and on a
+            # webhook with no resolvable tenant it raises. Losing a recording
+            # is survivable; dropping the caller's TwiML is not.
+            db = db or self.db
+            if not record_all_enabled(db):
+                return {'success': False, 'skipped': 'disabled'}
+
+            target_sid = customer_leg_for_conference(
+                conference_name, joining_call_sid, role)
+            if not target_sid:
+                # A mid-call move (hold, transfer): the customer leg is
+                # already being recorded and survives the move.
+                return {'success': False, 'skipped': 'not_a_conversation_start'}
+
+            # Prefer the leg's own logged direction over the caller's hint.
+            # The hint is right at the two points a conversation starts, but
+            # conference_join is also reached mid-call (a customer coming back
+            # off hold), where it would file an outbound call as inbound.
+            call_type = self._logged_direction(db, target_sid) or call_type
+
+            # Atomic claim — only one worker/webhook may start this recording.
+            if not db.claim_recording_start(target_sid, conference_name, call_type):
+                return {'success': False, 'skipped': 'already_started'}
+
+            try:
+                recording = self.client_recordings_create(
+                    target_sid, conference_name, call_type)
+            except Exception:
+                # Let the next participant retry rather than leaving the
+                # conversation permanently unrecordable behind a dead claim.
+                db.release_recording_start(target_sid)
+                raise
+
+            logger.info(
+                f"Tenant-wide recording started for {call_type} call: "
+                f"leg={target_sid} conference={conference_name} "
+                f"recording={recording.sid}"
+            )
+            return {'success': True, 'recording_sid': recording.sid,
+                    'call_sid': target_sid}
+
+        except Exception as e:
+            logger.error(
+                f"Could not start tenant-wide recording for conference "
+                f"{conference_name} (leg {joining_call_sid}, role {role}): {e}"
+            )
+            return {'success': False, 'error': str(e)}
+
+    @staticmethod
+    def _logged_direction(db, call_sid: str) -> str | None:
+        """The direction we logged for this leg, if we recognise it.
+
+        Only 'inbound' and 'outbound' are returned — 'internal' and anything
+        unexpected fall through to the caller's hint rather than being written
+        into a recording's call_type, which the recordings page filters on.
+        """
+        try:
+            direction = db.get_call_log_field(call_sid, 'direction')
+        except Exception as e:
+            logger.debug(f"No logged direction for {call_sid}: {e}")
+            return None
+        return direction if direction in ('inbound', 'outbound') else None
+
+    def client_recordings_create(self, call_sid: str, conference_name: str = None,
+                                 call_type: str = None):
+        """Create a Twilio recording on a call leg. Split out so the start
+        path above stays readable and can be exercised on its own."""
+        client = get_twilio_service().client
+        return client.calls(call_sid).recordings.create(
+            recording_status_callback=self._status_callback_url(
+                conference_name, call_type),
+            recording_status_callback_event=['completed', 'absent'],
+        )
+
+    def resolve_recorded_leg(self, call_sid: str, db=None) -> str:
+        """Map any leg of a conversation to the leg actually being recorded.
+
+        The Record/Stop button sends whichever SID the caller's own device
+        knows about — for a browser agent that is their own leg, while the
+        server records the customer's. Without this, pressing Stop would look
+        for a recording on a leg that has none and silently do nothing.
+
+        Falls back to the SID it was given, so the pre-existing browser-only
+        behaviour is unchanged when tenant-wide recording is off.
+        """
+        try:
+            db = db or self.db
+            if db.get_recording_start(call_sid):
+                return call_sid
+            conference_name = db.get_call_conference(call_sid)
+            claimed = db.find_recording_start_in_conference(conference_name)
+            if claimed:
+                return claimed['call_sid']
+        except Exception as e:
+            logger.warning(f"Could not resolve recorded leg for {call_sid}: {e}")
+        return call_sid
+
     def start_recording(self, call_sid: str) -> dict:
         """Start or resume recording an active call.
 
@@ -368,6 +563,20 @@ class RecordingService:
         try:
             client = get_twilio_service().client
 
+            # Already recording? Hand back the recording in flight rather than
+            # starting a second one. With tenant-wide recording on, the server
+            # has usually started one before anyone touches the Record button,
+            # and Twilio will happily record the same leg twice — which bills
+            # twice, files two rows and plays back as duplicates.
+            running = self._find_recording(call_sid, status='in-progress')
+            if running:
+                logger.info(f"Recording {running['sid']} already running for {call_sid}")
+                return {
+                    'success': True,
+                    'recording_sid': running['sid'],
+                    'already_running': True,
+                }
+
             # Check for a paused recording to resume first
             paused = self._find_recording(call_sid, status='paused')
             if paused:
@@ -380,7 +589,7 @@ class RecordingService:
                 }
 
             # No paused recording — create a new one
-            status_callback = f"{config.webhook_base_url}/api/voice/recording-status"
+            status_callback = self._status_callback_url()
             recording = client.calls(call_sid).recordings.create(
                 recording_status_callback=status_callback,
                 recording_status_callback_event=['completed', 'absent'],

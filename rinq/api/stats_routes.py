@@ -159,12 +159,17 @@ def register(bp):
             stale_intents = db.cleanup_old_leg_intents(max_age_minutes=30)
             stale_reconnects = db.cleanup_old_reconnect_attempts(max_age_minutes=30)
 
+            # Clean up recording-start claims — they only have to outlive the
+            # call they guard.
+            stale_rec_starts = db.cleanup_old_recording_starts(hours=hours)
+
             db.log_activity(
                 'queue_cleanup',
                 f'{hours}h',
                 f"Deleted {deleted_count} old queued_calls, {stale_ring_count} stale ring_attempts, "
                 f"{stale_participants} old participants, {stale_intents} leg_intents, "
-                f"{stale_reconnects} reconnect_attempts",
+                f"{stale_reconnects} reconnect_attempts, "
+                f"{stale_rec_starts} recording_starts",
                 caller
             )
             return deleted_count

@@ -34,6 +34,10 @@ def register(bp):
         if not call_sid:
             return jsonify({"error": "call_sid required"}), 400
 
+        # Whoever pressed Record knows their own leg; the server may be
+        # recording the customer's. Act on the leg that carries the recording.
+        call_sid = recording_service.resolve_recorded_leg(call_sid)
+
         result = recording_service.start_recording(call_sid)
         if result.get('success'):
             db = get_db()
@@ -57,6 +61,8 @@ def register(bp):
         if not call_sid:
             return jsonify({"error": "call_sid required"}), 400
 
+        call_sid = recording_service.resolve_recorded_leg(call_sid)
+
         result = recording_service.stop_recording(call_sid)
         if result.get('success'):
             db = get_db()
@@ -79,6 +85,7 @@ def register(bp):
         if not call_sid:
             return jsonify({"error": "call_sid required"}), 400
 
+        call_sid = recording_service.resolve_recorded_leg(call_sid)
         return jsonify(recording_service.get_recording_status(call_sid))
 
     @bp.route('/voice/recording-status', methods=['POST'])
@@ -118,17 +125,30 @@ def register(bp):
         staff_name = None
         caller_name = None
 
-        if conference_sid:
-            # Conference recording — resolve from call_participants
-            # Find the conference name from any participant's call_sid
-            # or look up by conference SID via Twilio
-            conference_name = None
-            try:
-                twilio = get_twilio_service()
-                conf = twilio.client.conferences(conference_sid).fetch()
-                conference_name = conf.friendly_name
-            except Exception as e:
-                logger.warning(f"Could not fetch conference {conference_sid}: {e}")
+        # A server-started recording tells us what the call is on the callback
+        # URL, so we don't have to re-derive it. The derivation below is the
+        # fallback for recordings started elsewhere (the browser's Record
+        # button), and it is lossy: the conference-name prefix reads a direct
+        # inbound call as outbound, because both sit in a `call_<sid>` room.
+        explicit_conference = request.args.get('conf') or None
+        # This webhook is unauthenticated (Twilio calls it), so the hint is
+        # only honoured when it is one of the values the recordings page
+        # filters on — never written through as free text.
+        explicit_call_type = request.args.get('ctype')
+        if explicit_call_type not in ('inbound', 'outbound', 'internal'):
+            explicit_call_type = None
+
+        if conference_sid or explicit_conference:
+            # Resolve the conversation from call_participants, keyed by the
+            # conference name — either handed to us, or looked up by SID.
+            conference_name = explicit_conference
+            if not conference_name:
+                try:
+                    twilio = get_twilio_service()
+                    conf = twilio.client.conferences(conference_sid).fetch()
+                    conference_name = conf.friendly_name
+                except Exception as e:
+                    logger.warning(f"Could not fetch conference {conference_sid}: {e}")
 
             if conference_name:
                 participants = db.get_participants(conference_name, active_only=False)
@@ -140,12 +160,19 @@ def register(bp):
                         from_number = p.get('phone_number') or ''
                         caller_name = p.get('name')
 
-                # Determine call type from conference name
-                if conference_name.startswith('hold_room_'):
+                # Call type: what the starter told us, else the conference
+                # name's prefix.
+                if explicit_call_type:
+                    call_type = explicit_call_type
+                elif conference_name.startswith('hold_room_'):
                     call_type = 'inbound'
+                elif conference_name.startswith('call_'):
+                    call_type = 'outbound'
+
+                if call_type == 'inbound':
                     # For missed calls (nobody answered), attribute to the agents
                     # who were rung so they can see it in their recordings list.
-                    if not staff_email:
+                    if not staff_email and conference_name.startswith('hold_room_'):
                         customer_call_sid = conference_name[len('hold_room_'):]
                         rung = db.get_rung_agent_emails(customer_call_sid)
                         if rung:
@@ -154,8 +181,7 @@ def register(bp):
                             if staff_ext:
                                 staff_name = staff_ext.get('friendly_name') or staff_name
                             logger.info(f"Missed call {conference_name}: attributing to {staff_email} (rung agents: {rung})")
-                elif conference_name.startswith('call_'):
-                    call_type = 'outbound'
+                elif call_type == 'outbound':
                     # For outbound, from is the agent, to is the customer
                     to_number = from_number
                     from_number = staff_email or ''
@@ -219,11 +245,24 @@ def register(bp):
     @bp.route('/users/me/recording-default', methods=['GET'])
     @login_required
     def get_my_recording_default():
-        """Get current user's call recording default setting."""
-        from rinq.services.recording_service import recording_service
+        """Get whether the browser should auto-record this user's calls.
+
+        When the tenant records everything, the SERVER starts the recording as
+        each call connects, so the browser must stand down — otherwise the two
+        would each start one and every call would be recorded twice. The
+        personal preference only governs anything while the tenant flag is
+        off, which is also the only time it ever worked (it was never read on
+        any path but this one, so nobody on a desk phone or SIP softphone was
+        covered by it).
+        """
+        from rinq.services.recording_service import recording_service, record_all_enabled
         user = get_current_user()
-        enabled = recording_service.get_user_recording_preference(user.email)
-        return jsonify({"recording_enabled": enabled})
+        records_all = record_all_enabled(get_db())
+        enabled = (not records_all) and recording_service.get_user_recording_preference(user.email)
+        return jsonify({
+            "recording_enabled": enabled,
+            "tenant_records_all": records_all,
+        })
 
     @bp.route('/users/me/recording-default', methods=['PUT'])
     @login_required
