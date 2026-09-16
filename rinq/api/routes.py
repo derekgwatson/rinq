@@ -4790,6 +4790,23 @@ def voice_outbound():
 
     db = get_db()
 
+    # A SIP device — a desk phone or a softphone app — identifies itself as
+    # sip:<username>@..., which the line above does not recognise, so
+    # staff_email stayed None and the call was logged, tracked and RECORDED
+    # under nobody. That is why searching the recordings for a desk-phone
+    # user's name found nothing: the calls were there, the name never was.
+    #
+    # Resolve it here, once, before any branch below needs it — the call log,
+    # the conference participant record and the recording's owner all read
+    # this one variable. Further down, caller-ID resolution used to do its own
+    # copy of this lookup into a local; that copy is gone, because a second
+    # answer to "who is calling?" is how the two came to disagree.
+    if not staff_email:
+        staff_email = _resolve_sip_email(from_identity, db)
+        if staff_email:
+            # Presence tracking: this device is demonstrably live right now.
+            db.stamp_sip_activity(staff_email)
+
     # Handle queue answer - connect browser and caller via conference
     if answer_queue_id and answer_call_sid:
         # Use a unique conference name for this call
@@ -4915,19 +4932,9 @@ def voice_outbound():
 
     # Determine caller ID - use provided, or look up user's default, or fall back
     if not caller_id:
-        # Look up user's default caller ID from staff extension
+        # Who is calling was settled at the top of this function, for browser
+        # and SIP alike — don't work it out a second time here.
         lookup_email = staff_email
-        if not lookup_email and from_identity and from_identity.startswith('sip:'):
-            # Parse SIP identity to email: sip:chris_savage@watsonblinds.sip.twilio.com
-            sip_part = from_identity[4:]
-            if '@' in sip_part:
-                sip_username = sip_part.split('@')[0]
-                sip_user = db.get_user_by_username(sip_username)
-                if sip_user:
-                    lookup_email = sip_user.get('staff_email')
-                    # Record SIP device activity for presence tracking
-                    if lookup_email:
-                        db.stamp_sip_activity(lookup_email)
 
         # Use the shared resolver so assignments and sections actually apply.
         # This branch used to check only staff_extensions.default_caller_id and
