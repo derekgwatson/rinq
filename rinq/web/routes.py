@@ -1718,7 +1718,11 @@ def recordings():
     filter_staff = request.args.get('staff')
     filter_phone = request.args.get('phone', '').strip()
 
-    # Get user's recording preference
+    # Get user's recording preference. When the tenant records everything the
+    # personal preference no longer decides anything, so the page says so
+    # rather than showing a switch that does nothing.
+    from rinq.services.recording_service import record_all_enabled
+    tenant_records_all = record_all_enabled(db)
     recording_enabled = db.get_user_recording_default(user.email)
 
     # Build the list of staff emails this user can see recordings for
@@ -1752,6 +1756,7 @@ def recordings():
     return render_template('recordings.html',
                          recordings=recordings_list,
                          recording_enabled=recording_enabled,
+                         tenant_records_all=tenant_records_all,
                          recordings_group=config.recordings_group_email,
                          filter_type=filter_type,
                          filter_staff=filter_staff,

@@ -66,6 +66,33 @@
     margin-top: 4px;
 }
 
+/* What gets recorded */
+.record-state {
+    display: inline-block;
+    font-size: 0.78em;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 10px;
+    letter-spacing: 0.02em;
+    vertical-align: middle;
+    margin-left: 8px;
+}
+.record-state.on { background: #d4edda; color: #155724; }
+.record-state.off { background: #f1f3f5; color: #495057; }
+.record-panel {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.record-consequence {
+    margin: 12px 0 0 0;
+    font-size: 0.9em;
+    color: #6c757d;
+    max-width: 68ch;
+}
+.record-consequence strong { color: #495057; }
+
 /* Retention form */
 .retention-form {
     display: flex;
@@ -205,6 +232,42 @@
             {{ counts.local_only }} recording{% if counts.local_only != 1 %}s have{% else %} has{% endif %}
             no Google Drive copy, so the local file is the only playable audio.
             The purge always skips {% if counts.local_only != 1 %}these{% else %}this{% endif %}.
+        </p>
+        {% endif %}
+    </div>
+
+    <!-- What gets recorded -->
+    <div class="storage-section">
+        <h3>What gets recorded
+            <span class="record-state {{ 'on' if record_all_calls else 'off' }}">
+                {{ 'ALL CALLS' if record_all_calls else 'BROWSER ONLY' }}
+            </span>
+        </h3>
+        <p class="section-hint">
+            Recording can either be started by the server as each call connects, or left to
+            the Tina page in the browser. Only the first covers desk phones and SIP softphone
+            apps — the browser cannot record a call it is not part of.
+        </p>
+        <div class="record-panel">
+            <form method="POST" action="{{ url_for('web.admin_storage_set_record_all') }}">
+                <input type="hidden" name="record_all" value="{{ '0' if record_all_calls else '1' }}">
+                <button type="submit" class="btn{{ '' if record_all_calls else ' btn-primary' }}">
+                    {{ 'Turn off' if record_all_calls else 'Record all calls' }}
+                </button>
+            </form>
+        </div>
+        {% if record_all_calls %}
+        <p class="record-consequence">
+            <strong>Every call is recorded, on every device.</strong>
+            Staff can still stop a recording mid-call from the Tina page. Each person's own
+            "record my calls" setting no longer applies — this overrides it.
+            Make sure the greetings tell callers they are being recorded.
+        </p>
+        {% else %}
+        <p class="record-consequence">
+            <strong>Only calls answered in the browser are recorded</strong>, and only for staff
+            who have switched it on for themselves. Anyone working from a desk phone or a SIP
+            softphone app is not recorded at all, whatever their own setting says.
         </p>
         {% endif %}
     </div>

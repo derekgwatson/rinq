@@ -3611,6 +3611,78 @@ class Database(StatsMixin, CallLogMixin):
             conn.commit()
             return cursor.rowcount
 
+    # ── Tenant-wide recording start guard ──────────────────────────────
+    # recording_starts: one row per conversation whose recording we have
+    # already started, keyed on the recorded leg's call SID. Several webhooks
+    # can reach the same conversation (the customer joining, an agent
+    # answering), and gunicorn runs 3 workers, so the guard has to live in the
+    # database — an in-process set would let each worker start its own
+    # recording of the same call.
+
+    def claim_recording_start(self, call_sid: str, conference_name: str = None,
+                              call_type: str = None) -> bool:
+        """Claim the right to start recording this call leg.
+
+        Returns True exactly once per call SID — the caller that gets True is
+        the one that should create the Twilio recording. Every later caller
+        (another worker, another participant joining) gets False.
+
+        INSERT OR IGNORE against a PRIMARY KEY makes the claim atomic, so two
+        workers racing cannot both win.
+        """
+        with self._get_conn() as conn:
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO recording_starts "
+                "(call_sid, conference_name, call_type) VALUES (?, ?, ?)",
+                (call_sid, conference_name, call_type)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def release_recording_start(self, call_sid: str) -> None:
+        """Drop a claim so it can be retried.
+
+        Used when the Twilio call to start recording fails — without this the
+        failed attempt would block every later attempt on the same call.
+        """
+        with self._get_conn() as conn:
+            conn.execute("DELETE FROM recording_starts WHERE call_sid = ?", (call_sid,))
+            conn.commit()
+
+    def get_recording_start(self, call_sid: str) -> dict | None:
+        """Get the recording-start claim for a call SID, if any."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM recording_starts WHERE call_sid = ?", (call_sid,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def find_recording_start_in_conference(self, conference_name: str) -> dict | None:
+        """Find the recorded leg for a conference, if one was claimed."""
+        if not conference_name:
+            return None
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM recording_starts WHERE conference_name = ? "
+                "ORDER BY created_at LIMIT 1",
+                (conference_name,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def cleanup_old_recording_starts(self, hours: int = 24) -> int:
+        """Remove recording-start claims older than `hours`.
+
+        The claim only has to outlive the call it guards; keeping them forever
+        would grow a table that is never read again.
+        """
+        with self._get_conn() as conn:
+            cursor = conn.execute(
+                "DELETE FROM recording_starts WHERE created_at < datetime('now', ?)",
+                (f'-{hours} hours',)
+            )
+            conn.commit()
+            return cursor.rowcount
+
     # ── Leg-drop auto-reconnect ────────────────────────────────────────
     # leg_intents: a leg that ended on purpose (user pressed End / Go back)
     # records its SID here. A network-dropped leg cannot, so ABSENCE of an

@@ -226,6 +226,13 @@ input:checked + .toggle-slider:before {
     <div class="recordings-header">
         <h2>Call Recordings</h2>
         <div class="recording-settings">
+            {% if tenant_records_all %}
+            <div class="toggle-container">
+                <span title="Set by an administrator under Admin &rarr; Storage">
+                    All calls are recorded, on every device
+                </span>
+            </div>
+            {% else %}
             <div class="toggle-container">
                 <span>Record my calls by default:</span>
                 <label class="toggle-switch">
@@ -233,6 +240,7 @@ input:checked + .toggle-slider:before {
                     <span class="toggle-slider"></span>
                 </label>
             </div>
+            {% endif %}
         </div>
     </div>
 
@@ -245,7 +253,14 @@ input:checked + .toggle-slider:before {
         {% endif %}
         Call recordings are saved locally (3 weeks), on Google Drive (12 months), and in Google Groups (forever).
         Click <strong>Play</strong> to listen - recordings are fetched from Drive if not cached locally.
+        {% if tenant_records_all %}
+        Every call is recorded automatically, whether you answer in this browser, on a desk
+        phone or in a softphone app. You can still stop a recording mid-call from the phone page.
+        {% else %}
         Use the toggle above to enable/disable auto-recording for your calls.
+        This only covers calls you answer <strong>in the browser</strong> &mdash; calls taken on a
+        desk phone or a SIP softphone app are not recorded.
+        {% endif %}
     </div>
 
     <form class="filter-form" method="get" action="{{ url_for('web.recordings') }}">

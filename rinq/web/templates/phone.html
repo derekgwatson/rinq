@@ -2725,6 +2725,7 @@ let currentOutboundCallSid = null;
 let currentCallerId = null;
 let isRecording = false;
 let recordingEnabled = true;  // User preference — NOT reset between calls
+let tenantRecordsAll = false; // Company-wide recording — server starts it, not us
 let currentRecordingSid = null;
 let customerContext = null;
 // The caller-number (digits only) the context pane is currently showing, and a
@@ -3935,7 +3936,9 @@ async function fetchRecordingPreference() {
         if (response.ok) {
             const data = await response.json();
             recordingEnabled = data.recording_enabled;
-            console.log('Recording preference:', recordingEnabled);
+            tenantRecordsAll = !!data.tenant_records_all;
+            console.log('Recording preference:', recordingEnabled,
+                        'tenant records all:', tenantRecordsAll);
         }
     } catch (error) {
         console.error('Error fetching recording preference:', error);
@@ -4056,6 +4059,15 @@ function resetRecordingState() {
 // Auto-start recording if user preference is enabled
 let autoRecordAttempted = false;
 async function autoStartRecordingIfEnabled() {
+    // When the tenant records everything, the SERVER has already started the
+    // recording as the call connected — this page must not start a second one.
+    // It still has to show the true state, or the button offers "Record" on a
+    // call that is already recording and Pause becomes unreachable.
+    if (tenantRecordsAll && !isRecording) {
+        isRecording = true;
+        updateRecordButton();
+        return;
+    }
     if (recordingEnabled && !isRecording && !autoRecordAttempted) {
         autoRecordAttempted = true;
         // Small delay to ensure call is fully connected
