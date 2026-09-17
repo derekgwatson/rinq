@@ -325,6 +325,24 @@ def register(bp):
             flash("Audio file not found", "error")
             return redirect(url_for('web.admin_audio'))
 
+        # Refuse to strand a call flow. Deleting only sets is_active = 0, and
+        # the runtime reads the row regardless — so a deleted recording keeps
+        # playing to callers while it vanishes from every admin list, and the
+        # call flow's own screen shows no recording selected. That is how
+        # Batemans Bay spent a day playing a January greeting while its edit
+        # screen looked empty (2026-09-16). Repoint the flow first.
+        in_use = db.get_call_flows_using_audio(audio_id)
+        if in_use:
+            where = '; '.join(
+                f"{f['name']} ({', '.join(f['uses'])})" for f in in_use
+            )
+            flash_error(
+                f"\"{audio.get('name')}\" is still in use and was not deleted — "
+                f"{where}. Point those call flows at a different recording "
+                f"first, then delete this one."
+            )
+            return redirect(url_for('web.admin_audio'))
+
         try:
             # Delete file from disk if it exists
             if audio.get('file_path') and os.path.exists(audio['file_path']):

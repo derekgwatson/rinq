@@ -1216,6 +1216,80 @@ class Database(StatsMixin, CallLogMixin):
             ).fetchone()
             return row['n'] if row else 0
 
+    # Every column on call_flows that holds an audio_files id. Kept in one
+    # place because "is this recording still in use?" has to check ALL of
+    # them — missing one lets a live greeting be deleted out from under a
+    # call flow, which is how Batemans Bay ended up playing a deleted January
+    # recording for a day while its edit screen showed no greeting at all.
+    CALL_FLOW_AUDIO_COLUMNS = (
+        ('greeting_audio_id', 'greeting'),
+        ('open_audio_id', 'open message'),
+        ('closed_audio_id', 'closed message'),
+        ('no_answer_audio_id', 'no-answer message'),
+        ('extension_prompt_audio_id', 'extension prompt'),
+        ('extension_invalid_audio_id', 'invalid-extension message'),
+    )
+
+    def _call_flow_audio_columns(self) -> list[tuple]:
+        """Audio-id columns on call_flows, read from the table itself.
+
+        The tuple above supplies readable labels, but the LIST comes from the
+        schema — so a seventh audio column added by a later migration is
+        guarded automatically instead of silently escaping the check and
+        letting its recording be deleted. An unlabelled column gets a plain
+        name rather than being skipped.
+        """
+        known = dict(self.CALL_FLOW_AUDIO_COLUMNS)
+        with self._get_conn() as conn:
+            names = [r[1] for r in conn.execute("PRAGMA table_info(call_flows)").fetchall()]
+        found = [n for n in names if n.endswith('_audio_id')]
+        if not found:
+            # Schema we don't recognise — fall back rather than guard nothing.
+            return list(self.CALL_FLOW_AUDIO_COLUMNS)
+        return [(n, known.get(n, n.replace('_audio_id', '').replace('_', ' ')))
+                for n in found]
+
+    def get_call_flows_using_audio(self, audio_id: int) -> list[dict]:
+        """Which active call flows still point at this recording, and where.
+
+        Returns [{'id', 'name', 'uses': ['greeting', ...]}]. Empty means the
+        recording can be deleted without stranding anything.
+        """
+        columns = self._call_flow_audio_columns()
+        cols = ', '.join(c for c, _ in columns)
+        where = ' OR '.join(f"{c} = ?" for c, _ in columns)
+        params = tuple([audio_id] * len(columns))
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                f"SELECT id, name, {cols} FROM call_flows "
+                f"WHERE is_active = 1 AND ({where})", params
+            ).fetchall()
+        out = []
+        for r in rows:
+            uses = [label for col, label in columns if r[col] == audio_id]
+            out.append({'id': r['id'], 'name': r['name'], 'uses': uses})
+        return out
+
+    def get_referenced_inactive_audio(self) -> list[dict]:
+        """Deleted-but-still-referenced recordings, for the call-flow screen.
+
+        The audio dropdowns list active files only, so a flow pointing at a
+        deleted one renders as "None selected" — and the next save of that
+        flow, for any unrelated reason, writes NULL and silently drops the
+        recording. Surfacing these lets the screen keep the value and say
+        what's wrong instead of quietly destroying it.
+        """
+        refs = ' UNION '.join(
+            f"SELECT {c} AS ref FROM call_flows WHERE is_active = 1 AND {c} IS NOT NULL"
+            for c, _ in self._call_flow_audio_columns()
+        )
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                f"SELECT a.* FROM audio_files a "
+                f"WHERE a.is_active = 0 AND a.id IN ({refs})"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
     def deactivate_audio_file(self, audio_id: int) -> None:
         """Soft delete an audio file by setting is_active = 0."""
         now = datetime.now(timezone.utc).isoformat()
