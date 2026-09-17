@@ -36,6 +36,31 @@
     <a href="{{ url_for('web.admin') }}" class="btn btn-secondary">← Back to Admin</a>
 </div>
 
+{% if orphaned_audio %}
+{# A flow pointing at a deleted recording: callers still hear it, but it is
+   gone from every audio list, so without this the dropdown would show
+   "None" and the next save would silently drop the greeting. #}
+<div class="card" style="border-left: 4px solid #e67e22; background: #fff8f0; margin-bottom: 20px;">
+    <h3 style="margin: 0 0 6px 0; font-size: 1em;">⚠ A call flow is using a deleted recording</h3>
+    <p class="text-muted" style="margin: 0 0 8px 0; font-size: 0.9em;">
+        Callers still hear {% if orphaned_audio|length == 1 %}it{% else %}them{% endif %},
+        but {% if orphaned_audio|length == 1 %}it is{% else %}they are{% endif %} gone from
+        Admin &rarr; Audio, so nobody can re-record
+        {% if orphaned_audio|length == 1 %}it{% else %}them{% endif %}.
+        Pick a replacement below and save that flow.
+    </p>
+    <ul style="margin: 0; padding-left: 20px; font-size: 0.9em;">
+        {% for a in orphaned_audio %}
+        <li><strong>{{ a.name }}</strong>
+            {% if a.file_url %}
+            &mdash; <a href="{{ a.file_url }}" target="_blank">listen to what callers hear</a>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
 <div class="card">
     {% if call_flows %}
     {% for flow in call_flows %}
@@ -140,7 +165,7 @@
                         <select name="greeting_audio_id" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
                             <option value="">-- No Greeting --</option>
                             {% for audio in audio_files if audio.file_type == 'greeting' %}
-                            <option value="{{ audio.id }}" {% if flow.greeting_audio_id == audio.id %}selected{% endif %}>{{ audio.name }}</option>
+                            <option value="{{ audio.id }}" {% if flow.greeting_audio_id == audio.id %}selected{% endif %}>{{ audio.name }}{% if audio.is_orphaned %} — ⚠ DELETED RECORDING, pick a replacement{% endif %}</option>
                             {% endfor %}
                         </select>
                     </div>
@@ -205,7 +230,7 @@
                             <select name="no_answer_audio_id" style="width: 100%; max-width: 400px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
                                 <option value="">-- Default TTS --</option>
                                 {% for audio in audio_files if audio.file_type in ('voicemail', 'greeting') %}
-                                <option value="{{ audio.id }}" {% if flow.no_answer_audio_id == audio.id %}selected{% endif %}>{{ audio.name }}</option>
+                                <option value="{{ audio.id }}" {% if flow.no_answer_audio_id == audio.id %}selected{% endif %}>{{ audio.name }}{% if audio.is_orphaned %} — ⚠ DELETED RECORDING, pick a replacement{% endif %}</option>
                                 {% endfor %}
                             </select>
                             <p style="margin: 5px 0 0 0; font-size: 0.8em; color: #6c757d;">Played before the voicemail beep during business hours.</p>
@@ -224,7 +249,7 @@
                                 <select name="extension_prompt_audio_id" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
                                     <option value="">-- Default TTS --</option>
                                     {% for audio in audio_files if audio.file_type == 'greeting' %}
-                                    <option value="{{ audio.id }}" {% if flow.extension_prompt_audio_id == audio.id %}selected{% endif %}>{{ audio.name }}</option>
+                                    <option value="{{ audio.id }}" {% if flow.extension_prompt_audio_id == audio.id %}selected{% endif %}>{{ audio.name }}{% if audio.is_orphaned %} — ⚠ DELETED RECORDING, pick a replacement{% endif %}</option>
                                     {% endfor %}
                                 </select>
                             </div>
@@ -233,7 +258,7 @@
                                 <select name="extension_invalid_audio_id" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
                                     <option value="">-- Default TTS --</option>
                                     {% for audio in audio_files if audio.file_type == 'greeting' %}
-                                    <option value="{{ audio.id }}" {% if flow.extension_invalid_audio_id == audio.id %}selected{% endif %}>{{ audio.name }}</option>
+                                    <option value="{{ audio.id }}" {% if flow.extension_invalid_audio_id == audio.id %}selected{% endif %}>{{ audio.name }}{% if audio.is_orphaned %} — ⚠ DELETED RECORDING, pick a replacement{% endif %}</option>
                                     {% endfor %}
                                 </select>
                             </div>
@@ -261,10 +286,10 @@
                             <select name="closed_audio_id" id="edit_audio_select_{{ flow.id }}" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
                                 <option value="">-- Default TTS message --</option>
                                 {% for audio in audio_files if audio.file_type == 'closed' %}
-                                <option value="{{ audio.id }}" data-type="closed" {% if flow.closed_audio_id == audio.id %}selected{% endif %}>{{ audio.name }}</option>
+                                <option value="{{ audio.id }}" data-type="closed" {% if flow.closed_audio_id == audio.id %}selected{% endif %}>{{ audio.name }}{% if audio.is_orphaned %} — ⚠ DELETED RECORDING, pick a replacement{% endif %}</option>
                                 {% endfor %}
                                 {% for audio in audio_files if audio.file_type == 'voicemail' %}
-                                <option value="{{ audio.id }}" data-type="voicemail" {% if flow.closed_audio_id == audio.id %}selected{% endif %}>{{ audio.name }}</option>
+                                <option value="{{ audio.id }}" data-type="voicemail" {% if flow.closed_audio_id == audio.id %}selected{% endif %}>{{ audio.name }}{% if audio.is_orphaned %} — ⚠ DELETED RECORDING, pick a replacement{% endif %}</option>
                                 {% endfor %}
                             </select>
                         </div>
@@ -289,7 +314,7 @@
                                 <select id="edit_parts_add_audio_{{ flow.id }}" style="padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 0.85em;">
                                     <option value="">-- Select audio --</option>
                                     {% for audio in audio_files if audio.file_type in ('closed', 'voicemail', 'greeting') %}
-                                    <option value="{{ audio.id }}">{{ audio.name }}</option>
+                                    <option value="{{ audio.id }}">{{ audio.name }}{% if audio.is_orphaned %} — ⚠ DELETED RECORDING, pick a replacement{% endif %}</option>
                                     {% endfor %}
                                 </select>
                                 <button type="button" class="btn btn-sm" onclick="addMessagePart('edit', {{ flow.id }})"
@@ -350,7 +375,7 @@
                 <select name="greeting_audio_id" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
                     <option value="">-- No Greeting --</option>
                     {% for audio in audio_files if audio.file_type == 'greeting' %}
-                    <option value="{{ audio.id }}">{{ audio.name }}</option>
+                    <option value="{{ audio.id }}">{{ audio.name }}{% if audio.is_orphaned %} — ⚠ DELETED RECORDING, pick a replacement{% endif %}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -426,7 +451,7 @@
                         <select name="extension_prompt_audio_id" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
                             <option value="">-- Default TTS --</option>
                             {% for audio in audio_files if audio.file_type == 'greeting' %}
-                            <option value="{{ audio.id }}">{{ audio.name }}</option>
+                            <option value="{{ audio.id }}">{{ audio.name }}{% if audio.is_orphaned %} — ⚠ DELETED RECORDING, pick a replacement{% endif %}</option>
                             {% endfor %}
                         </select>
                     </div>
@@ -435,7 +460,7 @@
                         <select name="extension_invalid_audio_id" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
                             <option value="">-- Default TTS --</option>
                             {% for audio in audio_files if audio.file_type == 'greeting' %}
-                            <option value="{{ audio.id }}">{{ audio.name }}</option>
+                            <option value="{{ audio.id }}">{{ audio.name }}{% if audio.is_orphaned %} — ⚠ DELETED RECORDING, pick a replacement{% endif %}</option>
                             {% endfor %}
                         </select>
                     </div>
@@ -463,10 +488,10 @@
                     <select name="closed_audio_id" id="create_audio_select" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
                         <option value="">-- Default TTS message --</option>
                         {% for audio in audio_files if audio.file_type == 'closed' %}
-                        <option value="{{ audio.id }}" data-type="closed">{{ audio.name }}</option>
+                        <option value="{{ audio.id }}" data-type="closed">{{ audio.name }}{% if audio.is_orphaned %} — ⚠ DELETED RECORDING, pick a replacement{% endif %}</option>
                         {% endfor %}
                         {% for audio in audio_files if audio.file_type == 'voicemail' %}
-                        <option value="{{ audio.id }}" data-type="voicemail">{{ audio.name }}</option>
+                        <option value="{{ audio.id }}" data-type="voicemail">{{ audio.name }}{% if audio.is_orphaned %} — ⚠ DELETED RECORDING, pick a replacement{% endif %}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -490,7 +515,7 @@
                         <select id="create_parts_add_audio" style="padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 0.85em;">
                             <option value="">-- Select audio --</option>
                             {% for audio in audio_files if audio.file_type in ('closed', 'voicemail', 'greeting') %}
-                            <option value="{{ audio.id }}">{{ audio.name }}</option>
+                            <option value="{{ audio.id }}">{{ audio.name }}{% if audio.is_orphaned %} — ⚠ DELETED RECORDING, pick a replacement{% endif %}</option>
                             {% endfor %}
                         </select>
                         <button type="button" class="btn btn-sm" onclick="addMessagePart('create', null)"

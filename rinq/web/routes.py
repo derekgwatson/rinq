@@ -1364,8 +1364,20 @@ def admin_call_flows():
     call_flows = db.get_call_flows()
     queues = db.get_queues()
     schedules = db.get_schedules()
-    audio_files = db.get_audio_files()
     voicemail_destinations = db.get_voicemail_destinations()
+
+    # The audio dropdowns list ACTIVE files. A flow pointing at a deleted one
+    # would therefore render as "None selected", and the next save of that
+    # flow — for any unrelated reason — would write NULL and silently drop
+    # the recording. So deleted-but-still-referenced files are added back to
+    # the list, flagged, which keeps the value selected and makes the problem
+    # visible instead of destructive. Nothing should reach this state now
+    # that delete refuses while a flow is using a file; this is the net.
+    audio_files = db.get_audio_files()
+    orphaned_audio = db.get_referenced_inactive_audio()
+    for a in orphaned_audio:
+        a['is_orphaned'] = True
+    audio_files = audio_files + orphaned_audio
 
     # Fetch ticket groups for voicemail destination dropdown
     from rinq.integrations import get_ticket_service
@@ -1373,6 +1385,7 @@ def admin_call_flows():
     ticket_groups = tickets.get_groups() if tickets else []
 
     return render_template('admin_call_flows.html',
+                         orphaned_audio=orphaned_audio,
                          call_flows=call_flows,
                          queues=queues,
                          schedules=schedules,
