@@ -76,6 +76,7 @@
 .delete-confirm { display: inline-flex; gap: 6px; align-items: center; font-size: 0.82em; }
 
 /* Loading spinner */
+.edit-note { font-size: 0.82em; color: #6c757d; margin: 6px 0 0 0; line-height: 1.45; }
 .tts-loading { display: none; align-items: center; gap: 8px; color: #666; font-size: 0.85em; }
 .tts-loading.active { display: flex; }
 .spinner { width: 16px; height: 16px; border: 2px solid #ddd; border-top-color: #1565c0; border-radius: 50%; animation: spin 0.8s linear infinite; }
@@ -91,6 +92,70 @@
 .edit-grid textarea { min-height: 50px; resize: vertical; }
 .edit-full { grid-column: 1 / -1; }
 {% endblock %}
+
+{# One definition, used by both the per-flow sub-rows and the single-file
+   types. These two blocks were hand-copied before, so "Spoken Text" appeared
+   twice and a change to one silently left the other behind. #}
+{% macro metadata_form(rec, file_type) %}
+    <form method="post" action="{{ url_for('web.update_audio', audio_id=rec.id) }}">
+        <div class="edit-grid">
+            <div><label>Name</label><input type="text" name="name" value="{{ rec.name }}" required></div>
+            <div><label>Description</label><input type="text" name="description" value="{{ rec.description or '' }}"></div>
+            {% if rec.can_re_record %}
+            <div class="edit-full">
+                <p class="edit-note">
+                    The words are part of the recording &mdash; change them with
+                    <strong>Re-record</strong>, which generates the new audio at the same time.
+                </p>
+            </div>
+            {% else %}
+            <div class="edit-full">
+                <label>What this audio says</label>
+                <textarea name="tts_text">{{ rec.tts_text or '' }}</textarea>
+                <p class="edit-note">A note for your reference &mdash; this file was uploaded, so
+                   editing this doesn't change what callers hear.</p>
+            </div>
+            {% endif %}
+        </div>
+        <input type="hidden" name="file_type" value="{{ file_type }}">
+        <div style="margin-top: 8px; display: flex; gap: 8px;">
+            <button type="submit" class="btn btn-small">Save</button>
+            <button type="button" class="btn btn-small btn-secondary" onclick="toggleEdit('{{ file_type }}', {{ rec.id }})">Cancel</button>
+        </div>
+    </form>
+{% endmacro %}
+
+{% macro re_record_panel(rec) %}
+    {# Re-record with the voice this recording was actually made with, not
+       whatever the tenant default happens to be now. Otherwise changing the
+       words to one greeting would quietly change who says it, and the four
+       office greetings would stop sounding like the same person. #}
+    <div class="tts-inline" data-provider="{{ rec.tts_provider }}" data-voice="{{ rec.tts_voice }}">
+        <label style="font-size: 0.85em; font-weight: 600;">What callers hear</label>
+        <textarea id="tts-text-rerec-{{ rec.id }}">{{ rec.tts_text or '' }}</textarea>
+        <div class="btn-row">
+            <select id="tts-style-rerec-{{ rec.id }}" style="padding: 6px 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 0.85em;">
+                <option value="0.3" {% if rec.style == '0.3' %}selected{% endif %}>Expressive</option>
+                <option value="0.5" {% if rec.style == '0.5' %}selected{% endif %}>Balanced</option>
+                <option value="0.7" {% if rec.style == '0.7' %}selected{% endif %}>Stable</option>
+            </select>
+            <button class="btn btn-small" onclick="previewTTS('rerec-{{ rec.id }}')">Preview</button>
+            <button class="btn btn-small btn-primary" onclick="saveReRecord({{ rec.id }})" id="save-btn-rerec-{{ rec.id }}" disabled>Save &amp; replace</button>
+            <button class="btn btn-small btn-secondary" onclick="toggleReRecord({{ rec.id }})">Cancel</button>
+            <div class="tts-loading" id="loading-rerec-{{ rec.id }}">
+                <div class="spinner"></div> Generating...
+            </div>
+        </div>
+        <div class="preview-player" id="preview-rerec-{{ rec.id }}" style="display: none;">
+            <audio id="audio-rerec-{{ rec.id }}" controls style="width: 100%; height: 32px;"></audio>
+            <p class="edit-note" style="margin: 6px 0 0 0;">
+                Listen before saving &mdash; this is exactly what gets stored.
+                Saving replaces the current recording, so nothing needs re-pointing.
+            </p>
+        </div>
+        <div id="error-rerec-{{ rec.id }}" style="color: #e74c3c; font-size: 0.85em; margin-top: 5px; display: none;"></div>
+    </div>
+{% endmacro %}
 
 {% block content %}
 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
@@ -189,8 +254,13 @@
                     </td>
                     <td>
                         {% if t.has_recording and not t.per_flow %}
-                            {% if tts_available and t.default_text %}
-                                <button class="btn-xs btn-xs-primary" onclick="expandAction('{{ t.value }}', 'generate')">Regenerate</button>
+                            {# "Regenerate" used to open the create-a-new-file form, which
+                               left the old recording behind and still pointing at the flow.
+                               It now re-records this file in place. #}
+                            {% if tts_available and t.recordings[0].can_re_record %}
+                                <button class="btn-xs btn-xs-primary" onclick="toggleReRecord({{ t.recordings[0].id }})">Re-record</button>
+                            {% elif tts_available and t.default_text %}
+                                <button class="btn-xs btn-xs-primary" onclick="expandAction('{{ t.value }}', 'generate')">Generate new</button>
                             {% endif %}
                             <button class="btn-xs" onclick="expandAction('{{ t.value }}', 'upload')">Replace</button>
                             <button class="btn-xs" onclick="toggleEdit('{{ t.value }}', {{ t.recordings[0].id }})">Edit</button>
@@ -224,27 +294,22 @@
                                     {% if rec.duration_seconds %}· {{ rec.duration_seconds }}s{% endif %}
                                 </td>
                                 <td style="text-align: right;">
+                                    {% if rec.can_re_record and tts_available %}
+                                    <button class="btn-xs btn-xs-primary" onclick="toggleReRecord({{ rec.id }})">Re-record</button>
+                                    {% endif %}
                                     <button class="btn-xs" onclick="toggleEdit('{{ t.value }}', {{ rec.id }})">Edit</button>
                                     <button class="btn-xs btn-xs-danger" onclick="confirmDelete(this, {{ rec.id }})">Delete</button>
                                 </td>
                             </tr>
                             <!-- Edit row for this recording -->
                             <tr class="edit-row" id="edit-{{ rec.id }}">
-                                <td colspan="4">
-                                    <form method="post" action="{{ url_for('web.update_audio', audio_id=rec.id) }}">
-                                        <div class="edit-grid">
-                                            <div><label>Name</label><input type="text" name="name" value="{{ rec.name }}" required></div>
-                                            <div><label>Description</label><input type="text" name="description" value="{{ rec.description or '' }}"></div>
-                                            <div class="edit-full"><label>Spoken Text</label><textarea name="tts_text">{{ rec.tts_text or '' }}</textarea></div>
-                                        </div>
-                                        <input type="hidden" name="file_type" value="{{ t.value }}">
-                                        <div style="margin-top: 8px; display: flex; gap: 8px;">
-                                            <button type="submit" class="btn btn-small">Save</button>
-                                            <button type="button" class="btn btn-small btn-secondary" onclick="toggleEdit('{{ t.value }}', {{ rec.id }})">Cancel</button>
-                                        </div>
-                                    </form>
-                                </td>
+                                <td colspan="4">{{ metadata_form(rec, t.value) }}</td>
                             </tr>
+                            {% if rec.can_re_record and tts_available %}
+                            <tr class="edit-row" id="rerecord-{{ rec.id }}">
+                                <td colspan="4">{{ re_record_panel(rec) }}</td>
+                            </tr>
+                            {% endif %}
                             {% endfor %}
                         </table>
                     </td>
@@ -254,21 +319,13 @@
                 <!-- Edit row for global types -->
                 {% if not t.per_flow and t.has_recording %}
                 <tr class="edit-row" id="edit-{{ t.recordings[0].id }}">
-                    <td colspan="4">
-                        <form method="post" action="{{ url_for('web.update_audio', audio_id=t.recordings[0].id) }}">
-                            <div class="edit-grid">
-                                <div><label>Name</label><input type="text" name="name" value="{{ t.recordings[0].name }}" required></div>
-                                <div><label>Description</label><input type="text" name="description" value="{{ t.recordings[0].description or '' }}"></div>
-                                <div class="edit-full"><label>Spoken Text</label><textarea name="tts_text">{{ t.recordings[0].tts_text or '' }}</textarea></div>
-                            </div>
-                            <input type="hidden" name="file_type" value="{{ t.value }}">
-                            <div style="margin-top: 8px; display: flex; gap: 8px;">
-                                <button type="submit" class="btn btn-small">Save</button>
-                                <button type="button" class="btn btn-small btn-secondary" onclick="toggleEdit('{{ t.value }}', {{ t.recordings[0].id }})">Cancel</button>
-                            </div>
-                        </form>
-                    </td>
+                    <td colspan="4">{{ metadata_form(t.recordings[0], t.value) }}</td>
                 </tr>
+                {% if t.recordings[0].can_re_record and tts_available %}
+                <tr class="edit-row" id="rerecord-{{ t.recordings[0].id }}">
+                    <td colspan="4">{{ re_record_panel(t.recordings[0]) }}</td>
+                </tr>
+                {% endif %}
                 {% endif %}
 
                 <!-- Action panel (Generate / Upload) -->
@@ -458,6 +515,10 @@ function toggleSubRows(typeValue) {
 function toggleEdit(typeValue, audioId) {
     const editRow = document.getElementById('edit-' + audioId);
     if (editRow) editRow.classList.toggle('active');
+    // Close the re-record panel for the same file — both hold a copy of the
+    // wording, and leaving both open means whichever you saved last wins.
+    const reRecordRow = document.getElementById('rerecord-' + audioId);
+    if (reRecordRow) reRecordRow.classList.remove('active');
 }
 
 // =========================================================================
@@ -489,6 +550,17 @@ function cancelDelete(btn, audioId) {
 // =========================================================================
 // TTS Preview & Save
 // =========================================================================
+// Which voice to generate with: the one carried on the panel if it has one
+// (re-recording an existing file), otherwise the tenant default (making a new
+// one). Both preview and save read this, so what you hear is what gets saved.
+function voiceFor(key) {
+    const el = document.getElementById('tts-text-' + key);
+    const panel = el ? el.closest('[data-provider]') : null;
+    const provider = panel && panel.dataset.provider ? panel.dataset.provider : defaultProvider;
+    const voice = panel && panel.dataset.voice ? panel.dataset.voice : defaultVoice;
+    return { provider, voice };
+}
+
 async function previewTTS(typeValue) {
     const textarea = document.getElementById('tts-text-' + typeValue);
     const text = textarea ? textarea.value.trim() : '';
@@ -510,14 +582,15 @@ async function previewTTS(typeValue) {
     delete previewedAudio[typeValue];
 
     try {
+        const { provider, voice } = voiceFor(typeValue);
         const formData = new FormData();
-        formData.append('provider', defaultProvider);
+        formData.append('provider', provider);
         formData.append('text', text);
-        formData.append('voice', defaultVoice);
+        formData.append('voice', voice);
 
         const styleEl = document.getElementById('tts-style-' + typeValue);
         const style = styleEl ? styleEl.value : '0.5';
-        if (defaultProvider === 'elevenlabs') {
+        if (provider === 'elevenlabs') {
             formData.append('stability', style);
         } else {
             const speed = style === '0.3' ? '0.9' : style === '0.7' ? '1.1' : '1.0';
@@ -610,6 +683,79 @@ async function saveTTS(typeValue) {
         }
     } catch (err) {
         showError(typeValue, 'Failed to save: ' + err.message);
+    }
+}
+
+// =========================================================================
+// Re-record an existing file in place
+//
+// Preview reuses previewTTS()/showError() untouched: the panel's elements
+// follow the same id convention with the key "rerec-<id>", so there is one
+// implementation of "turn text into audio", not two that can drift apart.
+// Only saving differs — it replaces a record instead of creating one.
+// =========================================================================
+function toggleReRecord(audioId) {
+    const row = document.getElementById('rerecord-' + audioId);
+    if (!row) return;
+    // Never leave both panels open on the same file — they hold different
+    // copies of the wording, and whichever you saved last would win.
+    const editRow = document.getElementById('edit-' + audioId);
+    if (editRow) editRow.classList.remove('active');
+    row.classList.toggle('active');
+    if (row.classList.contains('active')) {
+        const textarea = document.getElementById('tts-text-rerec-' + audioId);
+        if (textarea) textarea.focus();
+    }
+}
+
+async function saveReRecord(audioId) {
+    const key = 'rerec-' + audioId;
+    const blob = previewedAudio[key];
+    if (!blob) {
+        showError(key, 'Press Preview and listen to it first.');
+        return;
+    }
+
+    const text = document.getElementById('tts-text-' + key).value.trim();
+    if (!text) {
+        showError(key, "The words can't be empty — that would leave a silent greeting.");
+        return;
+    }
+    const styleEl = document.getElementById('tts-style-' + key);
+    const style = styleEl ? styleEl.value : '0.5';
+
+    const saveBtn = document.getElementById('save-btn-' + key);
+    if (saveBtn) saveBtn.disabled = true;
+
+    const { provider, voice } = voiceFor(key);
+    const formData = new FormData();
+    formData.append('audio_data', blob, 'audio.mp3');
+    formData.append('provider', provider);
+    formData.append('voice', voice);
+    formData.append('text', text);
+    if (provider === 'elevenlabs') {
+        formData.append('stability', style);
+    } else {
+        formData.append('speed', style === '0.3' ? '0.9' : style === '0.7' ? '1.1' : '1.0');
+    }
+
+    try {
+        const response = await fetch('/admin/audio/' + audioId + '/re-record', {
+            method: 'POST',
+            credentials: 'same-origin',
+            body: formData
+        });
+        if (response.redirected) {
+            window.location.href = response.url;
+        } else if (response.ok) {
+            window.location.reload();
+        } else {
+            showError(key, 'Failed to save (' + response.status + '). Nothing was changed.');
+            if (saveBtn) saveBtn.disabled = false;
+        }
+    } catch (err) {
+        showError(key, 'Failed to save: ' + err.message + '. Nothing was changed.');
+        if (saveBtn) saveBtn.disabled = false;
     }
 }
 

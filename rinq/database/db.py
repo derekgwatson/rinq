@@ -1165,9 +1165,56 @@ class Database(StatsMixin, CallLogMixin):
     _AUDIO_FILE_UPDATE_COLS = frozenset({'name', 'description', 'file_type', 'tts_text'})
 
     def update_audio_file(self, audio_id: int, data: dict, updated_by: str) -> None:
-        """Update an audio file's metadata. Only columns present in `data` are written."""
+        """Update an audio file's METADATA. Only columns present in `data` are written.
+
+        Deliberately cannot touch file_url/file_path — changing what a caller
+        actually hears goes through replace_audio_content(), which writes the
+        new sound and the words that produced it together. Splitting them is
+        how the spoken text came to describe audio that said something else.
+        """
         self._update_row('audio_files', 'id', audio_id, data,
                          self._AUDIO_FILE_UPDATE_COLS, updated_by)
+
+    def replace_audio_content(self, audio_id: int, file_url: str, file_path: str,
+                              tts_text: str, tts_provider: str, tts_voice: str,
+                              tts_settings: str, description: str,
+                              updated_by: str) -> None:
+        """Point an existing audio record at newly generated sound.
+
+        Re-recording keeps the SAME record, so every call flow, queue and
+        phone number already pointing at this greeting keeps working with
+        nothing to re-wire — that re-wiring, and the orphan record left behind
+        each time, is what made changing a greeting a seven-step job.
+
+        The sound and the text that generated it are written in one statement,
+        so a record can never claim to say something it does not.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            conn.execute("""
+                UPDATE audio_files
+                   SET file_url = ?, file_path = ?, tts_text = ?,
+                       tts_provider = ?, tts_voice = ?, tts_settings = ?,
+                       description = ?, updated_at = ?, updated_by = ?
+                 WHERE id = ?
+            """, (file_url, file_path, tts_text, tts_provider, tts_voice,
+                  tts_settings, description, now, updated_by, audio_id))
+            conn.commit()
+
+    def count_audio_files_at_path(self, file_path: str) -> int:
+        """How many audio records point at this file on disk.
+
+        Asked before deleting a superseded file: a path another record still
+        uses must not be removed, or that greeting goes silent.
+        """
+        if not file_path:
+            return 0
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM audio_files WHERE file_path = ?",
+                (file_path,)
+            ).fetchone()
+            return row['n'] if row else 0
 
     def deactivate_audio_file(self, audio_id: int) -> None:
         """Soft delete an audio file by setting is_active = 0."""

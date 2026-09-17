@@ -31,6 +31,27 @@ def allowed_audio_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_AUDIO_EXTENSIONS
 
 
+def _remove_superseded_audio(db, previous_path, new_path):
+    """Delete the file a re-record replaced, when it is safe to.
+
+    Never deletes a path another audio record still points at — that would
+    take a different greeting silent — and never fails the re-record, which
+    has already succeeded by the time this runs.
+    """
+    if not previous_path or str(previous_path) == str(new_path):
+        return
+    try:
+        if db.count_audio_files_at_path(previous_path) > 0:
+            logger.info(f"Keeping {previous_path}: still referenced by another audio record")
+            return
+        old = Path(previous_path)
+        if old.is_file():
+            old.unlink()
+            logger.info(f"Removed superseded audio file {previous_path}")
+    except Exception as e:
+        logger.warning(f"Could not remove superseded audio {previous_path}: {e}")
+
+
 def register(bp):
     """Register audio/TTS routes on the given blueprint."""
 
@@ -172,6 +193,121 @@ def register(bp):
             flash(f"Updated audio file '{name}'", "success")
         except Exception as e:
             flash_error(f"Failed to update audio: {e}", e)
+
+        return redirect(url_for('web.admin_audio'))
+
+    @bp.route('/admin/audio/<int:audio_id>/re-record', methods=['POST'])
+    @admin_required
+    def re_record_audio(audio_id):
+        """Replace an existing recording's sound, in place.
+
+        Changing a greeting used to mean generating a brand new file, then
+        going to Call Flows to re-point at it, and leaving the old one in the
+        list forever — with the edit form's "Spoken Text" box looking like it
+        did the job while only ever changing a caption.
+
+        This keeps the SAME record, so everything already pointing at this
+        greeting keeps working, and it writes the new words and the new sound
+        together so they cannot disagree.
+        """
+        from werkzeug.utils import secure_filename
+        from rinq.services.tts_service import get_tts_service
+
+        text = request.form.get('text', '').strip()
+        provider = request.form.get('provider', 'elevenlabs')
+        voice = request.form.get('voice', '')
+
+        db = get_db()
+        audio = db.get_audio_file(audio_id)
+        if not audio:
+            flash("Audio file not found", "error")
+            return redirect(url_for('web.admin_audio'))
+
+        if not text:
+            flash_error("The spoken text can't be empty — that would leave a silent greeting.")
+            return redirect(url_for('web.admin_audio'))
+
+        # The browser sends the clip it just played, so what gets saved is
+        # exactly what was approved — never a second generation that could
+        # come back subtly different.
+        audio_file = request.files.get('audio_data')
+        if not audio_file:
+            flash_error("No audio to save — press Preview and listen to it first.")
+            return redirect(url_for('web.admin_audio'))
+
+        user = get_current_user()
+        tts = get_tts_service()
+
+        try:
+            audio_bytes = audio_file.read()
+            if not audio_bytes:
+                flash_error("The generated audio was empty — nothing was changed.")
+                return redirect(url_for('web.admin_audio'))
+
+            if provider == 'elevenlabs':
+                voice_name = tts.get_elevenlabs_voices().get(voice, {}).get('name', voice)
+                provider_info = f"ElevenLabs {voice_name}"
+            elif provider == 'cartesia':
+                voice_name = tts.get_cartesia_voices().get(voice, {}).get('name', voice)
+                provider_info = f"Cartesia {voice_name}"
+            else:
+                provider_info = f"Google Cloud {voice}"
+
+            tts_settings = {}
+            if provider == 'elevenlabs':
+                tts_settings['stability'] = float(request.form.get('stability', 0.5))
+            else:
+                tts_settings['speed'] = float(request.form.get('speed', 1.0))
+
+            # A NEW filename every time, deliberately. Overwriting the old one
+            # would leave Twilio and every browser serving whatever they had
+            # cached at the old URL, so the greeting would keep saying the old
+            # thing with everything on screen insisting it had changed.
+            AUDIO_FOLDER.mkdir(exist_ok=True)
+            safe_name = secure_filename((audio.get('name') or 'audio').replace(' ', '_').lower())
+            filename = f"{safe_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp3"
+            file_path = AUDIO_FOLDER / filename
+
+            with open(file_path, 'wb') as f:
+                f.write(audio_bytes)
+
+            previous_path = audio.get('file_path')
+
+            # Strip any old "[TTS: ...]" tag so re-recording repeatedly does
+            # not accumulate one per generation.
+            base_description = (audio.get('description') or '')
+            if '[TTS:' in base_description:
+                base_description = base_description.split('[TTS:')[0].strip()
+            description = (f"{base_description} [TTS: {provider_info}]".strip()
+                           if base_description else f"TTS: {provider_info}")
+
+            db.replace_audio_content(
+                audio_id=audio_id,
+                file_url=f"/audio/{filename}",
+                file_path=str(file_path),
+                tts_text=text,
+                tts_provider=provider,
+                tts_voice=voice,
+                tts_settings=json.dumps(tts_settings),
+                description=description,
+                updated_by=_audit_tag(user),
+            )
+
+            db.log_activity(
+                action="re_record_audio",
+                target=audio.get('name') or str(audio_id),
+                details=f"Re-recorded audio ID {audio_id} ({provider_info})",
+                performed_by=_audit_tag(user),
+            )
+
+            # Only now that the record points elsewhere, clean up the file it
+            # used to use — and only if nothing else still points at it.
+            _remove_superseded_audio(db, previous_path, file_path)
+
+            flash(f"Re-recorded '{audio.get('name')}'. Callers hear the new version from the next call.",
+                  "success")
+        except Exception as e:
+            flash_error(f"Failed to re-record audio: {e}", e)
 
         return redirect(url_for('web.admin_audio'))
 
