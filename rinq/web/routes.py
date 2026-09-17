@@ -1247,6 +1247,37 @@ def admin_queues():
                          current_user=user)
 
 
+def _tts_style_of(rec) -> str:
+    """The style dropdown value that matches how this audio was generated.
+
+    ElevenLabs stores a stability figure, the other providers a speed; both
+    map onto the same three-way Expressive / Balanced / Stable choice. An
+    unreadable or absent setting falls back to Balanced rather than guessing.
+    """
+    import json as _json
+    raw = rec.get('tts_settings')
+    if not raw:
+        return '0.5'
+    try:
+        settings = _json.loads(raw)
+    except (TypeError, ValueError):
+        return '0.5'
+    if 'stability' in settings:
+        try:
+            stability = float(settings['stability'])
+        except (TypeError, ValueError):
+            return '0.5'
+        # Snap to the nearest offered option — the dropdown only has three.
+        return min(('0.3', '0.5', '0.7'), key=lambda v: abs(float(v) - stability))
+    if 'speed' in settings:
+        try:
+            speed = float(settings['speed'])
+        except (TypeError, ValueError):
+            return '0.5'
+        return '0.3' if speed < 0.95 else '0.7' if speed > 1.05 else '0.5'
+    return '0.5'
+
+
 @web_bp.route('/admin/audio')
 @admin_required
 def admin_audio():
@@ -1295,6 +1326,11 @@ def admin_audio():
         t['has_recording'] = bool(existing)
         # Include full audio record data for all types
         t['recordings'] = [dict(a) for a in existing]
+        # Re-recording reopens with the settings that produced the current
+        # audio, so changing the words doesn't silently change the voice.
+        for rec in t['recordings']:
+            rec['style'] = _tts_style_of(rec)
+            rec['can_re_record'] = bool(rec.get('tts_provider'))
         if t.get('per_flow'):
             t['existing_text'] = t['default_text']
         else:
