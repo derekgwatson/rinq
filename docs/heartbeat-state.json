@@ -10,14 +10,14 @@
     "local_origin": "git@github-work:derekgwatson/rinq.git",
     "server_origin": "git@github.com:derekgwatson/rinq.git",
     "recent_commits": [
+      "PR #14 fix: refuse to delete a recording a call flow is still using (audio-delete-guard)",
       "2bc7e2b feat: re-record a greeting in place, instead of a seven-step rebuild (PR #13, c7558d1)",
       "c7839d6 fix: put the caller’s name on desk-phone and SIP softphone calls (PR #12, 230c9ec)",
       "f257561 feat: record all calls server-side, on every device (PR #11, 4d8419d)",
       "ee55785 chore: remove the dead Admins card from /admin — merge of branch chore/remove-dead-admins-card (0ba9915)",
       "61dca03 feat: row-level CSV export for offline analysis — merge of branch feat/data-export (2b89bd7)",
       "6a258af fix: stop picking outbound caller ID by alphabetical accident (#10) — merge of branch fix/caller-id-no-chance-fallback (efcaa56)",
-      "3f16ef4 fix: label queue answer with the ringing caller, not the clicked row (#1) — squash of branch fix/queue-answer-caller-identity (3d195dc)",
-      "ecae944 docs: session log 2026-07-08 (per-queue voicemail-on-no-answer) + heartbeat/pending updates"
+      "3f16ef4 fix: label queue answer with the ringing caller, not the clicked row (#1) — squash of branch fix/queue-answer-caller-identity (3d195dc)"
     ],
     "related_bot_team_commit": "c36bf79 fix(clara): rank phone search by who actually owns the number (deployed 2026-06-22 to do-work)"
   },
@@ -59,8 +59,6 @@
     "notes": "2026-09-16: still no automated tests. The logic deciding recording behaviour was written as pure functions and exercised standalone (leg resolution, the atomic claim, claim release on Twilio failure, an unreadable flag reading as off, the duplicate guard, call-type resolution, TTS style prefill, the audio cleanup guard), plus a render test asserting the element ids previewTTS() needs, with a mutation check. Live: 16 calls recorded in 11 minutes, no errors. Manual test focus for 2026-04-22 changes: outbound call to a busy/non-answering number should show prominent amber outcome banner above dialpad that persists after hangup; next Watson voicemail delivery should appear in the recordings group inbox sent from mabel.bot@watsonblinds.com.au."
   },
   "pending_operations": [
-    "2026-09-16: Batemans Bay greeting's TEXT was edited without re-recording, so its stored words promise a recording notice its audio does not give. Fix with Admin > Audio > Re-record.",
-    "2026-09-16: Wagga, Shoalhaven and Canberra greetings still need the recording notice appended ('Your call may be recorded for training and quality purposes.' - 'may be', so it stays true when a recording is stopped mid-call or the flag is off).",
     "2026-09-16: OUTBOUND calls have no recording announcement at all - 5,699 of 8,444 answered calls since 1 Aug. Open decision for Derek (pre-connect line vs staff saying it), not a code gap.",
     "2026-09-16: WATCH for 'Could not start tenant-wide recording' in the rinq journal. It should not appear; if it does, recording is silently failing for the calls it names.",
     "2026-08-28: The CSV export has NEVER run against watson's real data — no tenant DB exists locally, so it was validated only against a temp DB with fabricated rows. Watch the first live export, especially agent_email: desk-phone legs appear as `sip:` identities rather than emails. Correct for the scoping filter, but inconsistent in a group-by. get_call_log_by_agent already resolves those to emails and the same mapping could be lifted into the export.",
@@ -93,7 +91,8 @@
     "2026-04-16: Add ELEVENLABS_API_KEY to /var/www/rinq/.env if ElevenLabs TTS needed"
   ],
   "known_issues": [
-    "Batemans Bay greeting audio does not match its stored text (edited 2026-09-16, never re-recorded). More generally, audio_files.tts_text is NOT evidence of what callers hear for anything edited before 2026-09-17 - the old edit form wrote only a caption.",
+    "Deleting an audio file only marks it inactive and the runtime still plays it; a flow pointing at a deleted file also rendered as 'None selected', so the next save would null it. Guarded 2026-09-17 (PR #14) - delete refuses while an active call flow uses the file, and orphans surface in the dropdown. audio_files.tts_text remains NOT evidence of what callers hear for anything edited before 2026-09-17.",
+    "All four greetings verified 2026-09-17 to carry the recording notice, checked via what each call flow RESOLVES to rather than the audio list. No dangling audio references on any active flow.",
     "Outbound calls carry no recording announcement (two-thirds of answered calls). Inbound is covered by the greetings once they are re-recorded.",
     "Recording does not backfill - 'live' means from the moment the flag went on (2026-09-16). Earlier conversations do not exist and cannot be recovered.",
     "A route decorator silently attaches to whatever function follows it; inserting a helper between @web_bp.route('/admin/audio') and admin_audio hijacked the route. Caught pre-ship; an ast check now asserts no route decorates a private function.",
