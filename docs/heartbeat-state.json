@@ -1,55 +1,42 @@
 {
   "_description": "System health snapshot for Rinq. Updated at end of sessions.",
-  "_last_updated": "2026-08-28",
-  "_last_updated_by": "claude-code (inline; memory-updater agent type unavailable this session)",
-  "_notes": "2026-08-28: Two things shipped. (1) Row-level CSV export (61dca03) — /reports is pre-aggregated so every new question meant a new report view; now /api/export/calls.csv (login_required), /api/export/queue-calls.csv (manager_required) and /api/export/data-dictionary.md, with buttons on /reports carrying the selected period. Two files because call_log has NO wait metric — that lives in queued_calls. Scoping was inline in the /reports route; extracted to resolve_visible_emails() in reporting_service.py and shared, and an empty team list now matches NOTHING rather than falling through to no filter (same class of mistake as the 2026-07-30 caller-ID [0] fallback). Customer PII off by default, admin-only behind ?include_customer=1; every row instead carries customer_ref, a per-tenant salted hash of the caller's LAST 9 DIGITS (first cut hashed all digits and split +61412345678 from 0412345678 into two people — caught in test). queue-calls.csv is manager-only AND deliberately unscoped by agent, because abandoned calls have no answered_by and an agent filter would report a zero abandon rate rather than an honest one. The data dictionary is load-bearing, not decoration: transfer rows inflating call volume (gotcha 29), UTC vs Sydney, null talk_seconds. NEVER RUN AGAINST WATSON'S REAL DATA — no tenant DB locally, verified only against a temp DB with fabricated rows. (2) Deleted the dead Admins card on /admin (ee55785). Rinq had TWO role stores and only one counted: the `permissions` table (tenant DB) was written by the card and read by exactly one line — the one drawing that same card. db.get_permission(email) had zero callers anywhere. tenant_users.role (master DB) is what get_current_user() actually reads. 95698c8 (2026-04-08) added `permissions` as the first local replacement for Watson's Grant service; 4e125e9 (2026-04-16) superseded it with tenant_users.role and /admin/users, but the card was never removed and read as authoritative. Clare sat in it looking like an admin while her real role was 'user', which is why /reports showed her only Carol — her one reports_to reportee. Diagnosed by querying production directly rather than inferring from code; all three tables matched exactly. Card + its two routes deleted (160 lines); the permissions table and LocalPermissionService left as the PermissionService interface impl — DO NOT wire them up.",
+  "_last_updated": "2026-09-17",
+  "_last_updated_by": "claude-code (main assistant; memory-updater agent had no write tools)",
+  "_notes": "2026-09-16/17: three PRs merged and deployed. Recording was started by JavaScript in phone.html, so it only ever ran for browser users; everyone on a SIP device (desk phone or softphone app - Rinq cannot tell them apart) was never recorded, while their own 'record my calls' setting read ON and was consulted on no other path. Fenech/Hill/Savage: ~680 answered calls, 0 recordings. PR #11 moves recording server-side onto the Twilio webhooks that fire however a call was answered, recording the CUSTOMER's leg; gated by per-tenant bot_settings flag record_all_calls, shipped OFF and switched ON by Derek 2026-09-16 05:17 UTC. PR #12 resolves a SIP identity to a staff email in voice_outbound, so desk-phone calls stop being filed under nobody. PR #13 adds Re-record, replacing a greeting's audio in place instead of a seven-step rebuild. Still owed: Batemans Bay greeting re-record (its text was edited 2026-09-16 and the audio never was), the notice on three other greetings, and a decision on announcing recording on OUTBOUND calls (5,699 of 8,444 answered since 1 Aug).",
   "repo": {
     "branch": "main",
     "remote": "derekgwatson/rinq",
-    "status": "clean (CSV export merged 61dca03; dead Admins card removed ee55785; both deployed and live-verified)",
+    "status": "clean; three PRs merged and deployed 2026-09-16/17 (server-side recording, SIP outbound attribution, re-record audio)",
     "local_origin": "git@github-work:derekgwatson/rinq.git",
     "server_origin": "git@github.com:derekgwatson/rinq.git",
     "recent_commits": [
+      "2bc7e2b feat: re-record a greeting in place, instead of a seven-step rebuild (PR #13, c7558d1)",
+      "c7839d6 fix: put the caller’s name on desk-phone and SIP softphone calls (PR #12, 230c9ec)",
+      "f257561 feat: record all calls server-side, on every device (PR #11, 4d8419d)",
       "ee55785 chore: remove the dead Admins card from /admin — merge of branch chore/remove-dead-admins-card (0ba9915)",
       "61dca03 feat: row-level CSV export for offline analysis — merge of branch feat/data-export (2b89bd7)",
       "6a258af fix: stop picking outbound caller ID by alphabetical accident (#10) — merge of branch fix/caller-id-no-chance-fallback (efcaa56)",
       "3f16ef4 fix: label queue answer with the ringing caller, not the clicked row (#1) — squash of branch fix/queue-answer-caller-identity (3d195dc)",
-      "ecae944 docs: session log 2026-07-08 (per-queue voicemail-on-no-answer) + heartbeat/pending updates",
-      "b0d4fab feat: per-queue 'voicemail if no one answers' (no holding) — migration 078",
-      "29dd54f fix: exempt hold-music/ringback media TwiML from Twilio signature validation",
-      "9dd9f89 docs: session log 2026-07-06 (queue agent-answer regression + F821 CI gate)",
-      "1a1f4cc ci: gate deploy on ruff F821 (undefined names) check",
-      "cb47da1 fix: restore cancel_others def mangled in Phase 2b sweep (queue agent-answer 500)",
-      "9f932f4 docs: session log 2026-07-04 (quality review fixes shipped)",
-      "5922337 fix: Phase 2b/3 - working thread-context capture; error-logging sweep",
-      "fd39ab0 fix: Phase 2a - kill the default-clobber updater pattern; strict twilio_list at transfer decision points",
-      "a30e1cf fix: Phase 1 security and tenant-isolation fixes",
-      "ba8f1ef fix: Phase 0 quality-review bugs (7 fixes)",
-      "7bdfb2f feat: Zelda ticket provider (RINQ_TICKET_PROVIDER=zelda)",
-      "047f190 feat: re-ring free agents while a caller waits in queue (flagged)",
-      "94b1333 feat: auto-reconnect dropped softphone legs in warm-transfer consults (flagged)",
-      "51e8ce3 docs: session log 2026-06-29 (queue ring-timeout UI + silent-reset fix)",
-      "38f816b feat: let queue managers set ring timeout from the /queues page (no admin needed)",
-      "9295f70 feat: make queue ring-timeout editable in admin UI (fixes silent reset to 30s)"
+      "ecae944 docs: session log 2026-07-08 (per-queue voicemail-on-no-answer) + heartbeat/pending updates"
     ],
     "related_bot_team_commit": "c36bf79 fix(clara): rank phone search by who actually owns the number (deployed 2026-06-22 to do-work)"
   },
   "migrations": {
-    "latest": 79,
-    "notes": "079 sip_ring_reachability. NOTE: the 2026-08-28 CSV export added NO migration — it reads existing call_log and queued_calls columns only. 078 queue.voicemail_on_no_answer (bounce ring-out callers to VM instead of holding; on for desk-phone queues). 077 leg_reconnect (auto-reconnect dropped consult legs, flagged). 076 adds alternate_caller_id (per-user *99 swap). 075 vendor-neutral ticket columns. No new migrations from the 2026-07-04 quality-review fixes (per-tenant settings went into bot_settings)."
+    "latest": 80,
+    "notes": "080 recording_starts - one atomic claim per recorded call leg (INSERT OR IGNORE on a PRIMARY KEY), so 3 gunicorn workers and several webhooks cannot each start their own recording of the same conversation. Inert until bot_settings.record_all_calls is on. 079 sip_ring_reachability. NOTE: the 2026-08-28 CSV export added NO migration — it reads existing call_log and queued_calls columns only. 078 queue.voicemail_on_no_answer (bounce ring-out callers to VM instead of holding; on for desk-phone queues). 077 leg_reconnect (auto-reconnect dropped consult legs, flagged). 076 adds alternate_caller_id (per-user *99 swap). 075 vendor-neutral ticket columns. No new migrations from the 2026-07-04 quality-review fixes (per-tenant settings went into bot_settings)."
   },
   "tenants": {
     "watson": {
       "domain": "tina.watsonblinds.com.au",
       "twilio_account": "master (ACe458...)",
       "phone_numbers": 8,
-      "notes": "Production. Address book synced from Peter daily 2am."
+      "notes": "Production. Address book synced from Peter daily 2am. Server-side recording live from 2026-09-16 (watson flag ON)."
     },
     "derek": {
       "domain": "rinq.cc",
       "twilio_account": "subaccount (AC9a44...)",
       "phone_numbers": 1,
-      "notes": "Personal/test. Address book sync no-ops (no Peter)."
+      "notes": "Personal/test. Address book sync no-ops (no Peter). Server-side recording live from 2026-09-16 (watson flag ON)."
     }
   },
   "integrations": {
@@ -69,9 +56,13 @@
   "tests": {
     "automated": "none",
     "manual_runsheet": "/admin/test-runsheet",
-    "notes": "Manual test focus for 2026-04-22 changes: outbound call to a busy/non-answering number should show prominent amber outcome banner above dialpad that persists after hangup; next Watson voicemail delivery should appear in the recordings group inbox sent from mabel.bot@watsonblinds.com.au."
+    "notes": "2026-09-16: still no automated tests. The logic deciding recording behaviour was written as pure functions and exercised standalone (leg resolution, the atomic claim, claim release on Twilio failure, an unreadable flag reading as off, the duplicate guard, call-type resolution, TTS style prefill, the audio cleanup guard), plus a render test asserting the element ids previewTTS() needs, with a mutation check. Live: 16 calls recorded in 11 minutes, no errors. Manual test focus for 2026-04-22 changes: outbound call to a busy/non-answering number should show prominent amber outcome banner above dialpad that persists after hangup; next Watson voicemail delivery should appear in the recordings group inbox sent from mabel.bot@watsonblinds.com.au."
   },
   "pending_operations": [
+    "2026-09-16: Batemans Bay greeting's TEXT was edited without re-recording, so its stored words promise a recording notice its audio does not give. Fix with Admin > Audio > Re-record.",
+    "2026-09-16: Wagga, Shoalhaven and Canberra greetings still need the recording notice appended ('Your call may be recorded for training and quality purposes.' - 'may be', so it stays true when a recording is stopped mid-call or the flag is off).",
+    "2026-09-16: OUTBOUND calls have no recording announcement at all - 5,699 of 8,444 answered calls since 1 Aug. Open decision for Derek (pre-connect line vs staff saying it), not a code gap.",
+    "2026-09-16: WATCH for 'Could not start tenant-wide recording' in the rinq journal. It should not appear; if it does, recording is silently failing for the calls it names.",
     "2026-08-28: The CSV export has NEVER run against watson's real data — no tenant DB exists locally, so it was validated only against a temp DB with fabricated rows. Watch the first live export, especially agent_email: desk-phone legs appear as `sip:` identities rather than emails. Correct for the scoping filter, but inconsistent in a group-by. get_call_log_by_agent already resolves those to emails and the same mapping could be lifted into the export.",
     "2026-08-28: Confirm Clare (now genuinely admin in tenant_users.role) sees ALL STAFF on /reports and in both CSVs, before she builds analysis on a file that was scoped down to just Carol.",
     "2026-08-28: /tmp/rinq-pre-permissions-cleanup.db on do-personal is a 93MB pre-delete copy of watson's tenant DB. It clears on reboot; delete sooner if a full copy of the call data sitting in /tmp is unwelcome.",
@@ -102,6 +93,10 @@
     "2026-04-16: Add ELEVENLABS_API_KEY to /var/www/rinq/.env if ElevenLabs TTS needed"
   ],
   "known_issues": [
+    "Batemans Bay greeting audio does not match its stored text (edited 2026-09-16, never re-recorded). More generally, audio_files.tts_text is NOT evidence of what callers hear for anything edited before 2026-09-17 - the old edit form wrote only a caption.",
+    "Outbound calls carry no recording announcement (two-thirds of answered calls). Inbound is covered by the greetings once they are re-recorded.",
+    "Recording does not backfill - 'live' means from the moment the flag went on (2026-09-16). Earlier conversations do not exist and cannot be recovered.",
+    "A route decorator silently attaches to whatever function follows it; inserting a helper between @web_bp.route('/admin/audio') and admin_audio hijacked the route. Caught pre-ship; an ast check now asserts no route decorates a private function.",
     "The `permissions` table (tenant DB, migration 066) and LocalPermissionService still exist but grant NOTHING — they are the PermissionService interface implementation and nothing in auth reads them. tenant_users.role in the MASTER db is the only role truth, set only via /admin/users (and defaulted to 'user' at first login in auth/oauth.py:166). The /admin UI that wrote to the dead table was deleted 2026-08-28 and the table is now empty. Do not wire it back up.",
     "Priority 3 (section-based caller ID) is unreachable dead code on watson: phone_numbers.section is blank on all 8 numbers AND LocalStaffDirectory._ext_to_staff() returns no 'section' key (get_sections() returns []). Left in place deliberately — the provider is pluggable and another tenant could supply sections — but it can never fire today. Investigated and deliberately NOT revived 2026-07-30; see that session log before re-attempting.",
     "Twilio 'busy' on an agent Client leg is treated as a human decline (api/routes.py ring-status handler ~line 2456, `rejected = call_status == 'busy'`) — a leg already ringing for another call returns busy, so a second caller entering a thin queue is ejected to voicemail in ~3s. Live on Batemans Bay (1 active member), Wagga (2), Shoalhaven (2); masked on Canberra (6). GitHub issue #2, observed + confirmed in logs 2026-07-20",
