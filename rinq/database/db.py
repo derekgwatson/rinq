@@ -993,6 +993,31 @@ class Database(StatsMixin, CallLogMixin):
             """, (cutoff,)).fetchall()
             return [dict(row) for row in rows]
 
+    def get_untranscribed_voicemails(self, since: str) -> list[dict]:
+        """Voicemails created on/after `since` that have a ticket but no text.
+
+        Used by the backfill script when transcription was unavailable at the
+        time the voicemail arrived (e.g. the Whisper account out of credit,
+        2026-09-10). Rows already holding a transcription are excluded, so a
+        partial backfill can be re-run safely.
+
+        Args:
+            since: ISO date or timestamp, compared against created_at
+
+        Returns:
+            List of recording dicts, oldest first
+        """
+        with self._get_conn() as conn:
+            rows = conn.execute("""
+                SELECT * FROM recording_log
+                WHERE call_type = 'voicemail'
+                  AND (transcription IS NULL OR trim(transcription) = '')
+                  AND ticket_id IS NOT NULL
+                  AND created_at >= ?
+                ORDER BY created_at ASC
+            """, (since,)).fetchall()
+            return [dict(row) for row in rows]
+
     def clear_recording_local_file(self, recording_sid: str) -> None:
         """Clear the local file path after purging a recording's cache."""
         with self._get_conn() as conn:

@@ -29,7 +29,7 @@ from rinq.services.twilio_service import get_twilio_service, twilio_list, start_
 from rinq.services.auth import login_required, get_current_user
 from rinq.database.db import get_db, _parse_dt
 from rinq.config import config
-from rinq.tenant.context import get_twilio_config
+from rinq.tenant.context import get_current_tenant, get_twilio_config
 
 logger = logging.getLogger(__name__)
 
@@ -4063,19 +4063,34 @@ def voicemail_handler():
 
                 # Transcribe via Whisper if configured. The Twilio transcribe
                 # callback path is skipped at TwiML emit time when Whisper is
-                # on, so this is the only transcription source in that case.
+                # on, so this is the only transcription source in that case —
+                # a failure here means this voicemail has no transcription at
+                # all, ever, so it gets named on the ticket and raised to the
+                # admins rather than passed off as "unavailable".
+                transcription_problem = None
                 if not transcription_text and audio_bytes:
                     from rinq.integrations.openai.whisper import get_whisper_service
+                    from rinq.services import transcription_alerts
                     whisper = get_whisper_service()
                     if whisper.is_configured:
-                        whisper_text = whisper.transcribe(
+                        result = whisper.transcribe(
                             audio_bytes,
                             filename=f"voicemail_{recording_sid}.mp3",
                         )
-                        if whisper_text:
-                            transcription_text = whisper_text
-                            db.update_recording_transcription(recording_sid, whisper_text)
-                            logger.info(f"Whisper transcribed voicemail {recording_sid}: {len(whisper_text)} chars")
+                        if result.ok:
+                            transcription_text = result.text
+                            db.update_recording_transcription(recording_sid, result.text)
+                            logger.info(f"Whisper transcribed voicemail {recording_sid}: {len(result.text)} chars")
+                            transcription_alerts.note_success(db)
+                        else:
+                            transcription_problem = result.error
+                            if result.fault:
+                                transcription_alerts.note_failure(
+                                    db, get_current_tenant(), result.error, recording_sid
+                                )
+                            else:
+                                # Nothing was said. The service is working.
+                                transcription_alerts.note_success(db)
 
                 # Format the ticket
                 flow_name = call_flow.get('name', 'Unknown') if call_flow else 'Unknown'
@@ -4093,6 +4108,14 @@ Call Flow: {flow_name}
 """
                 if transcription_text:
                     text_body += f"Transcription:\n{transcription_text}\n\n"
+                elif transcription_problem:
+                    # Say what actually went wrong. "Unavailable" reads as "this
+                    # one was mumbled", which is how an eight-day outage in
+                    # September 2026 went unreported for eight days.
+                    text_body += (
+                        f"(No transcription — {transcription_problem}. "
+                        f"Please play the recording.)\n\n"
+                    )
                 else:
                     text_body += "(Transcription pending or unavailable)\n\n"
 
