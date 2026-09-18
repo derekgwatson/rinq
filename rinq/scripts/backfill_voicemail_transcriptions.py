@@ -32,6 +32,9 @@ from rinq.tenant.context import get_tenant_db, get_twilio_config, iter_tenant_co
 
 # Staff see this on a ticket that has been quiet for days, so it has to say why
 # it just moved. The live path's wording is in `transcription_handler`.
+# How many faults in a ROW mean the service is down rather than one bad minute.
+FAULT_STREAK_LIMIT = 3
+
 COMMENT_HEADER = (
     "📝 **Voicemail Transcription** (added late — transcription was unavailable "
     "when this voicemail arrived):"
@@ -58,6 +61,7 @@ def backfill(since, commit, limit, pause):
 
     totals = {'found': 0, 'transcribed': 0, 'posted': 0, 'no_speech': 0, 'failed': 0}
     aborted = None
+    consecutive_faults = 0
 
     for tenant in iter_tenant_contexts():
         if aborted:
@@ -79,7 +83,11 @@ def backfill(since, commit, limit, pause):
                 result = whisper.transcribe(audio, filename=f"voicemail_{sid}.mp3")
             except Exception as e:
                 totals['failed'] += 1
+                consecutive_faults += 1
                 print(f"  FAILED  {label}: {e}")
+                if consecutive_faults >= FAULT_STREAK_LIMIT:
+                    aborted = str(e)
+                    break
                 continue
 
             if not result.ok:
@@ -89,14 +97,21 @@ def backfill(since, commit, limit, pause):
                 totals[bucket] += 1
                 print(f"  {'FAILED ' if result.fault else 'NO TEXT'} {label}: {result.error}")
                 if result.fault:
-                    # A service-wide fault (no credit, bad key) will hit every
-                    # remaining row too — stop rather than burn through 250 of
-                    # them printing the same line. Already-posted rows stand;
-                    # re-running picks up from here.
-                    aborted = result.error
-                    break
+                    # Stop on a fault that is clearly SERVICE-WIDE (no credit, a
+                    # rejected key) rather than one bad minute — otherwise the
+                    # run burns through 250 rows printing the same line. But a
+                    # single timeout is not that: aborting on the first fault
+                    # halted the 2026-09-18 backfill at 171 of 254 over one slow
+                    # request. Only a STREAK means the service itself is down.
+                    consecutive_faults += 1
+                    if consecutive_faults >= FAULT_STREAK_LIMIT:
+                        aborted = result.error
+                        break
+                    continue
+                consecutive_faults = 0
                 continue
 
+            consecutive_faults = 0
             text = result.text
             totals['transcribed'] += 1
             if not commit:
@@ -125,7 +140,10 @@ def backfill(since, commit, limit, pause):
         f"no speech {totals['no_speech']}, failed {totals['failed']}"
     )
     if aborted:
-        print(f"STOPPED EARLY — {aborted}. Fix that, then re-run: the rest are untouched.")
+        print(
+            f"STOPPED EARLY after {FAULT_STREAK_LIMIT} failures in a row — {aborted}. "
+            "Fix that, then re-run: the rest are untouched."
+        )
         return 1
     if not commit:
         print("Nothing was written. Re-run with --commit to apply.")
