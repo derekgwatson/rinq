@@ -2517,7 +2517,10 @@
 
             <!-- Team members -->
             <div class="transfer-section">
-                <label>Transfer to Team Member:</label>
+                <label>Transfer to Team Member or Mobile:</label>
+                <input type="search" id="transferSearch" placeholder="Search name, store or role (e.g. fitter)..."
+                       oninput="renderTransferTargets()" autocomplete="off"
+                       style="width: 100%; box-sizing: border-box; padding: 8px 10px; margin-bottom: 8px; border: 1px solid #ddd; border-radius: 6px;">
                 <div class="target-list" id="targetList">
                     <!-- Populated by JavaScript -->
                     <div style="padding: 20px; text-align: center; color: #7f8c8d;">Loading...</div>
@@ -4745,14 +4748,27 @@ async function fetchTransferTargets() {
     }
 }
 
+function _transferTargetKey(target) {
+    return target.extension || target.phone || target.email;
+}
+
 function renderTransferTargets() {
-    if (transferTargets.length === 0) {
-        targetList.innerHTML = '<div style="padding: 20px; text-align: center; color: #7f8c8d;">No team members available</div>';
+    const searchEl = document.getElementById('transferSearch');
+    const q = (searchEl ? searchEl.value : '').trim().toLowerCase();
+    const matches = t => !q || [t.name, t.extension, t.position, t.section, t.display_mobile]
+        .some(v => (v || '').toString().toLowerCase().includes(q));
+
+    const staff = transferTargets.filter(t => !t.is_mobile && matches(t));
+    const mobiles = transferTargets.filter(t => t.is_mobile && matches(t));
+
+    if (staff.length === 0 && mobiles.length === 0) {
+        const msg = q ? 'No one matches that search' : 'No team members available';
+        targetList.innerHTML = `<div style="padding: 20px; text-align: center; color: #7f8c8d;">${msg}</div>`;
         return;
     }
 
     // Sort: online+available first, online+busy next, SIP device next, offline last
-    const sorted = [...transferTargets].sort((a, b) => {
+    const sorted = [...staff].sort((a, b) => {
         const pa = contactPresence[(a.email || '').toLowerCase()] || {};
         const pb = contactPresence[(b.email || '').toLowerCase()] || {};
         const aOnline = pa.online || pa.on_call;
@@ -4768,9 +4784,9 @@ function renderTransferTargets() {
         return (a.name || '').localeCompare(b.name || '');
     });
 
-    targetList.innerHTML = sorted.map(target => {
+    const staffHtml = sorted.map(target => {
         const detail = target.extension ? `Ext ${target.extension}` : '';
-        const isSelected = selectedTarget === target.phone || selectedTarget === target.email;
+        const isSelected = selectedTarget === _transferTargetKey(target);
         const presence = contactPresence[(target.email || '').toLowerCase()] || {};
         const isOnline = presence.online || presence.on_call;
         const isBusy = presence.on_call;
@@ -4786,12 +4802,30 @@ function renderTransferTargets() {
         const isReachable = isOnline || isSipRegistered;
         return `
             <div class="target-item ${isSelected ? 'selected' : ''} ${isBusy ? 'target-busy' : ''} ${!isReachable ? 'target-offline' : ''}"
-                 onclick="selectTarget('${escapeAttr(target.extension || target.phone || target.email)}', '${escapeAttr(target.name)}', '${escapeAttr(target.email)}')">
+                 onclick="selectTarget('${escapeAttr(_transferTargetKey(target))}', '${escapeAttr(target.name)}', '${escapeAttr(target.email)}')">
                 <span class="target-name">${escapeHtml(target.name)}${statusHtml}</span>
                 <span class="target-phone">${escapeHtml(detail)}</span>
             </div>
         `;
     }).join('');
+
+    // Address-book mobiles (fitters etc.) — no presence, always dialable
+    const mobilesHtml = mobiles.map(target => {
+        const role = [target.position, target.section].filter(Boolean).join(' · ');
+        const isSelected = selectedTarget === target.phone;
+        return `
+            <div class="target-item ${isSelected ? 'selected' : ''}"
+                 onclick="selectTarget('${escapeAttr(target.phone)}', '${escapeAttr(target.name)}', '')">
+                <span class="target-name">${escapeHtml(target.name)}${role ? ` <span style="color:#7f8c8d;font-size:0.85em">${escapeHtml(role)}</span>` : ''}</span>
+                <span class="target-phone">📱 ${escapeHtml(target.display_mobile)}</span>
+            </div>
+        `;
+    }).join('');
+
+    const heading = text => `<div style="padding: 6px 10px; font-size: 0.75em; font-weight: 600; color: #7f8c8d; text-transform: uppercase; letter-spacing: 0.04em; background: #fafafa;">${text}</div>`;
+    targetList.innerHTML =
+        (staffHtml ? (mobilesHtml ? heading('On Tina') : '') + staffHtml : '') +
+        (mobilesHtml ? heading('Mobiles') + mobilesHtml : '');
 }
 
 let selectedTargetEmail = '';
@@ -4888,6 +4922,8 @@ function openTransferModal() {
     selectedTarget = null;
     selectedTargetName = '';
     externalNumberInput.value = '';
+    const transferSearch = document.getElementById('transferSearch');
+    if (transferSearch) transferSearch.value = '';
     isConsulting = false;
     consultCallSid = null;
     currentTransferKey = null;

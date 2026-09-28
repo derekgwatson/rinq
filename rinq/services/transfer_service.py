@@ -163,7 +163,29 @@ class TransferService:
                     'has_browser': True,
                 })
 
-        return sorted(targets, key=lambda x: x['name'].lower())
+        targets.sort(key=lambda x: x['name'].lower())
+
+        # Address book mobiles (e.g. fitters, synced from Peter) for people
+        # who aren't on Tina — lets an agent warm-transfer to a fitter, ask
+        # how far away they are, then "Go back" to the customer. Anyone who
+        # has an extension is already listed above and is reachable that way.
+        mobiles = []
+        for entry in self.db.get_address_book():
+            phone = entry.get('mobile_e164')
+            email = (entry.get('email') or '').lower().strip()
+            if not phone or (email and email in seen_emails):
+                continue
+            mobiles.append({
+                'name': entry.get('name') or entry.get('display_mobile') or phone,
+                'phone': phone,
+                'display_mobile': entry.get('display_mobile') or phone,
+                'position': entry.get('position') or '',
+                'section': entry.get('section') or '',
+                'is_mobile': True,
+            })
+        mobiles.sort(key=lambda x: x['name'].lower())
+
+        return targets + mobiles
 
     def blind_transfer_direct(self, call_sid: str, target: str, target_name: str,
                               transferred_by: str, caller_id: str = None) -> dict:
