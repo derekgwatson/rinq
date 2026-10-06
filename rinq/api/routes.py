@@ -681,6 +681,38 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
                     except Exception as e:
                         logger.error(f"Failed to ring browser for {user_email}: {e}")
 
+                # Mobile forward. Screened: the leg only reaches agent-answer
+                # (which claims the call) once a person presses 1, so a mobile
+                # that is off or declines can't let its voicemail take the call.
+                ext = db.get_staff_extension(user_email)
+                if ext and ext.get('forward_to') and not ring_settings.get('dnd') and our_caller_id:
+                    mobile_answer_path = (
+                        f"/api/voice/queue/{queue_id}/agent-answer"
+                        f"?customer_call_sid={customer_call_sid}&agent_email={quote(user_email, safe='')}"
+                    )
+                    try:
+                        call = service.client.calls.create(
+                            to=ext['forward_to'],
+                            # A mobile leg must present a number we own (gotcha 3)
+                            from_=our_caller_id,
+                            url=_mobile_screen_url(base_url, mobile_answer_path,
+                                                   f"Call from the {queue_name} queue"),
+                            timeout=30,
+                            status_callback=status_callback_url,
+                            status_callback_event=['initiated', 'ringing', 'answered', 'completed']
+                        )
+                        logger.info(f"Initiated mobile ring to {ext['forward_to']} for {user_email} (queue {queue_name}): {call.sid}")
+                        agent_call_sids.append(call.sid)
+                        metadata_by_sid[call.sid] = json.dumps({
+                            'customer_call_sid': customer_call_sid,
+                            'queue_id': queue_id,
+                            'user_email': user_email,
+                            'device_type': 'mobile'
+                        })
+                        calls_initiated += 1
+                    except Exception as e:
+                        logger.error(f"Failed to ring mobile for {user_email}: {e}")
+
             # Store agent call SIDs in DB for cancellation (shared across workers)
             if agent_call_sids:
                 db.store_ring_attempts(customer_call_sid, agent_call_sids, 'queue',
@@ -713,7 +745,7 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
             db.log_activity(
                 action="agents_ringing",
                 target=f"queue_{queue_id}",
-                details=f"Initiated {calls_initiated} outbound calls (SIP + browser) for queue {queue_name}",
+                details=f"Initiated {calls_initiated} outbound calls (SIP + browser + mobile) for queue {queue_name}",
                 performed_by="system"
             )
 
@@ -757,6 +789,16 @@ def _ring_targets_into_conference(dial_targets: list, conference_name: str,
                 f"{base_url}/api/voice/inbound/ring-status"
                 f"?conference={conference_name}&caller_call_sid={caller_call_sid}"
             )
+            # Mobile legs are screened (press 1) so voicemail can't win the
+            # call. Their 'in-progress' is not an answer — the screened-answer
+            # endpoint claims the call once the person presses 1.
+            screened_answer_path = (
+                f"/api/voice/inbound/screened-answer"
+                f"?conference={quote(conference_name, safe='')}"
+                f"&caller_call_sid={quote(caller_call_sid or '', safe='')}"
+            )
+            mobile_url = _mobile_screen_url(base_url, screened_answer_path, "Incoming call")
+            mobile_status_url = f"{status_url}&screened=1"
 
             call_sids = []
 
@@ -797,12 +839,13 @@ def _ring_targets_into_conference(dial_targets: list, conference_name: str,
                         if not call_from:
                             call_from = caller_id  # Last resort
 
+                    is_mobile = '<Number>' in target
                     call = service.client.calls.create(
                         to=to_addr,
                         from_=call_from,
-                        url=answer_url,
+                        url=mobile_url if is_mobile else answer_url,
                         timeout=30,
-                        status_callback=status_url,
+                        status_callback=mobile_status_url if is_mobile else status_url,
                         status_callback_event=['initiated', 'ringing', 'answered', 'completed'],
                     )
                     call_sids.append(call.sid)
@@ -2364,6 +2407,9 @@ def queue_agent_answer(queue_id):
     # Get agent info from Twilio's request params and resolve to email
     called = request.values.get('Called', '')
     agent_email, _ = _normalize_staff_identifier(called)
+    # A screened mobile leg's Called is the mobile number, which says nothing
+    # about whose it is — the ring loop passes the member's email instead.
+    agent_email = request.args.get('agent_email') or agent_email
     agent_info = agent_email or called or 'unknown'
 
     logger.info(f"Agent {agent_info} answered auto-ring call for queue {queue_name}")
@@ -2547,6 +2593,17 @@ def queue_agent_ring_status(queue_id):
     # answered) is not a give-up signal.
     rejected = call_status == 'busy'
     rang_out = call_status in ('no-answer', 'failed')
+    # A screened mobile leg that picked up and then hung up without anyone
+    # pressing 1 (voicemail, or ignored) ends 'completed', not 'no-answer'.
+    # Its attempt is still tracked only if nobody claimed the call (a claim
+    # pops every attempt), so here it means the same as ringing out.
+    if call_status == 'completed' and call_info.get('device_type') == 'mobile':
+        rang_out = True
+    # 'busy' from a mobile is usually just "already on a call", not the
+    # deliberate reject a desk phone or browser sends — it must not trigger a
+    # queue's voicemail-on-reject for everyone else.
+    if rejected and call_info.get('device_type') == 'mobile':
+        rejected, rang_out = False, True
     if not (rejected or rang_out):
         logger.debug(f"Agent call {agent_call_sid} ended with {call_status} - no action")
         return Response('OK', status=200)
@@ -2810,6 +2867,169 @@ def ringback():
     return Response(twiml, mimetype='application/xml')
 
 
+def _claim_inbound_answer(conference_name: str, caller_call_sid: str, agent_call_sid: str, db,
+                          agent_email: str | None = None, require_pending: bool = False) -> bool:
+    """Make agent_call_sid the leg that answered a conference-first call.
+
+    Cancels every other ringing leg and records the answer against the caller.
+
+    require_pending: only win if this leg is still a tracked ring attempt. The
+        pop is atomic, so when another leg already answered (or the caller hung
+        up, which also pops the attempts) this leg finds nothing and loses.
+        Screened mobile legs use it; the 'in-progress' path keeps its old
+        unconditional behaviour.
+
+    Returns True if this leg won.
+    """
+    service = get_twilio_service()
+
+    # Pop all ring attempts and cancel the others
+    ring_sids = db.pop_ring_attempts(conference_name)
+    if require_pending and agent_call_sid not in ring_sids:
+        logger.info(f"Screened leg {agent_call_sid} lost {conference_name} — already answered or caller gone")
+        return False
+
+    agent_email = agent_email or _resolve_agent_email(agent_call_sid, service)
+
+    # Store child SIDs both ways so either party can find the other
+    db.set_call_child_sid(agent_call_sid, caller_call_sid)
+    db.set_call_child_sid(caller_call_sid, agent_call_sid)
+    db.update_call_log(caller_call_sid, {
+        'status': 'answered',
+        'answered_at': 'CURRENT_TIMESTAMP',
+        'agent_email': agent_email,
+    })
+    # Store conference name against both SIDs for hold
+    db.set_call_conference(agent_call_sid, conference_name)
+    db.set_call_conference(caller_call_sid, conference_name)
+
+    # Record agent participant (customer/caller was added when the call started)
+    agent_user = db.get_user_by_email(agent_email) if agent_email else None
+    agent_name = (agent_user.get('friendly_name') if agent_user else None) or agent_email
+    db.add_participant(conference_name, agent_call_sid, 'agent',
+                       name=agent_name, email=agent_email)
+
+    # For inbound calls, also record the customer if not already present
+    caller_number = db.get_call_log_field(caller_call_sid, 'from_number')
+    if caller_number:
+        customer_name = db.get_call_log_field(caller_call_sid, 'customer_name') or caller_number
+        db.add_participant(conference_name, caller_call_sid, 'customer',
+                           name=customer_name, phone_number=caller_number)
+
+    for sid in ring_sids:
+        if sid != agent_call_sid:
+            try:
+                service.client.calls(sid).update(status='completed')
+            except Exception as e:
+                logger.debug(f"Could not cancel ring leg {sid}: {e}")
+
+    logger.info(f"Agent {agent_call_sid} answered, cancelled {len(ring_sids) - 1} other legs")
+    return True
+
+
+# Mobile screening. A mobile that is off, out of range or declined goes to its
+# own voicemail, and the network reports voicemail picking up exactly as it
+# reports a person picking up. Unscreened, that voicemail "answers" the call:
+# every other phone stops ringing and the customer leaves a message on a staff
+# member's personal mobile. So a mobile leg first hears a prompt and only
+# reaches the real answer URL (`next`) when someone presses 1 — voicemail
+# can't, the leg hangs up, and the other phones keep ringing.
+
+def _mobile_screen_url(base_url: str, next_path: str, label: str) -> str:
+    """URL for a mobile leg: prompt, then on '1' redirect to next_path."""
+    return (
+        f"{base_url}/api/voice/mobile-screen"
+        f"?next={quote(next_path, safe='')}&label={quote(label, safe='')}"
+    )
+
+
+def _safe_screen_next(next_path: str) -> str | None:
+    """Only ever redirect a screened leg to one of our own voice webhooks."""
+    if next_path.startswith('/api/voice/') and '//' not in next_path and '\\' not in next_path:
+        return next_path
+    return None
+
+
+@api_bp.route('/voice/mobile-screen', methods=['POST'])
+def mobile_screen():
+    """TwiML played to a mobile leg when it picks up: 'press 1 to answer'.
+
+    No digit (voicemail, or a person who doesn't want it) → hang up this leg
+    only. The leg's status callback then treats it like a ring-out.
+
+    No auth required - Twilio calls this directly.
+    """
+    next_path = _safe_screen_next(request.args.get('next', ''))
+    label = request.args.get('label', '') or 'Incoming call'
+    if not next_path:
+        logger.error(f"mobile-screen: refusing unsafe next={request.args.get('next', '')!r}")
+        return Response('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>',
+                        mimetype='application/xml')
+
+    accept_url = f"/api/voice/mobile-screen/accept?next={quote(next_path, safe='')}"
+    twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Gather input="dtmf" numDigits="1" timeout="4" action="{xml_escape(accept_url)}" method="POST">
+        <Say voice="Polly.Nicole">{xml_escape(label)}. Press 1 to answer.</Say>
+        <Pause length="1"/>
+        <Say voice="Polly.Nicole">Press 1 to answer.</Say>
+    </Gather>
+    <Hangup/>
+</Response>'''
+    return Response(twiml, mimetype='application/xml')
+
+
+@api_bp.route('/voice/mobile-screen/accept', methods=['POST'])
+def mobile_screen_accept():
+    """Gather action for the mobile screen: '1' continues to the real answer URL.
+
+    No auth required - Twilio calls this directly.
+    """
+    next_path = _safe_screen_next(request.args.get('next', ''))
+    digits = request.values.get('Digits', '')
+    if digits != '1' or not next_path:
+        logger.info(f"Mobile screen: {request.values.get('CallSid', '')} pressed {digits!r} — not taking the call")
+        return Response('<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>',
+                        mimetype='application/xml')
+
+    logger.info(f"Mobile screen: {request.values.get('CallSid', '')} accepted -> {next_path}")
+    twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Redirect method="POST">{xml_escape(next_path)}</Redirect>
+</Response>'''
+    return Response(twiml, mimetype='application/xml')
+
+
+@api_bp.route('/voice/inbound/screened-answer', methods=['POST'])
+def inbound_screened_answer():
+    """A screened mobile pressed 1 on a conference-first call: claim it, join.
+
+    No auth required - Twilio calls this directly.
+    """
+    conference_name = request.args.get('conference', '')
+    caller_call_sid = request.args.get('caller_call_sid', '')
+    agent_call_sid = request.values.get('CallSid', '')
+    db = get_db()
+
+    agent_email = db.get_staff_email_by_forward_to(request.values.get('To', ''))
+    won = _claim_inbound_answer(conference_name, caller_call_sid, agent_call_sid, db,
+                                agent_email=agent_email, require_pending=True)
+    if not won:
+        twiml = '''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Nicole">Sorry, this call has already been answered or the caller has hung up.</Say>
+    <Hangup/>
+</Response>'''
+        return Response(twiml, mimetype='application/xml')
+
+    join_path = f"/api/voice/conference/join?room={quote(conference_name, safe='')}&role=agent"
+    twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Redirect method="POST">{xml_escape(join_path)}</Redirect>
+</Response>'''
+    return Response(twiml, mimetype='application/xml')
+
+
 @api_bp.route('/voice/inbound/ring-status', methods=['POST'])
 def inbound_ring_status():
     """Handle status updates for conference-first inbound agent ring attempts.
@@ -2834,46 +3054,11 @@ def inbound_ring_status():
     db = get_db()
 
     if call_status == 'in-progress':
-        # Agent answered — cancel all other ringing legs
-        service = get_twilio_service()
-
-        # Pop all ring attempts and cancel the others
-        ring_sids = db.pop_ring_attempts(conference_name)
-
-        # Store child SIDs both ways so either party can find the other
-        db.set_call_child_sid(agent_call_sid, caller_call_sid)
-        db.set_call_child_sid(caller_call_sid, agent_call_sid)
-        db.update_call_log(caller_call_sid, {
-            'status': 'answered',
-            'answered_at': 'CURRENT_TIMESTAMP',
-            'agent_email': _resolve_agent_email(agent_call_sid, service),
-        })
-        # Store conference name against both SIDs for hold
-        db.set_call_conference(agent_call_sid, conference_name)
-        db.set_call_conference(caller_call_sid, conference_name)
-
-        # Record agent participant (customer/caller was added when the call started)
-        agent_email = _resolve_agent_email(agent_call_sid, service)
-        agent_user = db.get_user_by_email(agent_email) if agent_email else None
-        agent_name = (agent_user.get('friendly_name') if agent_user else None) or agent_email
-        db.add_participant(conference_name, agent_call_sid, 'agent',
-                           name=agent_name, email=agent_email)
-
-        # For inbound calls, also record the customer if not already present
-        caller_number = db.get_call_log_field(caller_call_sid, 'from_number')
-        if caller_number:
-            customer_name = db.get_call_log_field(caller_call_sid, 'customer_name') or caller_number
-            db.add_participant(conference_name, caller_call_sid, 'customer',
-                               name=customer_name, phone_number=caller_number)
-
-        for sid in ring_sids:
-            if sid != agent_call_sid:
-                try:
-                    service.client.calls(sid).update(status='completed')
-                except Exception as e:
-                    logger.debug(f"Could not cancel ring leg {sid}: {e}")
-
-        logger.info(f"Agent {agent_call_sid} answered, cancelled {len(ring_sids) - 1} other legs")
+        if request.args.get('screened') == '1':
+            # A screened mobile picking up is not an answer — it may be its
+            # voicemail. inbound_screened_answer claims it once 1 is pressed.
+            return '', 204
+        _claim_inbound_answer(conference_name, caller_call_sid, agent_call_sid, db)
 
     elif call_status in ('completed', 'busy', 'no-answer', 'failed', 'canceled'):
         # This leg failed — remove it and check if all legs have failed.

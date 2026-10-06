@@ -2681,6 +2681,17 @@ class Database(StatsMixin, CallLogMixin):
             """, (email.lower(),)).fetchone()
             return dict(row) if row else None
 
+    def get_staff_email_by_forward_to(self, number: str) -> str | None:
+        """Whose mobile forward is this number? Active staff win over inactive."""
+        if not number:
+            return None
+        with self._get_conn() as conn:
+            row = conn.execute("""
+                SELECT email FROM staff_extensions WHERE forward_to = ?
+                ORDER BY is_active DESC LIMIT 1
+            """, (number,)).fetchone()
+            return row['email'] if row else None
+
     def update_staff_extension_caller_id(self, email: str, caller_id: str | None, updated_by: str) -> bool:
         """Set a staff member's active caller ID for outbound calls."""
         now = datetime.now(timezone.utc).isoformat()
