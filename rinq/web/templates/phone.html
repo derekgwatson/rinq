@@ -953,6 +953,7 @@
 
 .call-controls {
     display: flex;
+    flex-wrap: wrap;
     gap: 10px;
     justify-content: center;
     margin-top: 10px;
@@ -1122,6 +1123,25 @@
 .btn-transfer:disabled {
     background: #95a5a6;
     cursor: not-allowed;
+}
+
+/* Hang up beside Mute/Hold/Transfer — the big Hang Up button lives on the
+   Dialpad tab only, so on Contacts or History there was no way to end a call */
+.btn-end-call {
+    background: #e74c3c;
+    color: white;
+    padding: 8px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 0.9em;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.btn-end-call:hover {
+    background: #c0392b;
 }
 
 /* Recording button */
@@ -2311,6 +2331,10 @@
                 <button class="btn-transfer" id="btnTransfer" onclick="openTransferModal()">
                     <span>🔀</span>
                     <span>Transfer</span>
+                </button>
+                <button class="btn-end-call" id="btnEndCall" onclick="hangupCall()">
+                    <span>✆</span>
+                    <span>End</span>
                 </button>
             </div>
             <div class="call-controls call-controls-consulting" id="callControlsConsulting" style="display:none;">
@@ -4911,10 +4935,35 @@ function clearCallNotice() {
     if (el) el.style.display = 'none';
 }
 
+// Transfer failure reasons where the server KEEPS the customer on hold
+// (transfer_routes consult-status: only a mid-consult disconnect unholds).
+const TRANSFER_RING_FAILURES = ['dnd', 'busy', 'no-answer', 'failed'];
+
+// Bring the page's hold flag into line with what the server did to the
+// customer when a warm transfer ended. The page's isOnHold is only ever
+// changed by toggleHold(), but the server unholds the customer itself when
+// the target answered and then left, or on Go back — so without this the
+// button stayed on "Unhold" and the banner said "Caller on hold" while the
+// agent was talking to them (Jacinta, 2026-10-08).
+//   resumed=true:  server took the customer off hold.
+//   resumed=false: customer is still held; if the transfer box is still
+//                  open, closing it restores them (as on a fresh open).
+function syncHoldAfterTransferEnd(resumed) {
+    if (resumed) {
+        isOnHold = false;
+        _autoHeldOnModalOpen = false;
+        Object.keys(_cardHeld).forEach(k => delete _cardHeld[k]);
+    } else if (isOnHold && transferModal.classList.contains('active')) {
+        _autoHeldOnModalOpen = true;
+    }
+    updateHoldButton();
+    if (lastCallState) renderCallStatePanel(lastCallState);
+}
+
 function formatTransferFailure(reason, targetName) {
-    // Ring failures: customer stays on hold, agent can retry another target
-    // or click Cancel to fully resume the call.
-    const ringFailTail = " Caller is still on hold — pick another target or cancel to resume.";
+    // Ring failures: customer stays on hold. The transfer box has closed by
+    // the time this shows, so point at the buttons that are on screen.
+    const ringFailTail = " Caller is still on hold — press Unhold to talk to them, or Transfer to try someone else.";
     // Mid-consult disconnect / cancel: customer has been unholded back to the agent.
     const resumedTail = " You're back with the caller.";
     switch (reason) {
@@ -5296,6 +5345,7 @@ function startTransferStatusPolling() {
                     if (status === 'failed') {
                         const reason = data.transfer && data.transfer.transfer_failure_reason;
                         const targetName = (data.transfer && data.transfer.transfer_target_name) || 'them';
+                        syncHoldAfterTransferEnd(!TRANSFER_RING_FAILURES.includes(reason));
                         showCallNotice(formatTransferFailure(reason, targetName));
                     }
                 }
@@ -5352,6 +5402,8 @@ async function cancelTransfer() {
                 // next endCall() must not use the customer SID (customer is
                 // still live in the conference). The flag is consumed by endCall().
                 _justCancelledTransfer = true;
+                // warm_transfer_cancel unholds the customer server-side
+                syncHoldAfterTransferEnd(true);
                 // Return to target selection
                 transferTargetSelection.style.display = 'block';
                 transferConsulting.style.display = 'none';
@@ -5370,6 +5422,9 @@ async function cancelTransfer() {
                 isConsulting = false;
                 consultCallSid = null;
                 currentTransferKey = null;
+                // The server resumed the customer only if the target had
+                // answered; a ring failure leaves them held.
+                syncHoldAfterTransferEnd(consultTargetAnswered);
                 closeTransferModal();
             } else {
                 showTransferError(data.error || 'Failed to cancel transfer');
@@ -6123,7 +6178,7 @@ async function pollCallState() {
         // it (some SDK path ended the call without reaching endCall()). Two
         // polls in a row — about 6s — and we put the screen back to idle
         // rather than leave a ghost call that blocks every incoming ring.
-        if (callInfo.classList.contains('active')) {
+        if (typeof callInfo !== 'undefined' && callInfo.classList.contains('active')) {
             _orphanCallScreenPolls++;
             if (_orphanCallScreenPolls >= 2) {
                 console.warn('Call screen showing with no call behind it — resetting');
@@ -6233,6 +6288,7 @@ async function pollCallState() {
                 const msg = consultTargetAnswered
                     ? `${state.transfer.target_name || 'Transfer target'} ended the call — you're back with the customer.`
                     : 'Transfer target did not answer — caller is still on hold. Pick another target or cancel to resume.';
+                syncHoldAfterTransferEnd(consultTargetAnswered);
                 showTransferError(msg);
                 startCallStatePolling();  // Back to normal interval
             }
