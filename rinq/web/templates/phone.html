@@ -3126,7 +3126,16 @@ async function initPhone() {
                 // Only clear currentCall if this ring is still the active call.
                 // If the agent answered a queue call via device.connect() first,
                 // currentCall was already replaced — don't clobber it.
-                if (currentCall === call) {
+                if (currentCall === call && call._answering) {
+                    // Cancelled while we were answering it: the caller was
+                    // answered by someone else, hung up, or the ring timed out
+                    // at the moment of the click. The screen has already left
+                    // the ringing state, so put it back to idle and say why.
+                    console.warn('Ring cancelled while answering it — resetting the call screen');
+                    resetCallUI();
+                    setStatus('Missed — the caller was no longer ringing', 'offline');
+                    setTimeout(() => { if (!currentCall) setStatus('Ready', 'ready'); }, 5000);
+                } else if (currentCall === call) {
                     currentCall = null;
                     clearCustomerContext();
                 } else if (customerContextNumber && customerContextNumber === _ctxDigits(from)) {
@@ -3644,19 +3653,65 @@ function hangupCall() {
 function answerCall() {
     stopRingtone();
     if (currentCall) {
-        currentCall.accept();
+        const call = currentCall;
+        // Don't paint "Connected" until the call actually connects. A ring
+        // answered in its last second (or answered elsewhere at the same
+        // moment) is cancelled by Twilio instead, and the SDK then fires only
+        // 'cancel', never 'disconnect' — so a screen painted up front stayed
+        // on "Connected" with a running timer and nobody on the line, and
+        // the "already on a call" guard rejected every ring after it.
+        // The cancel handler in device.on('incoming') undoes this state.
+        call._answering = true;
         incomingCall.classList.remove('active');
-        setStatus('Connected', 'busy');
-        startCallTimer();
-        callNumber.textContent = currentCall.parameters.From || 'Unknown';
-        callInfo.classList.add('active');
-        contextPane.classList.add('has-call');
+        setStatus('Connecting...', 'busy');
         btnCall.style.display = 'none';
         btnHangup.style.display = 'inline-block';
-        // Start unified call state polling — server will figure out which conference we're in
-        startCallStatePolling();
-        // Recording auto-starts via poll when 2+ participants seen
+        call.on('accept', () => {
+            call._answering = false;
+            if (currentCall !== call) return;
+            setStatus('Connected', 'busy');
+            startCallTimer();
+            callNumber.textContent = call.parameters.From || 'Unknown';
+            callInfo.classList.add('active');
+            contextPane.classList.add('has-call');
+            // Start unified call state polling — server will figure out which conference we're in
+            startCallStatePolling();
+            // Recording auto-starts via poll when 2+ participants seen
+        });
+        call.accept();
     }
+}
+
+// Put the phone screen back to idle. Pure UI + per-call state: posts nothing
+// to the server, so it is safe for a leg that never connected (a ring that
+// was cancelled while we were answering it). endCall() uses it for its own
+// teardown after reporting the call as ended.
+function resetCallUI() {
+    resetCallState();
+    if (typeof answeringCallSid !== 'undefined') answeringCallSid = null;
+    setStatus('Ready', 'ready');
+    btnCall.style.display = 'inline-block';
+    btnHangup.style.display = 'none';
+    callInfo.classList.remove('active');
+    incomingCall.classList.remove('active');
+    contextPane.classList.remove('has-call');
+    const _ecList = document.getElementById('conferencePanelList');
+    const _ecIdle = document.getElementById('sidebarIdle');
+    const _ecCallControls = document.getElementById('callControls');
+    const _ecCallControlsConsult = document.getElementById('callControlsConsulting');
+    if (_ecList) _ecList.innerHTML = '';
+    if (_ecIdle) _ecIdle.style.display = '';
+    if (_ecCallControls) _ecCallControls.style.display = '';
+    if (_ecCallControlsConsult) _ecCallControlsConsult.style.display = 'none';
+    // Reset mute state visually
+    isMuted = false;
+    updateMuteButton();
+    closeTransferModal();
+    clearCallNotice();
+    updateDisplay();
+    updateHoldButton();
+    updateRecordButton();
+    clearCustomerContext();
 }
 
 function rejectCall() {
@@ -3750,34 +3805,8 @@ function endCall() {
         } catch (e) { /* never break call teardown on a logging failure */ }
     }
 
-    // Reset all per-call state in one shot
-    resetCallState();
-    updateHoldButton();
-
-    // Update UI
-    setStatus('Ready', 'ready');
-    btnCall.style.display = 'inline-block';
-    btnHangup.style.display = 'none';
-    callInfo.classList.remove('active');
-    incomingCall.classList.remove('active');
-    contextPane.classList.remove('has-call');
-    const _ecList = document.getElementById('conferencePanelList');
-    const _ecIdle = document.getElementById('sidebarIdle');
-    const _ecCallControls = document.getElementById('callControls');
-    const _ecCallControlsConsult = document.getElementById('callControlsConsulting');
-    if (_ecList) _ecList.innerHTML = '';
-    if (_ecIdle) _ecIdle.style.display = '';
-    if (_ecCallControls) _ecCallControls.style.display = '';
-    if (_ecCallControlsConsult) _ecCallControlsConsult.style.display = 'none';
-    // Reset mute state visually
-    isMuted = false;
-    updateMuteButton();
-    closeTransferModal();
-    clearCallNotice();
-    updateDisplay();
-    updateHoldButton();
-    updateRecordButton();
-    clearCustomerContext();
+    // Reset all per-call state and put the screen back to idle
+    resetCallUI();
 
     // Show call outcome for outbound calls (busy, no answer, etc.)
     if (wasOutbound && endSid) {
@@ -5577,8 +5606,12 @@ async function answerQueueCall(callSid) {
         btnCall.style.display = 'none';
         btnHangup.style.display = 'inline-block';
 
-        // cancel/disconnect listeners are already wired by device.on('incoming').
+        // cancel/disconnect listeners are already wired by device.on('incoming');
+        // _answering tells the cancel listener to reset this screen if the
+        // ring is pulled away before it connects.
+        pendingIncoming._answering = true;
         pendingIncoming.on('accept', () => {
+            pendingIncoming._answering = false;
             setStatus('Connected', 'busy');
             startCallTimer();
             callNumber.textContent = answeredCaller.customer_name || answeredCaller.caller_number || 'Queue Caller';
@@ -6061,6 +6094,8 @@ document.addEventListener('visibilitychange', () => {
 let callStateInterval = null;
 let lastCallState = null;
 
+let _orphanCallScreenPolls = 0;
+
 function startCallStatePolling(intervalMs) {
     stopCallStatePolling();
     pollCallState();
@@ -6084,8 +6119,23 @@ async function pollCallState() {
     if (!callSid) {
         const _pIdle = document.getElementById('sidebarIdle');
         if (_pIdle) _pIdle.style.display = '';
+        // Safety net: the call screen is showing but there is no call behind
+        // it (some SDK path ended the call without reaching endCall()). Two
+        // polls in a row — about 6s — and we put the screen back to idle
+        // rather than leave a ghost call that blocks every incoming ring.
+        if (callInfo.classList.contains('active')) {
+            _orphanCallScreenPolls++;
+            if (_orphanCallScreenPolls >= 2) {
+                console.warn('Call screen showing with no call behind it — resetting');
+                _orphanCallScreenPolls = 0;
+                resetCallUI();
+            }
+        } else {
+            _orphanCallScreenPolls = 0;
+        }
         return;
     }
+    _orphanCallScreenPolls = 0;
     try {
         const res = await fetch(`/api/my-call-state?call_sid=${encodeURIComponent(callSid)}`, {
             credentials: 'same-origin'
