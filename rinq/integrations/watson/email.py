@@ -57,7 +57,11 @@ class WatsonMabelEmailService(EmailService):
             payload['metadata'] = metadata
 
         try:
-            response = self.client.post('/send-email', json=payload)
+            # Mabel mounts its email routes under /api. '/send-email' 404'd on every
+            # recording archive email (2,076 in two weeks, none ever sent) until
+            # 2026-10-07. No from_address: Mabel's default sender is noreply@,
+            # which Google's relay accepts (mabel.bot@ was refused).
+            response = self.client.post('/api/send-email', json=payload)
             if response.status_code == 200:
                 message_id = response.json().get('message_id')
                 logger.info(f"Email sent via Mabel: {message_id}")
