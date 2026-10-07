@@ -131,6 +131,9 @@ class TransferService:
         """
         targets = []
         seen_emails = set()
+        address_book = self.db.get_address_book()
+        book_by_email = {(e.get('email') or '').lower().strip(): e
+                         for e in address_book if e.get('email')}
 
         # All staff with extensions are valid transfer targets
         extensions = self.db.get_all_staff_extensions()
@@ -141,13 +144,29 @@ class TransferService:
                 # Try to get a friendly name from the users table
                 user = self.db.get_user_by_email(email)
                 name = (user.get('friendly_name') if user else None) or email.split('@')[0].replace('.', ' ').replace('_', ' ').title()
-                targets.append({
+                target = {
                     'email': email,
                     'name': name,
                     'has_sip': True,
                     'has_browser': True,
                     'extension': ext.get('extension'),
-                })
+                }
+                # Their mobile too, so an agent can transfer to someone who
+                # isn't at their desk in one click instead of looking the
+                # number up in Contacts and typing it in. A transfer to an
+                # extension only rings the browser, so for anyone not logged
+                # in to Tina the mobile is the only way through. Same rule
+                # as the Contacts list: hidden if they ticked "hide my mobile".
+                book = book_by_email.get(email) or {}
+                if not ext.get('hide_mobile'):
+                    mobile = book.get('mobile_e164') or ext.get('forward_to')
+                    if mobile:
+                        target['mobile'] = mobile
+                        target['display_mobile'] = (book.get('display_mobile')
+                                                    if book.get('mobile_e164') else None) or mobile
+                target['position'] = book.get('position') or ''
+                target['section'] = book.get('section') or ''
+                targets.append(target)
 
         # Also include queue members who don't have extensions yet
         members = self.db.get_all_queue_members()
@@ -168,9 +187,9 @@ class TransferService:
         # Address book mobiles (e.g. fitters, synced from Peter) for people
         # who aren't on Tina — lets an agent warm-transfer to a fitter, ask
         # how far away they are, then "Go back" to the customer. Anyone who
-        # has an extension is already listed above and is reachable that way.
+        # has an extension is already listed above, with their mobile.
         mobiles = []
-        for entry in self.db.get_address_book():
+        for entry in address_book:
             phone = entry.get('mobile_e164')
             email = (entry.get('email') or '').lower().strip()
             if not phone or (email and email in seen_emails):

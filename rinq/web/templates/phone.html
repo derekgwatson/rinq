@@ -1440,6 +1440,28 @@
     opacity: 0.4;
 }
 
+.target-mobile-btn {
+    font-size: 0.85em;
+    padding: 3px 8px;
+    margin-left: 8px;
+    border: 1px solid #c9b3d6;
+    border-radius: 4px;
+    background: white;
+    color: #6c3483;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.target-mobile-btn:hover {
+    background: #f3e9f8;
+}
+
+.target-mobile-btn.selected {
+    background: #6c3483;
+    border-color: white;
+    color: white;
+}
+
 .target-busy-badge {
     font-size: 0.7em;
     font-weight: 400;
@@ -4840,6 +4862,7 @@ function renderTransferTargets() {
     const staffHtml = sorted.map(target => {
         const detail = target.extension ? `Ext ${target.extension}` : '';
         const isSelected = selectedTarget === _transferTargetKey(target);
+        const isMobileSelected = !!target.mobile && selectedTarget === target.mobile;
         const presence = contactPresence[(target.email || '').toLowerCase()] || {};
         const isOnline = presence.online || presence.on_call;
         const isBusy = presence.on_call;
@@ -4853,11 +4876,24 @@ function renderTransferTargets() {
         else if (!isOnline) statusHtml = ' <span class="target-busy-badge" style="background:#f0f0f0;color:#999">offline</span>';
 
         const isReachable = isOnline || isSipRegistered;
+        // Not on Tina but we have their mobile: clicking the name picks the
+        // mobile (an extension transfer only rings the browser, so it would
+        // just fail). The 📱 button picks the mobile for anyone, any time.
+        const nameToMobile = !isReachable && !!target.mobile;
+        const mobileName = `${target.name} (mobile)`;
+        const rowClick = nameToMobile
+            ? `selectTarget('${escapeAttr(target.mobile)}', '${escapeAttr(mobileName)}', '')`
+            : `selectTarget('${escapeAttr(_transferTargetKey(target))}', '${escapeAttr(target.name)}', '${escapeAttr(target.email)}')`;
+        const mobileBtn = target.mobile
+            ? `<button type="button" class="target-mobile-btn ${isMobileSelected ? 'selected' : ''}"
+                   title="Transfer to ${escapeHtml(target.name)}'s mobile"
+                   onclick="event.stopPropagation(); selectTarget('${escapeAttr(target.mobile)}', '${escapeAttr(mobileName)}', '')">📱 ${escapeHtml(target.display_mobile || target.mobile)}</button>`
+            : '';
         return `
-            <div class="target-item ${isSelected ? 'selected' : ''} ${isBusy ? 'target-busy' : ''} ${!isReachable ? 'target-offline' : ''}"
-                 onclick="selectTarget('${escapeAttr(_transferTargetKey(target))}', '${escapeAttr(target.name)}', '${escapeAttr(target.email)}')">
+            <div class="target-item ${isSelected || (isMobileSelected && nameToMobile) ? 'selected' : ''} ${isBusy ? 'target-busy' : ''} ${!isReachable && !target.mobile ? 'target-offline' : ''}"
+                 onclick="${rowClick}">
                 <span class="target-name">${escapeHtml(target.name)}${statusHtml}</span>
-                <span class="target-phone">${escapeHtml(detail)}</span>
+                <span class="target-phone">${nameToMobile ? '' : escapeHtml(detail)}${mobileBtn}</span>
             </div>
         `;
     }).join('');
