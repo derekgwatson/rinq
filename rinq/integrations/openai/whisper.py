@@ -71,6 +71,18 @@ def _describe_failure(response) -> str:
     return f"the transcription service refused the request ({message})"
 
 
+def _is_too_short(response) -> bool:
+    """OpenAI's 400 for a recording under 0.1s — an empty voicemail, not a fault."""
+    if response.status_code != 400:
+        return False
+    try:
+        payload = response.json().get('error', {}) or {}
+    except Exception:
+        return False
+    return (payload.get('code') == 'audio_too_short'
+            or 'too short' in (payload.get('message') or '').lower())
+
+
 class WhisperService:
     """Audio transcription using OpenAI's Whisper API."""
 
@@ -108,6 +120,13 @@ class WhisperService:
             return TranscriptionResult(error="we could not reach the transcription service")
 
         if response.status_code != 200:
+            if _is_too_short(response):
+                # The caller hung up at the beep. Same as silence: the service
+                # is working, so this must not raise an outage alert.
+                logger.info("Whisper skipped voicemail: recording too short to hold speech")
+                return TranscriptionResult(
+                    error="the recording was too short to hold any speech", fault=False
+                )
             reason = _describe_failure(response)
             # The body carries the actual cause; raise_for_status() used to
             # throw it away, which is how "no credit" read as a bare 429.
