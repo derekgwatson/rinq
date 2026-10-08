@@ -89,8 +89,11 @@ def customer_leg_for_conference(conference_name: str, joining_call_sid: str,
         return conference_name[len('hold_room_'):] or None
 
     # 'hold_' is a different room from 'hold_room_' and must not match here.
+    # A blind transfer's room is call_<sid>_xfer: a mid-call move, and the
+    # remainder is not a call SID (Twilio SIDs never contain '_').
     if conference_name.startswith('call_'):
-        return conference_name[len('call_'):] or None
+        sid = conference_name[len('call_'):]
+        return sid if sid and '_' not in sid else None
 
     return None
 

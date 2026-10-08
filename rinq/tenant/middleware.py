@@ -90,8 +90,11 @@ def resolve_tenant():
     """Flask before_request handler to resolve current tenant."""
     path = request.path
 
-    # Skip tenant resolution for auth and system routes
-    if any(path.startswith(prefix) for prefix in TENANT_EXEMPT_PREFIXES):
+    # Skip tenant resolution for auth and system routes. The media-TwiML
+    # endpoints are skipped too: Twilio fetches them with no call parameters,
+    # so resolution always failed and logged a warning on every hold.
+    if (any(path.startswith(prefix) for prefix in TENANT_EXEMPT_PREFIXES)
+            or path in SIGNATURE_EXEMPT_PATHS):
         g.tenant = None
         return
 
