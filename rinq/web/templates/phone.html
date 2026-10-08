@@ -4886,7 +4886,7 @@ function renderTransferTargets() {
             : `selectTarget('${escapeAttr(_transferTargetKey(target))}', '${escapeAttr(target.name)}', '${escapeAttr(target.email)}')`;
         const mobileBtn = target.mobile
             ? `<button type="button" class="target-mobile-btn ${isMobileSelected ? 'selected' : ''}"
-                   title="Transfer to ${escapeHtml(target.name)}'s mobile"
+                   title="Transfer to ${escapeHtml(target.name).replace(/"/g, '&quot;')}'s mobile"
                    onclick="event.stopPropagation(); selectTarget('${escapeAttr(target.mobile)}', '${escapeAttr(mobileName)}', '')">📱 ${escapeHtml(target.display_mobile || target.mobile)}</button>`
             : '';
         return `
@@ -4971,9 +4971,12 @@ function clearCallNotice() {
     if (el) el.style.display = 'none';
 }
 
-// Transfer failure reasons where the server KEEPS the customer on hold
-// (transfer_routes consult-status: only a mid-consult disconnect unholds).
-const TRANSFER_RING_FAILURES = ['dnd', 'busy', 'no-answer', 'failed'];
+// Transfer failure reasons after which the server has taken the customer OFF
+// hold (mid-consult disconnect, failed auto-reconnect). Anything else — a ring
+// failure, a cancelled ring, an unknown value — leaves them held, and showing
+// "Unhold" is the safe mistake. Mirrors RESUMED_FAILURE_REASONS in
+// services/transfer_service.py.
+const TRANSFER_RESUMED_REASONS = ['completed', 'reconnect_exhausted'];
 
 // Bring the page's hold flag into line with what the server did to the
 // customer when a warm transfer ended. The page's isOnHold is only ever
@@ -4993,7 +4996,12 @@ function syncHoldAfterTransferEnd(resumed) {
         _autoHeldOnModalOpen = true;
     }
     updateHoldButton();
-    if (lastCallState) renderCallStatePanel(lastCallState);
+    // Repaint the cards now — unless the last poll still describes the transfer
+    // as live, which would bring back Go back / Hand off for a poll. The next
+    // poll repaints either way.
+    const staleTransfer = lastCallState && lastCallState.transfer
+        && ['pending', 'consulting'].includes(lastCallState.transfer.status);
+    if (lastCallState && !staleTransfer) renderCallStatePanel(lastCallState);
 }
 
 function formatTransferFailure(reason, targetName) {
@@ -5325,6 +5333,8 @@ async function completeTransfer() {
                     completeBtn.disabled = false;
                     completeBtn.textContent = '✓ Hand off';
                 }
+                // warm_transfer_complete took the customer off hold before replying
+                syncHoldAfterTransferEnd(true);
                 showCallNotice(data.error || 'Transfer target disconnected — you are back with the caller.');
             } else {
                 showCallNotice(data.error || 'Failed to complete transfer');
@@ -5381,7 +5391,7 @@ function startTransferStatusPolling() {
                     if (status === 'failed') {
                         const reason = data.transfer && data.transfer.transfer_failure_reason;
                         const targetName = (data.transfer && data.transfer.transfer_target_name) || 'them';
-                        syncHoldAfterTransferEnd(!TRANSFER_RING_FAILURES.includes(reason));
+                        syncHoldAfterTransferEnd(TRANSFER_RESUMED_REASONS.includes(reason));
                         showCallNotice(formatTransferFailure(reason, targetName));
                     }
                 }
@@ -5438,8 +5448,11 @@ async function cancelTransfer() {
                 // next endCall() must not use the customer SID (customer is
                 // still live in the conference). The flag is consumed by endCall().
                 _justCancelledTransfer = true;
-                // warm_transfer_cancel unholds the customer server-side
-                syncHoldAfterTransferEnd(true);
+                // warm_transfer_cancel says whether the customer is off hold —
+                // it isn't if the transfer had already failed on a ring failure
+                // a moment before Go back. Anything but an explicit true keeps
+                // "Unhold" showing (the safe mistake).
+                syncHoldAfterTransferEnd(data.resumed === true);
                 // Return to target selection
                 transferTargetSelection.style.display = 'block';
                 transferConsulting.style.display = 'none';

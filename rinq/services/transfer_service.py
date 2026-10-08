@@ -27,6 +27,12 @@ from rinq.tenant.context import get_twilio_config
 
 logger = logging.getLogger(__name__)
 
+# transfer_failure_reason values after which the server has taken the customer
+# OFF hold (transfer_routes: mid-consult disconnect, failed auto-reconnect).
+# Every other failure (no-answer, busy, failed, dnd, canceled) leaves them held.
+# phone.html mirrors this list in TRANSFER_RESUMED_REASONS.
+RESUMED_FAILURE_REASONS = ('completed', 'reconnect_exhausted')
+
 
 def _is_extension(target: str) -> bool:
     """Check if a target looks like an internal extension (4 digits)."""
@@ -975,9 +981,17 @@ class TransferService:
                         logger.warning(f"Could not check if conference {original_conference} is still "
                                        f"live for cancelled transfer of {call_sid} — assuming caller gone: {e}")
 
+                # This branch does NOT touch the customer's hold: the consult-status
+                # callback already decided when the transfer failed. It unholds
+                # only after a mid-consult disconnect ('completed') or a failed
+                # auto-reconnect; a ring failure (no-answer/busy/...) keeps the
+                # customer held. Tell the page which, so its Hold/Unhold button
+                # matches what the customer is actually hearing.
+                resumed = transfer_state.get('transfer_failure_reason') in RESUMED_FAILURE_REASONS
                 return {
                     'success': True,
                     'caller_disconnected': caller_gone,
+                    'resumed': resumed,
                     'message': (
                         'Transfer cancelled. The original caller had already disconnected.'
                         if caller_gone else
@@ -1038,6 +1052,8 @@ class TransferService:
                     except Exception as e:
                         logger.warning(f"Could not cancel ringing consult call: {e}")
 
+            # 3-way: the customer was never held. Warm: true once the unhold below succeeds.
+            resumed = is_three_way
             if not is_three_way:
                 # Single-conference warm: Agent 1 never left the main conference,
                 # so no redirect needed. Just unhold the customer.
@@ -1050,6 +1066,7 @@ class TransferService:
                     self.twilio.client.conferences(conferences[0].sid).participants(call_sid).update(
                         hold=False
                     )
+                    resumed = True
                     # Restore endConferenceOnExit=True so the call terminates
                     # cleanly when either party hangs up. warm_transfer_start set
                     # this to False for all participants; the consult-status
@@ -1077,7 +1094,7 @@ class TransferService:
             )
 
             logger.info(f"Warm transfer cancelled: {call_sid}")
-            return {'success': True}
+            return {'success': True, 'resumed': resumed}
 
         except TwilioRestException as e:
             logger.error(f"Twilio error cancelling transfer: {e}")
