@@ -953,6 +953,7 @@
 
 .call-controls {
     display: flex;
+    flex-wrap: wrap;
     gap: 10px;
     justify-content: center;
     margin-top: 10px;
@@ -1122,6 +1123,25 @@
 .btn-transfer:disabled {
     background: #95a5a6;
     cursor: not-allowed;
+}
+
+/* Hang up beside Mute/Hold/Transfer — the big Hang Up button lives on the
+   Dialpad tab only, so on Contacts or History there was no way to end a call */
+.btn-end-call {
+    background: #e74c3c;
+    color: white;
+    padding: 8px 20px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 0.9em;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.btn-end-call:hover {
+    background: #c0392b;
 }
 
 /* Recording button */
@@ -1418,6 +1438,28 @@
 
 .target-item.target-offline {
     opacity: 0.4;
+}
+
+.target-mobile-btn {
+    font-size: 0.85em;
+    padding: 3px 8px;
+    margin-left: 8px;
+    border: 1px solid #c9b3d6;
+    border-radius: 4px;
+    background: white;
+    color: #6c3483;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.target-mobile-btn:hover {
+    background: #f3e9f8;
+}
+
+.target-mobile-btn.selected {
+    background: #6c3483;
+    border-color: white;
+    color: white;
 }
 
 .target-busy-badge {
@@ -2312,6 +2354,10 @@
                     <span>🔀</span>
                     <span>Transfer</span>
                 </button>
+                <button class="btn-end-call" id="btnEndCall" onclick="hangupCall()">
+                    <span>✆</span>
+                    <span>End</span>
+                </button>
             </div>
             <div class="call-controls call-controls-consulting" id="callControlsConsulting" style="display:none;">
                 <button class="btn-transfer-action btn-transfer-cancel" onclick="cancelTransfer()">← Go back</button>
@@ -3126,7 +3172,16 @@ async function initPhone() {
                 // Only clear currentCall if this ring is still the active call.
                 // If the agent answered a queue call via device.connect() first,
                 // currentCall was already replaced — don't clobber it.
-                if (currentCall === call) {
+                if (currentCall === call && call._answering) {
+                    // Cancelled while we were answering it: the caller was
+                    // answered by someone else, hung up, or the ring timed out
+                    // at the moment of the click. The screen has already left
+                    // the ringing state, so put it back to idle and say why.
+                    console.warn('Ring cancelled while answering it — resetting the call screen');
+                    resetCallUI();
+                    setStatus('Missed — the caller was no longer ringing', 'offline');
+                    setTimeout(() => { if (!currentCall) setStatus('Ready', 'ready'); }, 5000);
+                } else if (currentCall === call) {
                     currentCall = null;
                     clearCustomerContext();
                 } else if (customerContextNumber && customerContextNumber === _ctxDigits(from)) {
@@ -3644,19 +3699,65 @@ function hangupCall() {
 function answerCall() {
     stopRingtone();
     if (currentCall) {
-        currentCall.accept();
+        const call = currentCall;
+        // Don't paint "Connected" until the call actually connects. A ring
+        // answered in its last second (or answered elsewhere at the same
+        // moment) is cancelled by Twilio instead, and the SDK then fires only
+        // 'cancel', never 'disconnect' — so a screen painted up front stayed
+        // on "Connected" with a running timer and nobody on the line, and
+        // the "already on a call" guard rejected every ring after it.
+        // The cancel handler in device.on('incoming') undoes this state.
+        call._answering = true;
         incomingCall.classList.remove('active');
-        setStatus('Connected', 'busy');
-        startCallTimer();
-        callNumber.textContent = currentCall.parameters.From || 'Unknown';
-        callInfo.classList.add('active');
-        contextPane.classList.add('has-call');
+        setStatus('Connecting...', 'busy');
         btnCall.style.display = 'none';
         btnHangup.style.display = 'inline-block';
-        // Start unified call state polling — server will figure out which conference we're in
-        startCallStatePolling();
-        // Recording auto-starts via poll when 2+ participants seen
+        call.on('accept', () => {
+            call._answering = false;
+            if (currentCall !== call) return;
+            setStatus('Connected', 'busy');
+            startCallTimer();
+            callNumber.textContent = call.parameters.From || 'Unknown';
+            callInfo.classList.add('active');
+            contextPane.classList.add('has-call');
+            // Start unified call state polling — server will figure out which conference we're in
+            startCallStatePolling();
+            // Recording auto-starts via poll when 2+ participants seen
+        });
+        call.accept();
     }
+}
+
+// Put the phone screen back to idle. Pure UI + per-call state: posts nothing
+// to the server, so it is safe for a leg that never connected (a ring that
+// was cancelled while we were answering it). endCall() uses it for its own
+// teardown after reporting the call as ended.
+function resetCallUI() {
+    resetCallState();
+    if (typeof answeringCallSid !== 'undefined') answeringCallSid = null;
+    setStatus('Ready', 'ready');
+    btnCall.style.display = 'inline-block';
+    btnHangup.style.display = 'none';
+    callInfo.classList.remove('active');
+    incomingCall.classList.remove('active');
+    contextPane.classList.remove('has-call');
+    const _ecList = document.getElementById('conferencePanelList');
+    const _ecIdle = document.getElementById('sidebarIdle');
+    const _ecCallControls = document.getElementById('callControls');
+    const _ecCallControlsConsult = document.getElementById('callControlsConsulting');
+    if (_ecList) _ecList.innerHTML = '';
+    if (_ecIdle) _ecIdle.style.display = '';
+    if (_ecCallControls) _ecCallControls.style.display = '';
+    if (_ecCallControlsConsult) _ecCallControlsConsult.style.display = 'none';
+    // Reset mute state visually
+    isMuted = false;
+    updateMuteButton();
+    closeTransferModal();
+    clearCallNotice();
+    updateDisplay();
+    updateHoldButton();
+    updateRecordButton();
+    clearCustomerContext();
 }
 
 function rejectCall() {
@@ -3750,34 +3851,8 @@ function endCall() {
         } catch (e) { /* never break call teardown on a logging failure */ }
     }
 
-    // Reset all per-call state in one shot
-    resetCallState();
-    updateHoldButton();
-
-    // Update UI
-    setStatus('Ready', 'ready');
-    btnCall.style.display = 'inline-block';
-    btnHangup.style.display = 'none';
-    callInfo.classList.remove('active');
-    incomingCall.classList.remove('active');
-    contextPane.classList.remove('has-call');
-    const _ecList = document.getElementById('conferencePanelList');
-    const _ecIdle = document.getElementById('sidebarIdle');
-    const _ecCallControls = document.getElementById('callControls');
-    const _ecCallControlsConsult = document.getElementById('callControlsConsulting');
-    if (_ecList) _ecList.innerHTML = '';
-    if (_ecIdle) _ecIdle.style.display = '';
-    if (_ecCallControls) _ecCallControls.style.display = '';
-    if (_ecCallControlsConsult) _ecCallControlsConsult.style.display = 'none';
-    // Reset mute state visually
-    isMuted = false;
-    updateMuteButton();
-    closeTransferModal();
-    clearCallNotice();
-    updateDisplay();
-    updateHoldButton();
-    updateRecordButton();
-    clearCustomerContext();
+    // Reset all per-call state and put the screen back to idle
+    resetCallUI();
 
     // Show call outcome for outbound calls (busy, no answer, etc.)
     if (wasOutbound && endSid) {
@@ -4787,6 +4862,7 @@ function renderTransferTargets() {
     const staffHtml = sorted.map(target => {
         const detail = target.extension ? `Ext ${target.extension}` : '';
         const isSelected = selectedTarget === _transferTargetKey(target);
+        const isMobileSelected = !!target.mobile && selectedTarget === target.mobile;
         const presence = contactPresence[(target.email || '').toLowerCase()] || {};
         const isOnline = presence.online || presence.on_call;
         const isBusy = presence.on_call;
@@ -4800,11 +4876,24 @@ function renderTransferTargets() {
         else if (!isOnline) statusHtml = ' <span class="target-busy-badge" style="background:#f0f0f0;color:#999">offline</span>';
 
         const isReachable = isOnline || isSipRegistered;
+        // Not on Tina but we have their mobile: clicking the name picks the
+        // mobile (an extension transfer only rings the browser, so it would
+        // just fail). The 📱 button picks the mobile for anyone, any time.
+        const nameToMobile = !isReachable && !!target.mobile;
+        const mobileName = `${target.name} (mobile)`;
+        const rowClick = nameToMobile
+            ? `selectTarget('${escapeAttr(target.mobile)}', '${escapeAttr(mobileName)}', '')`
+            : `selectTarget('${escapeAttr(_transferTargetKey(target))}', '${escapeAttr(target.name)}', '${escapeAttr(target.email)}')`;
+        const mobileBtn = target.mobile
+            ? `<button type="button" class="target-mobile-btn ${isMobileSelected ? 'selected' : ''}"
+                   title="Transfer to ${escapeHtml(target.name).replace(/"/g, '&quot;')}'s mobile"
+                   onclick="event.stopPropagation(); selectTarget('${escapeAttr(target.mobile)}', '${escapeAttr(mobileName)}', '')">📱 ${escapeHtml(target.display_mobile || target.mobile)}</button>`
+            : '';
         return `
-            <div class="target-item ${isSelected ? 'selected' : ''} ${isBusy ? 'target-busy' : ''} ${!isReachable ? 'target-offline' : ''}"
-                 onclick="selectTarget('${escapeAttr(_transferTargetKey(target))}', '${escapeAttr(target.name)}', '${escapeAttr(target.email)}')">
+            <div class="target-item ${isSelected || (isMobileSelected && nameToMobile) ? 'selected' : ''} ${isBusy ? 'target-busy' : ''} ${!isReachable && !target.mobile ? 'target-offline' : ''}"
+                 onclick="${rowClick}">
                 <span class="target-name">${escapeHtml(target.name)}${statusHtml}</span>
-                <span class="target-phone">${escapeHtml(detail)}</span>
+                <span class="target-phone">${nameToMobile ? '' : escapeHtml(detail)}${mobileBtn}</span>
             </div>
         `;
     }).join('');
@@ -4882,10 +4971,43 @@ function clearCallNotice() {
     if (el) el.style.display = 'none';
 }
 
+// Transfer failure reasons after which the server has taken the customer OFF
+// hold (mid-consult disconnect, failed auto-reconnect). Anything else — a ring
+// failure, a cancelled ring, an unknown value — leaves them held, and showing
+// "Unhold" is the safe mistake. Mirrors RESUMED_FAILURE_REASONS in
+// services/transfer_service.py.
+const TRANSFER_RESUMED_REASONS = ['completed', 'reconnect_exhausted'];
+
+// Bring the page's hold flag into line with what the server did to the
+// customer when a warm transfer ended. The page's isOnHold is only ever
+// changed by toggleHold(), but the server unholds the customer itself when
+// the target answered and then left, or on Go back — so without this the
+// button stayed on "Unhold" and the banner said "Caller on hold" while the
+// agent was talking to them (Jacinta, 2026-10-08).
+//   resumed=true:  server took the customer off hold.
+//   resumed=false: customer is still held; if the transfer box is still
+//                  open, closing it restores them (as on a fresh open).
+function syncHoldAfterTransferEnd(resumed) {
+    if (resumed) {
+        isOnHold = false;
+        _autoHeldOnModalOpen = false;
+        Object.keys(_cardHeld).forEach(k => delete _cardHeld[k]);
+    } else if (isOnHold && transferModal.classList.contains('active')) {
+        _autoHeldOnModalOpen = true;
+    }
+    updateHoldButton();
+    // Repaint the cards now — unless the last poll still describes the transfer
+    // as live, which would bring back Go back / Hand off for a poll. The next
+    // poll repaints either way.
+    const staleTransfer = lastCallState && lastCallState.transfer
+        && ['pending', 'consulting'].includes(lastCallState.transfer.status);
+    if (lastCallState && !staleTransfer) renderCallStatePanel(lastCallState);
+}
+
 function formatTransferFailure(reason, targetName) {
-    // Ring failures: customer stays on hold, agent can retry another target
-    // or click Cancel to fully resume the call.
-    const ringFailTail = " Caller is still on hold — pick another target or cancel to resume.";
+    // Ring failures: customer stays on hold. The transfer box has closed by
+    // the time this shows, so point at the buttons that are on screen.
+    const ringFailTail = " Caller is still on hold — press Unhold to talk to them, or Transfer to try someone else.";
     // Mid-consult disconnect / cancel: customer has been unholded back to the agent.
     const resumedTail = " You're back with the caller.";
     switch (reason) {
@@ -5211,6 +5333,8 @@ async function completeTransfer() {
                     completeBtn.disabled = false;
                     completeBtn.textContent = '✓ Hand off';
                 }
+                // warm_transfer_complete took the customer off hold before replying
+                syncHoldAfterTransferEnd(true);
                 showCallNotice(data.error || 'Transfer target disconnected — you are back with the caller.');
             } else {
                 showCallNotice(data.error || 'Failed to complete transfer');
@@ -5267,6 +5391,7 @@ function startTransferStatusPolling() {
                     if (status === 'failed') {
                         const reason = data.transfer && data.transfer.transfer_failure_reason;
                         const targetName = (data.transfer && data.transfer.transfer_target_name) || 'them';
+                        syncHoldAfterTransferEnd(TRANSFER_RESUMED_REASONS.includes(reason));
                         showCallNotice(formatTransferFailure(reason, targetName));
                     }
                 }
@@ -5323,6 +5448,11 @@ async function cancelTransfer() {
                 // next endCall() must not use the customer SID (customer is
                 // still live in the conference). The flag is consumed by endCall().
                 _justCancelledTransfer = true;
+                // warm_transfer_cancel says whether the customer is off hold —
+                // it isn't if the transfer had already failed on a ring failure
+                // a moment before Go back. Anything but an explicit true keeps
+                // "Unhold" showing (the safe mistake).
+                syncHoldAfterTransferEnd(data.resumed === true);
                 // Return to target selection
                 transferTargetSelection.style.display = 'block';
                 transferConsulting.style.display = 'none';
@@ -5341,6 +5471,9 @@ async function cancelTransfer() {
                 isConsulting = false;
                 consultCallSid = null;
                 currentTransferKey = null;
+                // The server resumed the customer only if the target had
+                // answered; a ring failure leaves them held.
+                syncHoldAfterTransferEnd(consultTargetAnswered);
                 closeTransferModal();
             } else {
                 showTransferError(data.error || 'Failed to cancel transfer');
@@ -5577,8 +5710,12 @@ async function answerQueueCall(callSid) {
         btnCall.style.display = 'none';
         btnHangup.style.display = 'inline-block';
 
-        // cancel/disconnect listeners are already wired by device.on('incoming').
+        // cancel/disconnect listeners are already wired by device.on('incoming');
+        // _answering tells the cancel listener to reset this screen if the
+        // ring is pulled away before it connects.
+        pendingIncoming._answering = true;
         pendingIncoming.on('accept', () => {
+            pendingIncoming._answering = false;
             setStatus('Connected', 'busy');
             startCallTimer();
             callNumber.textContent = answeredCaller.customer_name || answeredCaller.caller_number || 'Queue Caller';
@@ -6061,6 +6198,8 @@ document.addEventListener('visibilitychange', () => {
 let callStateInterval = null;
 let lastCallState = null;
 
+let _orphanCallScreenPolls = 0;
+
 function startCallStatePolling(intervalMs) {
     stopCallStatePolling();
     pollCallState();
@@ -6084,8 +6223,23 @@ async function pollCallState() {
     if (!callSid) {
         const _pIdle = document.getElementById('sidebarIdle');
         if (_pIdle) _pIdle.style.display = '';
+        // Safety net: the call screen is showing but there is no call behind
+        // it (some SDK path ended the call without reaching endCall()). Two
+        // polls in a row — about 6s — and we put the screen back to idle
+        // rather than leave a ghost call that blocks every incoming ring.
+        if (typeof callInfo !== 'undefined' && callInfo.classList.contains('active')) {
+            _orphanCallScreenPolls++;
+            if (_orphanCallScreenPolls >= 2) {
+                console.warn('Call screen showing with no call behind it — resetting');
+                _orphanCallScreenPolls = 0;
+                resetCallUI();
+            }
+        } else {
+            _orphanCallScreenPolls = 0;
+        }
         return;
     }
+    _orphanCallScreenPolls = 0;
     try {
         const res = await fetch(`/api/my-call-state?call_sid=${encodeURIComponent(callSid)}`, {
             credentials: 'same-origin'
@@ -6183,6 +6337,7 @@ async function pollCallState() {
                 const msg = consultTargetAnswered
                     ? `${state.transfer.target_name || 'Transfer target'} ended the call — you're back with the customer.`
                     : 'Transfer target did not answer — caller is still on hold. Pick another target or cancel to resume.';
+                syncHoldAfterTransferEnd(consultTargetAnswered);
                 showTransferError(msg);
                 startCallStatePolling();  // Back to normal interval
             }

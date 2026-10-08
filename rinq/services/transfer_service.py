@@ -27,6 +27,12 @@ from rinq.tenant.context import get_twilio_config
 
 logger = logging.getLogger(__name__)
 
+# transfer_failure_reason values after which the server has taken the customer
+# OFF hold (transfer_routes: mid-consult disconnect, failed auto-reconnect).
+# Every other failure (no-answer, busy, failed, dnd, canceled) leaves them held.
+# phone.html mirrors this list in TRANSFER_RESUMED_REASONS.
+RESUMED_FAILURE_REASONS = ('completed', 'reconnect_exhausted')
+
 
 def _is_extension(target: str) -> bool:
     """Check if a target looks like an internal extension (4 digits)."""
@@ -131,6 +137,9 @@ class TransferService:
         """
         targets = []
         seen_emails = set()
+        address_book = self.db.get_address_book()
+        book_by_email = {(e.get('email') or '').lower().strip(): e
+                         for e in address_book if e.get('email')}
 
         # All staff with extensions are valid transfer targets
         extensions = self.db.get_all_staff_extensions()
@@ -141,13 +150,29 @@ class TransferService:
                 # Try to get a friendly name from the users table
                 user = self.db.get_user_by_email(email)
                 name = (user.get('friendly_name') if user else None) or email.split('@')[0].replace('.', ' ').replace('_', ' ').title()
-                targets.append({
+                target = {
                     'email': email,
                     'name': name,
                     'has_sip': True,
                     'has_browser': True,
                     'extension': ext.get('extension'),
-                })
+                }
+                # Their mobile too, so an agent can transfer to someone who
+                # isn't at their desk in one click instead of looking the
+                # number up in Contacts and typing it in. A transfer to an
+                # extension only rings the browser, so for anyone not logged
+                # in to Tina the mobile is the only way through. Same rule
+                # as the Contacts list: hidden if they ticked "hide my mobile".
+                book = book_by_email.get(email) or {}
+                if not ext.get('hide_mobile'):
+                    mobile = book.get('mobile_e164') or ext.get('forward_to')
+                    if mobile:
+                        target['mobile'] = mobile
+                        target['display_mobile'] = (book.get('display_mobile')
+                                                    if book.get('mobile_e164') else None) or mobile
+                target['position'] = book.get('position') or ''
+                target['section'] = book.get('section') or ''
+                targets.append(target)
 
         # Also include queue members who don't have extensions yet
         members = self.db.get_all_queue_members()
@@ -168,9 +193,9 @@ class TransferService:
         # Address book mobiles (e.g. fitters, synced from Peter) for people
         # who aren't on Tina — lets an agent warm-transfer to a fitter, ask
         # how far away they are, then "Go back" to the customer. Anyone who
-        # has an extension is already listed above and is reachable that way.
+        # has an extension is already listed above, with their mobile.
         mobiles = []
-        for entry in self.db.get_address_book():
+        for entry in address_book:
             phone = entry.get('mobile_e164')
             email = (entry.get('email') or '').lower().strip()
             if not phone or (email and email in seen_emails):
@@ -956,9 +981,17 @@ class TransferService:
                         logger.warning(f"Could not check if conference {original_conference} is still "
                                        f"live for cancelled transfer of {call_sid} — assuming caller gone: {e}")
 
+                # This branch does NOT touch the customer's hold: the consult-status
+                # callback already decided when the transfer failed. It unholds
+                # only after a mid-consult disconnect ('completed') or a failed
+                # auto-reconnect; a ring failure (no-answer/busy/...) keeps the
+                # customer held. Tell the page which, so its Hold/Unhold button
+                # matches what the customer is actually hearing.
+                resumed = transfer_state.get('transfer_failure_reason') in RESUMED_FAILURE_REASONS
                 return {
                     'success': True,
                     'caller_disconnected': caller_gone,
+                    'resumed': resumed,
                     'message': (
                         'Transfer cancelled. The original caller had already disconnected.'
                         if caller_gone else
@@ -1019,6 +1052,8 @@ class TransferService:
                     except Exception as e:
                         logger.warning(f"Could not cancel ringing consult call: {e}")
 
+            # 3-way: the customer was never held. Warm: true once the unhold below succeeds.
+            resumed = is_three_way
             if not is_three_way:
                 # Single-conference warm: Agent 1 never left the main conference,
                 # so no redirect needed. Just unhold the customer.
@@ -1031,6 +1066,7 @@ class TransferService:
                     self.twilio.client.conferences(conferences[0].sid).participants(call_sid).update(
                         hold=False
                     )
+                    resumed = True
                     # Restore endConferenceOnExit=True so the call terminates
                     # cleanly when either party hangs up. warm_transfer_start set
                     # this to False for all participants; the consult-status
@@ -1058,7 +1094,7 @@ class TransferService:
             )
 
             logger.info(f"Warm transfer cancelled: {call_sid}")
-            return {'success': True}
+            return {'success': True, 'resumed': resumed}
 
         except TwilioRestException as e:
             logger.error(f"Twilio error cancelling transfer: {e}")
