@@ -5266,8 +5266,35 @@ async function completeTransfer() {
         completeBtn.textContent = 'Completing...';
     }
 
-    const abortController = new AbortController();
-    const abortTimeout = setTimeout(() => abortController.abort(), 8000);
+    // Hand-off trace. On 2026-10-12 every hand-off to a colleague's browser
+    // phone froze on "Completing..." and the request never reached nginx, with
+    // nothing in any log to say why. Each step goes into the call diagnostic
+    // that endCall() posts, so the next failure shows where it stalled.
+    const handoffPressedAt = Date.now();
+    const handoffDiag = (step, extra) => {
+        if (window._recordDiagnostic) {
+            _recordDiagnostic('handoff', Object.assign(
+                { step, ms: Date.now() - handoffPressedAt }, extra || {}));
+        }
+    };
+    handoffDiag('pressed', {
+        call_type: currentTransferCallType,
+        target_answered: consultTargetAnswered,
+        sw_controlled: !!(navigator.serviceWorker && navigator.serviceWorker.controller),
+        visibility: document.visibilityState,
+        online: navigator.onLine,
+    });
+
+    // Independent of the per-request abort: whatever happens below, never
+    // leave the agent looking at a dead "Completing..." button.
+    const watchdog = setTimeout(() => {
+        if (completeBtn && completeBtn.disabled && completeBtn.textContent === 'Completing...') {
+            handoffDiag('watchdog');
+            completeBtn.disabled = false;
+            completeBtn.textContent = '✓ Hand off';
+            showCallNotice('Hand off did not go through — please press Hand off again.');
+        }
+    }, 20000);
 
     try {
         const body = { call_type: currentTransferCallType };
@@ -5283,19 +5310,43 @@ async function completeTransfer() {
         }
         console.log('Complete transfer:', JSON.stringify(body));
 
-        const response = await fetch('/api/voice/transfer/warm/complete', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-            signal: abortController.signal,
-        });
+        // Two attempts, 8s each. The failures on 2026-10-12 never left the
+        // browser, so a second, fresh request is the cheapest recovery.
+        let response = null;
+        for (let attempt = 1; attempt <= 2 && !response; attempt++) {
+            const abortController = new AbortController();
+            const abortTimeout = setTimeout(() => abortController.abort(), 8000);
+            handoffDiag('sending', { attempt });
+            try {
+                response = await fetch('/api/voice/transfer/warm/complete', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    cache: 'no-store',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                    signal: abortController.signal,
+                });
+                handoffDiag('response', { attempt, status: response.status });
+            } catch (e) {
+                handoffDiag('fetch-error', { attempt, name: e.name, msg: String(e.message || '').slice(0, 120) });
+                if (e.name !== 'AbortError' || attempt === 2) throw e;
+            } finally {
+                clearTimeout(abortTimeout);
+            }
+        }
 
-        clearTimeout(abortTimeout);
-        const data = await response.json();
+        let data = await response.json();
+        clearTimeout(watchdog);
+        handoffDiag('parsed', { success: !!data.success, error: data.error ? String(data.error).slice(0, 120) : undefined });
         console.log('Complete transfer response:', JSON.stringify(data));
 
-        if (response.ok && data.success) {
+        // A retry can arrive after the first attempt did complete it
+        // server-side — that is a success, not an error.
+        if (!data.success && /state: completed/.test(data.error || '')) {
+            data = { success: true, agent_should_hangup: true };
+        }
+
+        if (data.success) {
             stopTransferStatusPolling();
             closeTransferModal();
             // Clear the customer SID before endCall so call-ended reports our
@@ -5345,7 +5396,8 @@ async function completeTransfer() {
             }
         }
     } catch (error) {
-        clearTimeout(abortTimeout);
+        clearTimeout(watchdog);
+        handoffDiag('failed', { name: error.name });
         const msg = error.name === 'AbortError'
             ? 'Hand off timed out — please try again.'
             : 'Error completing transfer: ' + error.message;

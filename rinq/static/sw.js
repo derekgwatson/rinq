@@ -9,7 +9,8 @@ self.addEventListener('activate', (event) => {
     event.waitUntil(clients.claim());
 });
 
-// Pass through all fetch requests (no offline caching needed)
-self.addEventListener('fetch', (event) => {
-    event.respondWith(fetch(event.request));
-});
+// No fetch handler. It used to pass every request through
+// event.respondWith(fetch(event.request)), which only added a hop that a
+// request could stall in. On 2026-10-12 every warm-transfer hand-off froze in
+// the browser without reaching the server; Chrome no longer needs a fetch
+// handler to install the app, so the browser now talks to the server directly.
