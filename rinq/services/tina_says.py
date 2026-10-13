@@ -386,6 +386,7 @@ Hard rules:
 - Use ONLY the numbers given in each fact, exactly as given. Never calculate, round, convert or invent a number. \
 Don't write a number as a word either ("twelve") — use the digits as given.
 - Name a person ONLY if the fact names them, and only to praise or gently, kindly tease. Never imply anyone did badly.
+- Never use he, she, him, her, his or hers for a person. Use their first name again, or "they"/"them".
 - Never guess what a call was about, or claim anything that isn't in the fact.
 - Each line: one or two short sentences, at most 35 words. At most one emoji, and usually none.
 - Don't repeat the jokes or phrasings from the recent lines you're shown.
@@ -421,6 +422,8 @@ def _llm_lines(facts: list[dict], recent: list[str], api_key: str, model: str) -
 
 
 _NUMBER_RE = re.compile(r'\d[\d,]*(?:\.\d+)?')
+# Tina never guesses anyone's pronouns from their name
+_GENDERED_RE = re.compile(r"\b(he|she|him|her|his|hers|himself|herself)\b", re.I)
 
 
 def check_line(line: str, fact: dict, staff_first_names: set[str]) -> str | None:
@@ -431,6 +434,8 @@ def check_line(line: str, fact: dict, staff_first_names: set[str]) -> str | None
     for num in _NUMBER_RE.findall(line):
         if num.rstrip('.,') not in allowed:
             return f'number {num} not in fact'
+    if _GENDERED_RE.search(line):
+        return 'uses he/she for a person'
     allowed_name = (fact.get('name') or '').lower()
     for word in re.findall(r"[A-Z][a-z']+", line):
         w = word.lower().removesuffix("'s")
