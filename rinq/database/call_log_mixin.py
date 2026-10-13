@@ -51,6 +51,31 @@ STALE_RINGING_SWEEP_SQL = """
 # Statuses that count as "a person picked up" for a caller.
 ANSWERED_STATUSES = ('answered', 'completed', 'transferred')
 
+# Rows that are one real call each. call_log has a row per call LEG, so leave out:
+# - the customer's leg of an outbound call (agent_email NULL; the staff member's
+#   leg is the call) — counting both doubled every outbound call
+# - transfer credit rows (call_type 'transfer') and the blind-transfer target
+#   leg (conference '..._xfer') — the same customer call, already counted
+ONE_ROW_PER_CALL_SQL = (
+    "NOT (direction = 'outbound' AND agent_email IS NULL)"
+    " AND COALESCE(call_type, '') <> 'transfer'"
+    " AND COALESCE(conference_name, '') NOT LIKE '%\\_xfer' ESCAPE '\\'"
+)
+
+# Talk time for reporting. talk_seconds is uncapped: a call whose hang-up was
+# never seen got closed much later with all that time counted (87 rows, the
+# worst 1,733 hours, none after 2026-07-30) — anything over 4 hours counts as
+# 0. On outbound calls it is the staff leg's whole duration, so it includes the
+# ringing before the customer picked up (~13s a call); capping it at the time
+# actually connected (answered_at -> ended_at) removes that. For inbound calls
+# the two already agree.
+TALK_SQL = (
+    "(CASE WHEN talk_seconds IS NULL OR talk_seconds > 14400 THEN 0"
+    " WHEN answered_at IS NOT NULL AND ended_at IS NOT NULL AND ended_at >= answered_at"
+    " THEN MIN(talk_seconds, CAST((julianday(ended_at) - julianday(answered_at)) * 86400 AS INTEGER))"
+    " ELSE talk_seconds END)"
+)
+
 
 class CallLogMixin:
     """Call logging, history, and call-log-based reporting queries."""
@@ -367,7 +392,7 @@ class CallLogMixin:
     def get_call_log_stats(self, start_utc: str, end_utc: str, queue_name: str = None, queue_names: list = None, agent_emails: list = None, team_emails: list = None) -> dict:
         """Get call statistics from call_log for a UTC timestamp range."""
         with self._get_conn() as conn:
-            where = "started_at >= ? AND started_at <= ?"
+            where = f"started_at >= ? AND started_at <= ? AND {ONE_ROW_PER_CALL_SQL}"
             params = [start_utc, end_utc]
             if team_emails:
                 filter_clause, filter_params = self._build_team_filter(team_emails)
@@ -384,9 +409,9 @@ class CallLogMixin:
                     SUM(CASE WHEN status IN ('answered', 'completed', 'transferred') THEN 1 ELSE 0 END) as answered_calls,
                     SUM(CASE WHEN status IN ('abandoned', 'missed') THEN 1 ELSE 0 END) as abandoned_calls,
                     SUM(CASE WHEN status = 'voicemail' THEN 1 ELSE 0 END) as timeout_calls,
-                    SUM(COALESCE(talk_seconds, 0)) as total_duration_seconds,
+                    SUM({TALK_SQL}) as total_duration_seconds,
                     SUM(COALESCE(ring_seconds, 0)) as total_wait_seconds,
-                    AVG(CASE WHEN status IN ('answered', 'completed', 'transferred') THEN talk_seconds END) as avg_duration_seconds,
+                    AVG(CASE WHEN status IN ('answered', 'completed', 'transferred') THEN NULLIF({TALK_SQL}, 0) END) as avg_duration_seconds,
                     AVG(CASE WHEN status IN ('answered', 'completed', 'transferred') THEN ring_seconds END) as avg_answered_wait_seconds,
                     MAX(CASE WHEN status IN ('answered', 'completed', 'transferred') THEN ring_seconds END) as max_answered_wait_seconds,
                     AVG(CASE WHEN status IN ('abandoned', 'missed') THEN ring_seconds END) as avg_abandoned_wait_seconds,
@@ -651,6 +676,8 @@ class CallLogMixin:
             # Exclude auto-ring attempts (outbound calls with no talk time
             # that ended as missed/no-answer — these are queue ring attempts, not real calls)
             real_call_where = where + " AND NOT (direction = 'outbound' AND status IN ('missed', 'abandoned') AND (talk_seconds IS NULL OR talk_seconds = 0))"
+            # Extension-to-extension calls are colleagues, not customers
+            real_call_where += " AND direction <> 'internal'"
 
             rows = conn.execute(f"""
                 SELECT agent_email, COUNT(*) as total_calls,
@@ -659,12 +686,12 @@ class CallLogMixin:
                     SUM(CASE WHEN status IN ('answered', 'completed', 'transferred') THEN 1 ELSE 0 END) as answered_calls,
                     SUM(CASE WHEN direction = 'inbound' AND status IN ('answered', 'completed', 'transferred') THEN 1 ELSE 0 END) as inbound_answered,
                     SUM(CASE WHEN direction = 'inbound' AND status IN ('abandoned', 'missed') THEN 1 ELSE 0 END) as missed_calls,
-                    SUM(COALESCE(talk_seconds, 0)) as total_duration_seconds,
-                    SUM(CASE WHEN direction = 'inbound' THEN COALESCE(talk_seconds, 0) ELSE 0 END) as inbound_duration_seconds,
-                    SUM(CASE WHEN direction = 'outbound' THEN COALESCE(talk_seconds, 0) ELSE 0 END) as outbound_duration_seconds,
-                    AVG(CASE WHEN talk_seconds > 0 THEN talk_seconds END) as avg_duration_seconds,
-                    AVG(CASE WHEN direction = 'inbound' AND talk_seconds > 0 THEN talk_seconds END) as inbound_avg_duration_seconds,
-                    AVG(CASE WHEN direction = 'outbound' AND talk_seconds > 0 THEN talk_seconds END) as outbound_avg_duration_seconds
+                    SUM({TALK_SQL}) as total_duration_seconds,
+                    SUM(CASE WHEN direction = 'inbound' THEN {TALK_SQL} ELSE 0 END) as inbound_duration_seconds,
+                    SUM(CASE WHEN direction = 'outbound' THEN {TALK_SQL} ELSE 0 END) as outbound_duration_seconds,
+                    AVG(NULLIF({TALK_SQL}, 0)) as avg_duration_seconds,
+                    AVG(CASE WHEN direction = 'inbound' THEN NULLIF({TALK_SQL}, 0) END) as inbound_avg_duration_seconds,
+                    AVG(CASE WHEN direction = 'outbound' THEN NULLIF({TALK_SQL}, 0) END) as outbound_avg_duration_seconds
                 FROM call_log WHERE {real_call_where}
                 GROUP BY agent_email ORDER BY total_calls DESC
             """, params).fetchall()
@@ -802,7 +829,7 @@ class CallLogMixin:
         with self._get_conn() as conn:
             # Get recent calls (both directions)
             # Use LIKE with % to match partial numbers (handles format variations)
-            cursor = conn.execute("""
+            cursor = conn.execute(f"""
                 SELECT
                     call_sid,
                     direction,
@@ -813,7 +840,7 @@ class CallLogMixin:
                     customer_name,
                     queue_name
                 FROM call_log
-                WHERE from_number LIKE ? OR to_number LIKE ?
+                WHERE (from_number LIKE ? OR to_number LIKE ?) AND {ONE_ROW_PER_CALL_SQL}
                 ORDER BY started_at DESC
                 LIMIT ?
             """, (f'%{core_number}%', f'%{core_number}%', limit))
@@ -821,9 +848,9 @@ class CallLogMixin:
             calls = [dict(row) for row in cursor.fetchall()]
 
             # Get total count
-            cursor = conn.execute("""
+            cursor = conn.execute(f"""
                 SELECT COUNT(*) FROM call_log
-                WHERE from_number LIKE ? OR to_number LIKE ?
+                WHERE (from_number LIKE ? OR to_number LIKE ?) AND {ONE_ROW_PER_CALL_SQL}
             """, (f'%{core_number}%', f'%{core_number}%'))
             total = cursor.fetchone()[0]
 

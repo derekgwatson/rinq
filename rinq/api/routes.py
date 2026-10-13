@@ -3249,6 +3249,19 @@ def outbound_customer_status():
     # Mark participant as left on any terminal state
     if call_status in ('completed', 'busy', 'no-answer', 'failed', 'canceled'):
         _handle_participant_left(customer_call_sid, db)
+        # Close the customer leg's own call_log row. Nothing else ever did, so
+        # it sat 'ringing' until the stale sweep stamped it 'missed' and every
+        # outbound call looked like a missed call wherever both legs counted.
+        # A PSTN leg only reaches 'completed' if it was answered.
+        leg_status = {'completed': 'answered', 'busy': 'busy', 'no-answer': 'missed',
+                      'failed': 'failed', 'canceled': 'abandoned'}[call_status]
+        try:
+            db.update_call_log(customer_call_sid, {
+                'status': leg_status,
+                'ended_at': 'CURRENT_TIMESTAMP',
+            })
+        except Exception as e:
+            logger.warning(f"Could not close customer leg {customer_call_sid}: {e}")
 
     # Terminal failure states — customer didn't answer
     if call_status in ('busy', 'no-answer', 'failed', 'canceled'):
