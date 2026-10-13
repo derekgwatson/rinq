@@ -6116,3 +6116,9 @@ _register_staff_routes(api_bp)
 # =============================================================================
 from rinq.api.export_routes import register as _register_export_routes
 _register_export_routes(api_bp)
+
+# =============================================================================
+# Tina Says — daily one-liner on the phone page (tina_says_routes.py)
+# =============================================================================
+from rinq.api.tina_says_routes import register as _register_tina_says_routes
+_register_tina_says_routes(api_bp)
