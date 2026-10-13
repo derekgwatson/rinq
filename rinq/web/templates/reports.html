@@ -779,7 +779,7 @@
 {% endif %}
 
 <!-- Agent Stats - Inbound -->
-{% set inbound_agents = report.agent_stats | selectattr('inbound_calls', 'gt', 0) | list %}
+{% set inbound_agents = report.agent_stats | selectattr('inbound_answered', 'gt', 0) | list %}
 {% if inbound_agents %}
 <div class="section-header">
     <h3>Agent Performance — Inbound</h3>
@@ -794,7 +794,7 @@
         </tr>
     </thead>
     <tbody>
-        {% set max_inbound = inbound_agents | map(attribute='inbound_calls') | max %}
+        {% set max_inbound = inbound_agents | map(attribute='inbound_answered') | max %}
         {% for agent in inbound_agents %}
         <tr>
             <td>
@@ -803,10 +803,10 @@
             </td>
             <td>
                 <div class="bar-container">
-                    <span class="bar-value">{{ agent.inbound_calls }}</span>
+                    <span class="bar-value">{{ agent.inbound_answered }}</span>
                     <div class="bar-track">
                         {% if max_inbound > 0 %}
-                        <div class="bar-fill answered" style="width: {{ (agent.inbound_calls / max_inbound * 100) | round(1) }}%;"></div>
+                        <div class="bar-fill answered" style="width: {{ (agent.inbound_answered / max_inbound * 100) | round(1) }}%;"></div>
                         {% endif %}
                     </div>
                 </div>

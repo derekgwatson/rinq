@@ -1638,8 +1638,18 @@ def leaderboard():
     period = request.args.get('period', 'today')
     user = get_current_user()
 
+    # Current staff only — unscoped, former staff stayed on the board forever
+    staff_emails = None
+    try:
+        from rinq.integrations import get_staff_directory
+        staff_dir = get_staff_directory()
+        if staff_dir:
+            staff_emails = [s.get('email') for s in staff_dir.get_active_staff() if s.get('email')] or None
+    except Exception as e:
+        logger.warning(f"Leaderboard: couldn't load staff list, showing everyone: {e}")
+
     service = get_reporting_service()
-    report_data = service.get_report_data(period)
+    report_data = service.get_report_data(period, team_emails=staff_emails)
 
     agents = report_data.get('agent_stats', [])
 
