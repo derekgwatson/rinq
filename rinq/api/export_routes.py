@@ -309,7 +309,7 @@ a spreadsheet or in pandas may not. Filter explicitly.
 | `parent_call_sid` | Set on transfer rows, pointing at the primary row for that call. Empty on primary rows |
 | `direction` | `inbound` or `outbound` |
 | `call_type` | `direct`, `queue`, `transfer`, `voicemail`, `forwarded` |
-| `status` | `answered`, `completed`, `transferred`, `abandoned`, `missed`, `voicemail`, `busy`, `failed`, `no-answer` |
+| `status` | `answered`, `completed`, `transferred`, `abandoned`, `missed`, `ended_early`, `voicemail`, `callback`, `busy`, `failed`, `no-answer`. Inbound `ended_early` = hung up before reaching the queue or anyone (welcome message, menu, direct line ringing); recorded from 2026-10-14 — before that those calls were stamped `missed`. Inbound `voicemail` means sent to voicemail; whether a message was left is in the voicemail recordings |
 | `agent_email` | Who handled it. Desk phone calls may appear as a `sip:` identity |
 | `queue_name` | Queue the call came through, empty if it did not |
 | `started_at` / `answered_at` / `ended_at` | UTC timestamps, empty if the call never reached that state |

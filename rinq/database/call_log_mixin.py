@@ -9,6 +9,33 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
+# A row still 'ringing' after 2 minutes was never touched by any later handler.
+# For an INBOUND call that means the caller hung up before anything happened:
+# during the welcome message or a menu, or while a direct line rang. Twilio
+# sends no status callback for those (the numbers have none configured), so
+# this sweep is the only place the outcome is ever written. It used to stamp
+# them 'missed', which read as "nobody answered" — they never reached anyone
+# who could have. 'ended_early' was introduced 2026-10-14; older swept rows
+# are still 'missed'.
+# A caller WAITING in a queue is also still 'ringing' in call_log (the main
+# queue path never changes it), so they're skipped while queued_calls says
+# they're waiting — the queue-leave handler writes their real outcome. Before
+# this they were swept at 2 minutes (wrong label + ended_at mid-wait) and only
+# corrected when they left the queue.
+STALE_RINGING_SWEEP_SQL = """
+    UPDATE call_log
+    SET status = CASE WHEN direction = 'inbound' THEN 'ended_early' ELSE 'missed' END,
+        ended_at = datetime('now'),
+        updated_at = datetime('now')
+    WHERE ended_at IS NULL
+      AND status = 'ringing'
+      AND started_at < datetime('now', '-2 minutes')
+      AND call_sid NOT IN (SELECT call_sid FROM queued_calls WHERE status = 'waiting')
+"""
+
+# Statuses that count as "a person picked up" for a caller.
+ANSWERED_STATUSES = ('answered', 'completed', 'transferred')
+
 
 class CallLogMixin:
     """Call logging, history, and call-log-based reporting queries."""
@@ -158,14 +185,7 @@ class CallLogMixin:
             # - Ringing > 2 min is impossible (Twilio gives up sooner)
             # - Answered calls > 2 hours old without ended_at are stale
             #   (status callback likely never fired for transferred/SIP calls)
-            conn.execute("""
-                UPDATE call_log
-                SET status = 'missed', ended_at = datetime('now'),
-                    updated_at = datetime('now')
-                WHERE ended_at IS NULL
-                  AND status = 'ringing'
-                  AND started_at < datetime('now', '-2 minutes')
-            """)
+            conn.execute(STALE_RINGING_SWEEP_SQL)
             conn.execute("""
                 UPDATE call_log
                 SET status = 'completed', ended_at = datetime('now'),
@@ -215,14 +235,7 @@ class CallLogMixin:
         """
         with self._get_conn() as conn:
             # Always clean up stale ringing calls regardless
-            conn.execute("""
-                UPDATE call_log
-                SET status = 'missed', ended_at = datetime('now'),
-                    updated_at = datetime('now')
-                WHERE ended_at IS NULL
-                  AND status = 'ringing'
-                  AND started_at < datetime('now', '-2 minutes')
-            """)
+            conn.execute(STALE_RINGING_SWEEP_SQL)
             conn.commit()
 
             # Close calls that Twilio says are no longer active
@@ -401,6 +414,112 @@ class CallLogMixin:
                     'over_90s': row['over_90s'] or 0,
                 },
             }
+
+    def get_caller_outcomes(self, start_utc: str, end_utc: str, tz_offset_hours: int = 11) -> dict:
+        """What happened to every person who rang in, whoever (if anyone) took it.
+
+        The team-scoped stats above can only see calls with a staff member on
+        them, so every caller nobody answered was invisible and the answer rate
+        read ~99%. This counts callers instead: one row per inbound call,
+        excluding the extra rows a transfer creates (agent credit rows and the
+        blind-transfer target leg, conference '..._xfer'). Unscoped — only for
+        viewers allowed to see the whole company.
+
+        Outcomes:
+          answered        — a person picked up
+          voicemail_msg   — sent to voicemail and a message was recorded
+          voicemail_none  — sent to voicemail, no message (status 'voicemail'
+                            is set when the caller is SENT there)
+          callback        — asked (from the queue) to be called back
+          hung_up_waiting — hung up while waiting in the queue ('abandoned')
+          ended_early     — hung up before reaching the queue or anyone
+          not_recorded    — 'missed' and anything else. Until 2026-10-14 the
+                            stale sweep stamped early hang-ups 'missed', so
+                            history can't be told apart from a genuine ring-out
+          in_progress     — still ringing/queued; left out of the percentages
+        """
+        answered = "','".join(ANSWERED_STATUSES)
+        with self._get_conn() as conn:
+            outcome = f"""
+                CASE
+                    WHEN c.status IN ('ringing', 'queued') AND c.ended_at IS NULL THEN 'in_progress'
+                    WHEN c.status IN ('{answered}') THEN 'answered'
+                    WHEN c.status = 'voicemail' AND vm.call_sid IS NOT NULL THEN 'voicemail_msg'
+                    WHEN c.status = 'voicemail' THEN 'voicemail_none'
+                    WHEN c.status = 'callback' THEN 'callback'
+                    WHEN c.status = 'abandoned' THEN 'hung_up_waiting'
+                    WHEN c.status = 'ended_early' THEN 'ended_early'
+                    ELSE 'not_recorded'
+                END
+            """
+            rows = conn.execute(f"""
+                SELECT CAST((strftime('%H', c.started_at) + {int(tz_offset_hours)}) % 24 AS INTEGER) AS hour,
+                       {outcome} AS outcome,
+                       c.ring_seconds
+                FROM call_log c
+                LEFT JOIN (
+                    SELECT DISTINCT call_sid FROM recording_log
+                    WHERE call_type = 'voicemail' AND created_at >= datetime(?, '-1 day')
+                ) vm ON vm.call_sid = c.call_sid
+                WHERE c.started_at >= ? AND c.started_at <= ?
+                  AND c.direction = 'inbound'
+                  AND COALESCE(c.call_type, '') <> 'transfer'
+                  AND COALESCE(c.conference_name, '') NOT LIKE '%\\_xfer' ESCAPE '\\'
+            """, [start_utc, start_utc, end_utc]).fetchall()
+
+        keys = ('answered', 'voicemail_msg', 'voicemail_none', 'callback', 'hung_up_waiting',
+                'ended_early', 'not_recorded', 'in_progress')
+        counts = {k: 0 for k in keys}
+        hourly = {h: {'answered': 0, 'voicemail': 0, 'not_through': 0} for h in range(24)}
+        answered_waits, abandoned_waits = [], []
+        for r in rows:
+            o = r['outcome']
+            counts[o] += 1
+            if o == 'in_progress':
+                continue
+            bucket = ('answered' if o == 'answered'
+                      else 'voicemail' if o.startswith('voicemail') or o == 'callback'
+                      else 'not_through')
+            hourly[r['hour']][bucket] += 1
+            if r['ring_seconds'] is not None:
+                if o == 'answered':
+                    answered_waits.append(r['ring_seconds'])
+                elif o == 'hung_up_waiting':
+                    abandoned_waits.append(r['ring_seconds'])
+
+        callers = sum(v for k, v in counts.items() if k != 'in_progress')
+
+        def pct(n):
+            return round(n / callers * 100, 1) if callers else 0
+
+        # A callback request is a message left another way — same card
+        voicemail = counts['voicemail_msg'] + counts['voicemail_none'] + counts['callback']
+        not_through = counts['ended_early'] + counts['not_recorded']
+        return {
+            'callers': callers,
+            'in_progress': counts['in_progress'],
+            'answered': counts['answered'],
+            'answered_pct': pct(counts['answered']),
+            'voicemail': voicemail,
+            'voicemail_pct': pct(voicemail),
+            'voicemail_with_message': counts['voicemail_msg'],
+            'callback_requests': counts['callback'],
+            'hung_up_waiting': counts['hung_up_waiting'],
+            'hung_up_waiting_pct': pct(counts['hung_up_waiting']),
+            'not_through': not_through,
+            'not_through_pct': pct(not_through),
+            'ended_early': counts['ended_early'],
+            'not_recorded': counts['not_recorded'],
+            'avg_answered_wait_seconds': int(sum(answered_waits) / len(answered_waits)) if answered_waits else 0,
+            'max_answered_wait_seconds': max(answered_waits, default=0),
+            'avg_abandoned_wait_seconds': int(sum(abandoned_waits) / len(abandoned_waits)) if abandoned_waits else 0,
+            'max_abandoned_wait_seconds': max(abandoned_waits, default=0),
+            'hourly': [
+                {'hour': h, 'label': f"{h:02d}:00", **hourly[h],
+                 'total_calls': sum(hourly[h].values())}
+                for h in range(24)
+            ],
+        }
 
     def get_call_log_by_agent(self, start_utc: str, end_utc: str, queue_name: str = None,
                               queue_names: list = None, agent_emails: list = None,
