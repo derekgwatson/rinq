@@ -1618,7 +1618,8 @@ def reports():
     team_emails, team_label = resolve_visible_emails(user)
 
     service = get_reporting_service()
-    report_data = service.get_report_data(period, team_emails=team_emails)
+    report_data = service.get_report_data(period, team_emails=team_emails,
+                                          include_all_callers=user.is_manager)
 
     return render_template('reports.html',
                          report=report_data,

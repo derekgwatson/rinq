@@ -26,7 +26,8 @@ class ReportingService:
         return get_db()
 
     def get_report_data(self, period: str = 'today', queue_name: str = None, queue_names: list = None,
-                        agent_emails: list = None, team_emails: list = None) -> dict:
+                        agent_emails: list = None, team_emails: list = None,
+                        include_all_callers: bool = False) -> dict:
         """Get complete report data for a time period.
 
         Args:
@@ -37,6 +38,9 @@ class ReportingService:
             agent_emails: Optional list of agent emails to include outbound calls for
             team_emails: Optional list of team member emails (from Peter's manager
                         reportees). Used for agent stats independently of queue filtering.
+            include_all_callers: Also count every inbound caller, answered or not
+                        (report['callers']). Only for viewers who may see the whole
+                        company — unanswered callers belong to no staff member.
 
         Returns:
             Dict with summary, agent_stats, queue_stats, hourly_distribution
@@ -63,6 +67,11 @@ class ReportingService:
         hourly = self.db.get_call_log_hourly(start_utc, end_utc, tz_offset_hours, queue_name=queue_name, queue_names=queue_names,
                                              agent_emails=agent_emails, team_emails=team_emails)
 
+        # Every caller, answered or not — the team-scoped summary above only
+        # sees calls with a staff member on them
+        callers = (self.db.get_caller_outcomes(start_utc, end_utc, tz_offset_hours)
+                   if include_all_callers else None)
+
         # Queue stats still come from queued_calls for queue-specific metrics
         if is_today:
             queue_stats = self.db.get_realtime_queue_stats_today()
@@ -85,6 +94,7 @@ class ReportingService:
             'end_date': end_date,
             'is_today': is_today,
             'summary': summary,
+            'callers': callers,
             'agent_stats': agent_stats,
             'queue_stats': queue_stats,
             'hourly': hourly,

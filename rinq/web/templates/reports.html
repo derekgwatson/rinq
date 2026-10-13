@@ -542,7 +542,7 @@
     </div>
 </div>
 
-{% if report.summary.total_calls == 0 %}
+{% if report.summary.total_calls == 0 and not (report.callers and (report.callers.callers or report.callers.in_progress)) %}
 <!-- Empty State -->
 <div class="empty-state">
     <div class="icon">📊</div>
@@ -552,10 +552,57 @@
 
 {% else %}
 <!-- Summary Cards -->
+{% if report.callers %}
+{% set c = report.callers %}
+<!-- Every caller, answered or not. Rates are % of incoming calls. -->
+<div class="summary-grid">
+    <div class="summary-card primary">
+        <div class="value">{{ c.callers }}</div>
+        <div class="label">Incoming Calls</div>
+        <div style="font-size: 0.75em; color: rgba(255,255,255,0.8); margin-top: 4px;">
+            {{ report.summary.outbound_calls }} outgoing by staff{% if c.in_progress %} · {{ c.in_progress }} in progress{% endif %}
+        </div>
+    </div>
+    <div class="summary-card" title="A team member picked up">
+        <div class="value">{{ c.answered }}</div>
+        <div class="label">Answered</div>
+        <span class="rate {% if c.answered_pct >= 80 %}good{% elif c.answered_pct >= 60 %}warning{% else %}danger{% endif %}">
+            {{ c.answered_pct }}%
+        </span>
+    </div>
+    <div class="summary-card" title="Went to voicemail (by choice or after waiting the queue's maximum), or asked for a callback">
+        <div class="value">{{ c.voicemail }}</div>
+        <div class="label">Voicemail</div>
+        <span class="rate">{{ c.voicemail_pct }}%</span>
+        <div style="font-size: 0.75em; color: #6c757d; margin-top: 6px;">
+            {{ c.voicemail_with_message }} left a message{% if c.callback_requests %} · {{ c.callback_requests }} callback{{ 's' if c.callback_requests != 1 }}{% endif %}
+        </div>
+    </div>
+    <div class="summary-card" title="Hung up while waiting in the queue">
+        <div class="value">{{ c.hung_up_waiting }}</div>
+        <div class="label">Hung Up Waiting</div>
+        <span class="rate {% if c.hung_up_waiting_pct <= 5 %}good{% elif c.hung_up_waiting_pct <= 10 %}warning{% else %}danger{% endif %}">
+            {{ c.hung_up_waiting_pct }}%
+        </span>
+    </div>
+    <div class="summary-card" title="Hung up before reaching the queue or anyone — during the welcome message or a menu, or while a direct line rang. Before 14 Oct 2026 Tina didn't record what happened to these calls, so older ones show as 'outcome not recorded'.">
+        <div class="value">{{ c.not_through }}</div>
+        <div class="label">Hung Up Early</div>
+        <span class="rate">{{ c.not_through_pct }}%</span>
+        {% if c.not_recorded %}
+        <div style="font-size: 0.75em; color: #6c757d; margin-top: 6px;">
+            {{ c.not_recorded }} outcome not recorded
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% else %}
+<!-- Calls this person/team handled. Callers nobody answered belong to no one,
+     so answer rates are only shown on the All Staff view. -->
 <div class="summary-grid">
     <div class="summary-card primary">
         <div class="value">{{ report.summary.total_calls }}</div>
-        <div class="label">Total Calls</div>
+        <div class="label">Calls Handled</div>
         <div style="font-size: 0.75em; color: rgba(255,255,255,0.8); margin-top: 4px;">
             {{ report.summary.inbound_calls }} in / {{ report.summary.outbound_calls }} out
         </div>
@@ -563,25 +610,12 @@
     <div class="summary-card">
         <div class="value">{{ report.summary.answered_calls }}</div>
         <div class="label">Answered</div>
-        <span class="rate {% if report.summary.answer_rate >= 80 %}good{% elif report.summary.answer_rate >= 60 %}warning{% else %}danger{% endif %}">
-            {{ report.summary.answer_rate }}%
-        </span>
-    </div>
-    <div class="summary-card">
-        <div class="value">{{ report.summary.abandoned_calls }}</div>
-        <div class="label">Abandoned</div>
-        <span class="rate {% if report.summary.abandoned_rate <= 5 %}good{% elif report.summary.abandoned_rate <= 10 %}warning{% else %}danger{% endif %}">
-            {{ report.summary.abandoned_rate }}%
-        </span>
-    </div>
-    <div class="summary-card">
-        <div class="value">{{ report.summary.timeout_calls }}</div>
-        <div class="label">Timed Out</div>
-        <span class="rate {% if report.summary.timeout_rate <= 10 %}good{% elif report.summary.timeout_rate <= 20 %}warning{% else %}danger{% endif %}">
-            {{ report.summary.timeout_rate }}%
-        </span>
     </div>
 </div>
+<p style="color: #6c757d; font-size: 0.85em; margin: -18px 0 24px;">
+    Callers nobody answered aren't linked to a person, so they only appear in the company-wide view.
+</p>
+{% endif %}
 
 <!-- Time Stats -->
 <div class="time-stats">
@@ -609,27 +643,29 @@
 </div>
 <div class="wait-cards">
     <div class="wait-card answered">
+        {% set w = report.callers if report.callers else report.summary %}
         <h4>Answered Calls</h4>
         <div class="wait-values">
             <div class="wait-metric">
-                <div class="time">{{ format_wait_time(report.summary.avg_answered_wait_seconds) }}</div>
+                <div class="time">{{ format_wait_time(w.avg_answered_wait_seconds) }}</div>
                 <div class="desc">Average Wait</div>
             </div>
             <div class="wait-metric">
-                <div class="time">{{ format_wait_time(report.summary.max_answered_wait_seconds) }}</div>
+                <div class="time">{{ format_wait_time(w.max_answered_wait_seconds) }}</div>
                 <div class="desc">Longest Wait</div>
             </div>
         </div>
     </div>
     <div class="wait-card abandoned">
-        <h4>Abandoned Calls</h4>
+        {% set w = report.callers if report.callers else report.summary %}
+        <h4>{{ 'Hung Up Waiting' if report.callers else 'Abandoned Calls' }}</h4>
         <div class="wait-values">
             <div class="wait-metric">
-                <div class="time">{{ format_wait_time(report.summary.avg_abandoned_wait_seconds) }}</div>
+                <div class="time">{{ format_wait_time(w.avg_abandoned_wait_seconds) }}</div>
                 <div class="desc">Average Wait</div>
             </div>
             <div class="wait-metric">
-                <div class="time">{{ format_wait_time(report.summary.max_abandoned_wait_seconds) }}</div>
+                <div class="time">{{ format_wait_time(w.max_abandoned_wait_seconds) }}</div>
                 <div class="desc">Longest Wait</div>
             </div>
         </div>
@@ -694,6 +730,28 @@
 <div class="section-header">
     <h3>Calls by Hour</h3>
 </div>
+{% if report.callers %}
+{% set max_h = report.callers.hourly | map(attribute='total_calls') | max %}
+<div class="hourly-chart">
+    {% for hour in report.callers.hourly %}
+    <div class="hourly-bar">
+        <div class="hourly-bar-stack">
+            {% if max_h > 0 %}
+            <div class="hourly-bar-segment answered" style="height: {{ (hour.answered / max_h * 100) | round(1) }}%;"></div>
+            <div class="hourly-bar-segment abandoned" style="height: {{ (hour.not_through / max_h * 100) | round(1) }}%;"></div>
+            <div class="hourly-bar-segment timeout" style="height: {{ (hour.voicemail / max_h * 100) | round(1) }}%;"></div>
+            {% endif %}
+        </div>
+        <div class="hourly-label">{{ hour.label[:2] }}</div>
+    </div>
+    {% endfor %}
+</div>
+<div class="queue-legend" style="justify-content: center;">
+    <div class="legend-item"><div class="legend-dot answered"></div> Answered</div>
+    <div class="legend-item"><div class="legend-dot abandoned"></div> Hung up (waiting or early)</div>
+    <div class="legend-item"><div class="legend-dot timeout"></div> Voicemail</div>
+</div>
+{% else %}
 <div class="hourly-chart">
     {% for hour in report.hourly %}
     <div class="hourly-bar">
@@ -713,6 +771,7 @@
     <div class="legend-item"><div class="legend-dot abandoned"></div> Abandoned</div>
     <div class="legend-item"><div class="legend-dot timeout"></div> Timed Out</div>
 </div>
+{% endif %}
 
 <!-- Agent Stats - Inbound -->
 {% set inbound_agents = report.agent_stats | selectattr('inbound_calls', 'gt', 0) | list %}
