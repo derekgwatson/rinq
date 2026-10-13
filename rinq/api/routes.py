@@ -33,6 +33,10 @@ from rinq.tenant.context import get_current_tenant, get_twilio_config
 
 logger = logging.getLogger(__name__)
 
+# A call recorded as one of these was never answered. Later hang-up signals
+# (the browser's call-ended, Twilio's 'completed') must not turn it into one.
+NOT_ANSWERED_STATUSES = ('missed', 'busy', 'failed', 'abandoned')
+
 api_bp = Blueprint('api', __name__)
 
 
@@ -2225,7 +2229,8 @@ def call_status_callback():
         # otherwise clobber the accurate missed/voicemail status.
         if mapped_status == 'answered':
             existing = db.get_call_log_field(call_sid, 'status')
-            if existing in ('missed', 'voicemail'):
+            # Same for an outbound call the customer never picked up
+            if existing in NOT_ANSWERED_STATUSES or existing == 'voicemail':
                 mapped_status = existing
 
         # Complete the call in call_log
@@ -4655,16 +4660,25 @@ def voice_call_ended():
         # during consult kills the customer") can resurface with no trace.
         logger.warning(f"voice_call_ended consult-guard check failed for {call_sid}: {e}")
 
-    db.complete_call(call_sid=call_sid, status='answered')
+    # The outbound customer-status callback may already have recorded that
+    # the customer never picked up (no-answer/busy/failed/cancelled). The
+    # browser's own hang-up arrives after that and used to stamp the call
+    # 'answered' anyway — and credit the ringing as talk time — on ~6% of
+    # unanswered outgoing calls (found by the weekly Twilio cross-check,
+    # 2026-10-13). A recorded non-answer stays a non-answer.
+    existing = db.get_call_log_field(call_sid, 'status')
+    final_status = existing if existing in NOT_ANSWERED_STATUSES else 'answered'
+    db.complete_call(call_sid=call_sid, status=final_status)
 
-    # Credit all conference participants with their actual talk time.
-    # For outbound calls this corrects the primary agent's time if they
-    # transferred mid-call, and creates entries for any additional agents.
-    conf = db.get_call_log_field(call_sid, 'conference_name') or f'call_{call_sid}'
-    _credit_conference_participants(conf, call_sid, db)
+    if final_status == 'answered':
+        # Credit all conference participants with their actual talk time.
+        # For outbound calls this corrects the primary agent's time if they
+        # transferred mid-call, and creates entries for any additional agents.
+        conf = db.get_call_log_field(call_sid, 'conference_name') or f'call_{call_sid}'
+        _credit_conference_participants(conf, call_sid, db)
 
     _handle_participant_left(call_sid, db)
-    logger.info(f"Call ended (browser signal): {call_sid}")
+    logger.info(f"Call ended (browser signal): {call_sid} ({final_status})")
     return jsonify({"success": True})
 
 
@@ -6122,3 +6136,9 @@ _register_export_routes(api_bp)
 # =============================================================================
 from rinq.api.tina_says_routes import register as _register_tina_says_routes
 _register_tina_says_routes(api_bp)
+
+# =============================================================================
+# Weekly Tina-vs-Twilio cross-check (cross_check_routes.py)
+# =============================================================================
+from rinq.api.cross_check_routes import register as _register_cross_check_routes
+_register_cross_check_routes(api_bp)
