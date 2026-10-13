@@ -3679,6 +3679,11 @@ function hangupCall() {
     // is enabled server-side.)
     sendLegIntent(callSid);
 
+    // The agent ended this call, so endCall() must not report "Caller hung
+    // up". Set before disconnect(): the SDK's disconnect listener can run
+    // endCall() before we reach our own call below. endCall() consumes it.
+    _agentHungUp = true;
+
     if (currentCall) {
         currentCall.disconnect();
     }
@@ -3808,6 +3813,8 @@ function endCall() {
     const wasOutbound = !!currentOutboundCallSid;
     const wasQueue = !!currentQueueCallerSid;
     const queueDurationSecs = callSeconds;
+    const agentHungUp = _agentHungUp;
+    _agentHungUp = false;
     const dialedNumber = wasOutbound ? (callNumber.textContent || phoneNumber || '') : '';
     if (endSid) {
         fetch('/api/voice/call-ended', {
@@ -3898,8 +3905,9 @@ function endCall() {
     }
 
     // Show feedback for queue calls that ended very quickly — caller hung up
-    // before or shortly after connection. Normal calls don't need this notice.
-    if (wasQueue && !wasOutbound && queueDurationSecs < 15) {
+    // before or shortly after connection. Normal calls don't need this notice,
+    // and neither does a call the agent ended themselves.
+    if (wasQueue && !wasOutbound && !agentHungUp && queueDurationSecs < 15) {
         showOutboundOutcome('Caller hung up', '');
         setStatus('Caller hung up', 'offline');
         setTimeout(() => { if (!currentCall) setStatus('Ready', 'ready'); }, 4000);
@@ -4813,6 +4821,8 @@ let consultTargetAnswered = false;
 // Set by cancelTransfer() on success so endCall() doesn't mistake an
 // incidental disconnect for the customer leaving the conference.
 let _justCancelledTransfer = false;
+// True from the agent pressing hang up until endCall() runs (see hangupCall).
+let _agentHungUp = false;
 // Tracks whether opening the transfer modal auto-held the customer.
 // Closing the modal without starting a transfer restores them; starting
 // a transfer hands ownership of the hold state to the transfer flow.
