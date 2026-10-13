@@ -5617,9 +5617,23 @@ async function fetchQueueCallers() {
     }
 }
 
+// True while the browser phone is busy with a call (connected, dialling or
+// reconnecting). A pending ring is NOT busy — answering it is exactly what the
+// queue panel's Answer button does. A closed/stale call object is not busy
+// either, so a leftover reference can never lock the agent out of answering.
+function isOnActiveCall() {
+    try {
+        return !!currentCall && typeof currentCall.status === 'function'
+            && ['open', 'connecting', 'ringing', 'reconnecting'].includes(currentCall.status());
+    } catch (e) {
+        return false;
+    }
+}
+
 function renderQueueCallers(callers) {
     const waitingCallers = callers.filter(c => c.status === 'waiting');
     const count = waitingCallers.length;
+    const onCall = isOnActiveCall();
 
     // Update alert visibility and message
     if (count > 0) {
@@ -5692,8 +5706,9 @@ function renderQueueCallers(callers) {
                 <div class="caller-actions">
                     <button class="btn-answer-queue"
                             onclick="answerQueueCall('${caller.call_sid}')"
-                            ${isAnswering ? 'disabled' : ''}>
-                        ${isAnswering ? 'Connecting...' : 'Answer'}
+                            ${isAnswering || onCall ? 'disabled' : ''}
+                            ${onCall && !isAnswering ? 'title="Finish your current call first"' : ''}>
+                        ${isAnswering ? 'Connecting...' : onCall ? 'On a call' : 'Answer'}
                     </button>
                 </div>
             </div>
@@ -5720,6 +5735,12 @@ function getWaitSeconds(enqueuedAt) {
 
 async function answerQueueCall(callSid) {
     if (answeringCallSid) return;  // Already answering a call
+    // Already talking to someone: the browser phone holds one call at a time,
+    // so the SDK refuses a second one anyway. Bail BEFORE touching anything —
+    // the old path painted the clicked caller onto the customer panel and
+    // reset the status to "Ready" mid-call, so the agent saw a waiting
+    // caller's details while talking to someone else (Shristi, 2026-10-13).
+    if (isOnActiveCall()) return;
     stopQueueAlert();
     if (!device) {
         showPhoneError('Browser phone not ready — please wait');
