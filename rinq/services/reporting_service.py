@@ -72,11 +72,10 @@ class ReportingService:
         callers = (self.db.get_caller_outcomes(start_utc, end_utc, tz_offset_hours)
                    if include_all_callers else None)
 
-        # Queue stats still come from queued_calls for queue-specific metrics
-        if is_today:
-            queue_stats = self.db.get_realtime_queue_stats_today()
-        else:
-            queue_stats = self.db.get_queue_stats_report(start_date, end_date)
+        # Queue table: every caller per queue, from call_log, the same way for
+        # every period. (Was queued_calls for today — purged after 24h — and
+        # daily_call_stats otherwise, which duplicated rows every 15 minutes.)
+        queue_stats = self.db.get_queue_outcomes(start_utc, end_utc)
 
         # Enrich agent stats with display names
         agent_stats = self._enrich_agent_names(agent_stats)

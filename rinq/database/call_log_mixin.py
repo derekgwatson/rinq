@@ -7,7 +7,22 @@ All methods access self._get_conn() and self._fill_hourly() from the Database ba
 import logging
 from datetime import datetime, timezone
 
+import pytz
+
 logger = logging.getLogger(__name__)
+
+# Reports are in Sydney time (same as ReportingService.LOCAL_TZ)
+_LOCAL_TZ = pytz.timezone('Australia/Sydney')
+
+
+def _local_hour(started_at: str) -> int:
+    """Local hour of a stored UTC timestamp, using that call's own date.
+
+    A fixed offset taken from 'now' puts every call on the other side of a
+    daylight-saving change in the wrong hour.
+    """
+    dt = datetime.fromisoformat(str(started_at).replace('Z', ''))
+    return pytz.UTC.localize(dt.replace(tzinfo=None)).astimezone(_LOCAL_TZ).hour
 
 # A row still 'ringing' after 2 minutes was never touched by any later handler.
 # For an INBOUND call that means the caller hung up before anything happened:
@@ -415,17 +430,11 @@ class CallLogMixin:
                 },
             }
 
-    def get_caller_outcomes(self, start_utc: str, end_utc: str, tz_offset_hours: int = 11) -> dict:
-        """What happened to every person who rang in, whoever (if anyone) took it.
+    def _caller_rows(self, start_utc: str, end_utc: str) -> list:
+        """One row per inbound caller in the range, with its outcome.
 
-        The team-scoped stats above can only see calls with a staff member on
-        them, so every caller nobody answered was invisible and the answer rate
-        read ~99%. This counts callers instead: one row per inbound call,
-        excluding the extra rows a transfer creates (agent credit rows and the
-        blind-transfer target leg, conference '..._xfer'). Unscoped — only for
-        viewers allowed to see the whole company.
-
-        Outcomes:
+        Excludes the extra rows a transfer creates (agent credit rows and the
+        blind-transfer target leg, conference '..._xfer'). Outcomes:
           answered        — a person picked up
           voicemail_msg   — sent to voicemail and a message was recorded
           voicemail_none  — sent to voicemail, no message (status 'voicemail'
@@ -440,22 +449,18 @@ class CallLogMixin:
         """
         answered = "','".join(ANSWERED_STATUSES)
         with self._get_conn() as conn:
-            outcome = f"""
-                CASE
-                    WHEN c.status IN ('ringing', 'queued') AND c.ended_at IS NULL THEN 'in_progress'
-                    WHEN c.status IN ('{answered}') THEN 'answered'
-                    WHEN c.status = 'voicemail' AND vm.call_sid IS NOT NULL THEN 'voicemail_msg'
-                    WHEN c.status = 'voicemail' THEN 'voicemail_none'
-                    WHEN c.status = 'callback' THEN 'callback'
-                    WHEN c.status = 'abandoned' THEN 'hung_up_waiting'
-                    WHEN c.status = 'ended_early' THEN 'ended_early'
-                    ELSE 'not_recorded'
-                END
-            """
-            rows = conn.execute(f"""
-                SELECT CAST((strftime('%H', c.started_at) + {int(tz_offset_hours)}) % 24 AS INTEGER) AS hour,
-                       {outcome} AS outcome,
-                       c.ring_seconds
+            return conn.execute(f"""
+                SELECT c.started_at, c.queue_id, c.queue_name, c.ring_seconds,
+                    CASE
+                        WHEN c.status IN ('ringing', 'queued') AND c.ended_at IS NULL THEN 'in_progress'
+                        WHEN c.status IN ('{answered}') THEN 'answered'
+                        WHEN c.status = 'voicemail' AND vm.call_sid IS NOT NULL THEN 'voicemail_msg'
+                        WHEN c.status = 'voicemail' THEN 'voicemail_none'
+                        WHEN c.status = 'callback' THEN 'callback'
+                        WHEN c.status = 'abandoned' THEN 'hung_up_waiting'
+                        WHEN c.status = 'ended_early' THEN 'ended_early'
+                        ELSE 'not_recorded'
+                    END AS outcome
                 FROM call_log c
                 LEFT JOIN (
                     SELECT DISTINCT call_sid FROM recording_log
@@ -467,6 +472,31 @@ class CallLogMixin:
                   AND COALESCE(c.conference_name, '') NOT LIKE '%\\_xfer' ESCAPE '\\'
             """, [start_utc, start_utc, end_utc]).fetchall()
 
+    @staticmethod
+    def _outcome_bucket(outcome: str) -> str:
+        """Three-way split used by the charts and the queue table."""
+        if outcome == 'answered':
+            return 'answered'
+        if outcome.startswith('voicemail') or outcome == 'callback':
+            return 'voicemail'
+        return 'not_through'
+
+    def get_caller_outcomes(self, start_utc: str, end_utc: str, tz_offset_hours: int = None) -> dict:
+        """What happened to every person who rang in, whoever (if anyone) took it.
+
+        The team-scoped stats above can only see calls with a staff member on
+        them, so every caller nobody answered was invisible and the answer rate
+        read ~99%. This counts callers instead (see _caller_rows for the
+        outcomes). Unscoped — only for viewers allowed to see the whole company.
+
+        Wait figures are TIME TO ANSWER: from when the call reached Tina until
+        someone picked up (or the caller hung up in the queue), so they include
+        the welcome message. tz_offset_hours is ignored — each call's hour is
+        converted with its own date, so ranges across a daylight-saving change
+        land in the right hour.
+        """
+        rows = self._caller_rows(start_utc, end_utc)
+
         keys = ('answered', 'voicemail_msg', 'voicemail_none', 'callback', 'hung_up_waiting',
                 'ended_early', 'not_recorded', 'in_progress')
         counts = {k: 0 for k in keys}
@@ -477,10 +507,7 @@ class CallLogMixin:
             counts[o] += 1
             if o == 'in_progress':
                 continue
-            bucket = ('answered' if o == 'answered'
-                      else 'voicemail' if o.startswith('voicemail') or o == 'callback'
-                      else 'not_through')
-            hourly[r['hour']][bucket] += 1
+            hourly[_local_hour(r['started_at'])][self._outcome_bucket(o)] += 1
             if r['ring_seconds'] is not None:
                 if o == 'answered':
                     answered_waits.append(r['ring_seconds'])
@@ -495,6 +522,7 @@ class CallLogMixin:
         # A callback request is a message left another way — same card
         voicemail = counts['voicemail_msg'] + counts['voicemail_none'] + counts['callback']
         not_through = counts['ended_early'] + counts['not_recorded']
+        waits = answered_waits + abandoned_waits
         return {
             'callers': callers,
             'in_progress': counts['in_progress'],
@@ -514,12 +542,65 @@ class CallLogMixin:
             'max_answered_wait_seconds': max(answered_waits, default=0),
             'avg_abandoned_wait_seconds': int(sum(abandoned_waits) / len(abandoned_waits)) if abandoned_waits else 0,
             'max_abandoned_wait_seconds': max(abandoned_waits, default=0),
+            'total_wait_seconds': sum(waits),
+            'avg_wait_seconds': int(sum(waits) / len(waits)) if waits else 0,
+            'answer_speed': {
+                'within_15s': sum(1 for w in answered_waits if w <= 15),
+                'within_30s': sum(1 for w in answered_waits if 15 < w <= 30),
+                'within_60s': sum(1 for w in answered_waits if 30 < w <= 60),
+                'within_90s': sum(1 for w in answered_waits if 60 < w <= 90),
+                'over_90s': sum(1 for w in answered_waits if w > 90),
+            },
             'hourly': [
                 {'hour': h, 'label': f"{h:02d}:00", **hourly[h],
                  'total_calls': sum(hourly[h].values())}
                 for h in range(24)
             ],
         }
+
+    def get_queue_outcomes(self, start_utc: str, end_utc: str) -> list[dict]:
+        """Per-queue caller outcomes, from call_log, for any period.
+
+        Replaces the daily_call_stats path (duplicated rows every 15 minutes,
+        UTC dates, built from queued_calls after its 24h purge) and the
+        today-only queued_calls path, so every period counts the same way as
+        the caller cards. Same dict shape the Queue Performance table reads:
+        abandoned_calls = hung up (waiting or early), timeout_calls = voicemail.
+        Avg wait = average time to answer; max wait = longest anyone waited
+        before being answered or hanging up in the queue.
+        """
+        queues = {}
+        for r in self._caller_rows(start_utc, end_utc):
+            if not r['queue_name'] or r['outcome'] == 'in_progress':
+                continue
+            q = queues.setdefault(r['queue_name'], {
+                'queue_id': r['queue_id'], 'queue_name': r['queue_name'],
+                'answered': 0, 'voicemail': 0, 'not_through': 0,
+                'answered_waits': [], 'all_waits': []})
+            q[self._outcome_bucket(r['outcome'])] += 1
+            if r['ring_seconds'] is not None:
+                if r['outcome'] == 'answered':
+                    q['answered_waits'].append(r['ring_seconds'])
+                if r['outcome'] in ('answered', 'hung_up_waiting'):
+                    q['all_waits'].append(r['ring_seconds'])
+
+        result = []
+        for q in queues.values():
+            total = q['answered'] + q['voicemail'] + q['not_through']
+            result.append({
+                'queue_id': q['queue_id'],
+                'queue_name': q['queue_name'],
+                'total_calls': total,
+                'answered_calls': q['answered'],
+                'abandoned_calls': q['not_through'],
+                'timeout_calls': q['voicemail'],
+                'answer_rate': round(q['answered'] / total * 100, 1) if total else 0,
+                'avg_wait_seconds': (int(sum(q['answered_waits']) / len(q['answered_waits']))
+                                     if q['answered_waits'] else 0),
+                'max_wait_seconds': max(q['all_waits'], default=0),
+            })
+        result.sort(key=lambda q: q['total_calls'], reverse=True)
+        return result
 
     def get_call_log_by_agent(self, start_utc: str, end_utc: str, queue_name: str = None,
                               queue_names: list = None, agent_emails: list = None,
@@ -641,16 +722,26 @@ class CallLogMixin:
             where += filter_clause
             params.extend(filter_params)
 
-            # Convert UTC hour to local hour by adding timezone offset
-            rows = conn.execute(f"""
-                SELECT CAST((strftime('%H', started_at) + {tz_offset_hours}) % 24 AS INTEGER) as hour,
-                    COUNT(*) as total_calls,
-                    SUM(CASE WHEN status IN ('answered', 'completed', 'transferred') THEN 1 ELSE 0 END) as answered_calls,
-                    SUM(CASE WHEN status IN ('abandoned', 'missed') THEN 1 ELSE 0 END) as abandoned_calls,
-                    SUM(CASE WHEN status = 'voicemail' THEN 1 ELSE 0 END) as timeout_calls
-                FROM call_log WHERE {where} GROUP BY hour ORDER BY hour
+            # Local hour per call (its own date), not a fixed offset from now —
+            # tz_offset_hours is kept for callers but no longer used
+            calls = conn.execute(f"""
+                SELECT started_at, status FROM call_log WHERE {where}
             """, params).fetchall()
-            return self._fill_hourly(rows)
+            by_hour = {}
+            for c in calls:
+                h = by_hour.setdefault(_local_hour(c['started_at']), {
+                    'hour': None, 'total_calls': 0, 'answered_calls': 0,
+                    'abandoned_calls': 0, 'timeout_calls': 0})
+                h['total_calls'] += 1
+                if c['status'] in ANSWERED_STATUSES:
+                    h['answered_calls'] += 1
+                elif c['status'] in ('abandoned', 'missed', 'ended_early'):
+                    h['abandoned_calls'] += 1
+                elif c['status'] == 'voicemail':
+                    h['timeout_calls'] += 1
+            for hour, h in by_hour.items():
+                h['hour'] = hour
+            return self._fill_hourly(list(by_hour.values()))
 
     def get_my_call_history(self, agent_email: str, limit: int = 50) -> list[dict]:
         """Get recent call history for a specific agent.
