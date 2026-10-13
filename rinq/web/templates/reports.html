@@ -627,12 +627,13 @@
         <div class="time-value">{{ format_duration(report.summary.avg_duration_seconds) }}</div>
         <div class="time-label">Average Call Duration</div>
     </div>
-    <div class="time-stat">
-        <div class="time-value">{{ format_duration(report.summary.total_wait_seconds) }}</div>
+    {% set w = report.callers if report.callers else report.summary %}
+    <div class="time-stat" title="Callers' time from reaching Tina until answered or hanging up in the queue, including the welcome message">
+        <div class="time-value">{{ format_duration(w.total_wait_seconds) }}</div>
         <div class="time-label">Total Wait Time</div>
     </div>
-    <div class="time-stat">
-        <div class="time-value">{{ format_wait_time(report.summary.avg_wait_seconds) }}</div>
+    <div class="time-stat" title="Callers' time from reaching Tina until answered or hanging up in the queue, including the welcome message">
+        <div class="time-value">{{ format_wait_time(w.avg_wait_seconds) }}</div>
         <div class="time-label">Average Wait Time</div>
     </div>
 </div>
@@ -641,6 +642,9 @@
 <div class="section-header">
     <h3>Wait Time Analysis</h3>
 </div>
+<p style="color: #6c757d; font-size: 0.85em; margin: -8px 0 12px;">
+    Wait is measured from when the call reaches Tina, so it includes the welcome message.
+</p>
 <div class="wait-cards">
     <div class="wait-card answered">
         {% set w = report.callers if report.callers else report.summary %}
@@ -673,6 +677,7 @@
 </div>
 
 <!-- Answer Speed / Service Level -->
+{% set sp = (report.callers or report.summary).answer_speed %}
 <div class="section-header">
     <h3>Answer Speed (Service Level)</h3>
 </div>
@@ -681,9 +686,9 @@
         <!-- Simple donut would require JS, so we'll use a bar representation -->
         <div style="text-align: center; padding: 20px;">
             <div style="font-size: 3em; font-weight: 700; color: #27ae60;">
-                {% set total_answered = report.summary.answer_speed.within_15s + report.summary.answer_speed.within_30s + report.summary.answer_speed.within_60s + report.summary.answer_speed.within_90s + report.summary.answer_speed.over_90s %}
+                {% set total_answered = sp.within_15s + sp.within_30s + sp.within_60s + sp.within_90s + sp.over_90s %}
                 {% if total_answered > 0 %}
-                {{ ((report.summary.answer_speed.within_15s + report.summary.answer_speed.within_30s) / total_answered * 100) | round(1) }}%
+                {{ ((sp.within_15s + sp.within_30s) / total_answered * 100) | round(1) }}%
                 {% else %}
                 0%
                 {% endif %}
@@ -692,36 +697,36 @@
         </div>
     </div>
     <div class="speed-legend">
-        {% set total_answered = report.summary.answer_speed.within_15s + report.summary.answer_speed.within_30s + report.summary.answer_speed.within_60s + report.summary.answer_speed.within_90s + report.summary.answer_speed.over_90s %}
+        {% set total_answered = sp.within_15s + sp.within_30s + sp.within_60s + sp.within_90s + sp.over_90s %}
         <div class="speed-item">
             <div class="speed-color s15"></div>
             <div class="speed-label">Within 15 sec</div>
-            <div class="speed-value">{{ report.summary.answer_speed.within_15s }}</div>
-            <div class="speed-percent">{% if total_answered > 0 %}{{ (report.summary.answer_speed.within_15s / total_answered * 100) | round(1) }}%{% else %}0%{% endif %}</div>
+            <div class="speed-value">{{ sp.within_15s }}</div>
+            <div class="speed-percent">{% if total_answered > 0 %}{{ (sp.within_15s / total_answered * 100) | round(1) }}%{% else %}0%{% endif %}</div>
         </div>
         <div class="speed-item">
             <div class="speed-color s30"></div>
             <div class="speed-label">Within 30 sec</div>
-            <div class="speed-value">{{ report.summary.answer_speed.within_30s }}</div>
-            <div class="speed-percent">{% if total_answered > 0 %}{{ (report.summary.answer_speed.within_30s / total_answered * 100) | round(1) }}%{% else %}0%{% endif %}</div>
+            <div class="speed-value">{{ sp.within_30s }}</div>
+            <div class="speed-percent">{% if total_answered > 0 %}{{ (sp.within_30s / total_answered * 100) | round(1) }}%{% else %}0%{% endif %}</div>
         </div>
         <div class="speed-item">
             <div class="speed-color s60"></div>
             <div class="speed-label">Within 60 sec</div>
-            <div class="speed-value">{{ report.summary.answer_speed.within_60s }}</div>
-            <div class="speed-percent">{% if total_answered > 0 %}{{ (report.summary.answer_speed.within_60s / total_answered * 100) | round(1) }}%{% else %}0%{% endif %}</div>
+            <div class="speed-value">{{ sp.within_60s }}</div>
+            <div class="speed-percent">{% if total_answered > 0 %}{{ (sp.within_60s / total_answered * 100) | round(1) }}%{% else %}0%{% endif %}</div>
         </div>
         <div class="speed-item">
             <div class="speed-color s90"></div>
             <div class="speed-label">Within 90 sec</div>
-            <div class="speed-value">{{ report.summary.answer_speed.within_90s }}</div>
-            <div class="speed-percent">{% if total_answered > 0 %}{{ (report.summary.answer_speed.within_90s / total_answered * 100) | round(1) }}%{% else %}0%{% endif %}</div>
+            <div class="speed-value">{{ sp.within_90s }}</div>
+            <div class="speed-percent">{% if total_answered > 0 %}{{ (sp.within_90s / total_answered * 100) | round(1) }}%{% else %}0%{% endif %}</div>
         </div>
         <div class="speed-item">
             <div class="speed-color over"></div>
             <div class="speed-label">Over 90 sec</div>
-            <div class="speed-value">{{ report.summary.answer_speed.over_90s }}</div>
-            <div class="speed-percent">{% if total_answered > 0 %}{{ (report.summary.answer_speed.over_90s / total_answered * 100) | round(1) }}%{% else %}0%{% endif %}</div>
+            <div class="speed-value">{{ sp.over_90s }}</div>
+            <div class="speed-percent">{% if total_answered > 0 %}{{ (sp.over_90s / total_answered * 100) | round(1) }}%{% else %}0%{% endif %}</div>
         </div>
     </div>
 </div>
@@ -880,8 +885,8 @@
                 <div class="stacked-bar">
                     {% if queue.total_calls > 0 %}
                     <div class="segment answered" style="width: {{ (queue.answered_calls / queue.total_calls * 100) | round(1) }}%;" title="{{ queue.answered_calls }} answered"></div>
-                    <div class="segment abandoned" style="width: {{ (queue.abandoned_calls / queue.total_calls * 100) | round(1) }}%;" title="{{ queue.abandoned_calls }} abandoned"></div>
-                    <div class="segment timeout" style="width: {{ (queue.timeout_calls / queue.total_calls * 100) | round(1) }}%;" title="{{ queue.timeout_calls }} timed out"></div>
+                    <div class="segment abandoned" style="width: {{ (queue.abandoned_calls / queue.total_calls * 100) | round(1) }}%;" title="{{ queue.abandoned_calls }} hung up"></div>
+                    <div class="segment timeout" style="width: {{ (queue.timeout_calls / queue.total_calls * 100) | round(1) }}%;" title="{{ queue.timeout_calls }} voicemail"></div>
                     {% endif %}
                 </div>
             </td>
@@ -897,9 +902,9 @@
     </tbody>
 </table>
 <div class="queue-legend">
-    <div class="legend-item"><div class="legend-dot answered"></div> Answered ({{ report.summary.answered_calls }})</div>
-    <div class="legend-item"><div class="legend-dot abandoned"></div> Abandoned ({{ report.summary.abandoned_calls }})</div>
-    <div class="legend-item"><div class="legend-dot timeout"></div> Timed Out ({{ report.summary.timeout_calls }})</div>
+    <div class="legend-item"><div class="legend-dot answered"></div> Answered ({{ report.queue_stats | sum(attribute='answered_calls') }})</div>
+    <div class="legend-item"><div class="legend-dot abandoned"></div> Hung up ({{ report.queue_stats | sum(attribute='abandoned_calls') }})</div>
+    <div class="legend-item"><div class="legend-dot timeout"></div> Voicemail ({{ report.queue_stats | sum(attribute='timeout_calls') }})</div>
 </div>
 {% endif %}
 

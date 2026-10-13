@@ -123,7 +123,7 @@ class StatsMixin:
                         updated_at = excluded.updated_at
                 """, (
                     target_date, row['queue_id'], row['queue_name'],
-                    row['agent_email'],
+                    agent,  # '__all__' for unanswered — NULL would never hit ON CONFLICT
                     row['total_calls'], row['answered_calls'], row['abandoned_calls'],
                     row['timeout_calls'], row['transferred_calls'],
                     agent_durations['duration'], row['total_wait_seconds'],
