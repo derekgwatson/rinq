@@ -5630,10 +5630,31 @@ function isOnActiveCall() {
     }
 }
 
+// The waiting caller whose ring is pending on this browser right now, or null.
+// Answering always connects the RINGING caller, whichever row is clicked, so
+// while a ring is pending only that caller's row offers Answer. Returns null
+// (= every row keeps its Answer button) whenever the ring can't be pinned to
+// exactly one waiting caller: no ring, withheld/short number, two callers on
+// the same number, or a ring that isn't a queue caller (transfer, direct line).
+// Locking an agent out of answering is worse than the confusion this prevents.
+function ringingQueueCallSid(waitingCallers) {
+    try {
+        if (!currentCall || typeof currentCall.status !== 'function'
+            || currentCall.status() !== 'pending') return null;
+        const ringKey = _ctxDigits(currentCall._resolvedFrom);
+        if (ringKey.length < 6) return null;
+        const matches = waitingCallers.filter(c => _ctxDigits(c.caller_number) === ringKey);
+        return matches.length === 1 ? matches[0].call_sid : null;
+    } catch (e) {
+        return null;
+    }
+}
+
 function renderQueueCallers(callers) {
     const waitingCallers = callers.filter(c => c.status === 'waiting');
     const count = waitingCallers.length;
     const onCall = isOnActiveCall();
+    const ringingSid = onCall ? null : ringingQueueCallSid(waitingCallers);
 
     // Update alert visibility and message
     if (count > 0) {
@@ -5662,6 +5683,9 @@ function renderQueueCallers(callers) {
         const waitTime = `${Math.floor(waitSecs / 60)}:${String(waitSecs % 60).padStart(2, '0')}`;
         const isLongWait = waitSecs > 60;
         const isAnswering = answeringCallSid === caller.call_sid;
+        // Another caller is ringing this browser: this row can't be answered
+        // until that ring is answered, taken by a colleague or rings out.
+        const otherIsRinging = !!ringingSid && ringingSid !== caller.call_sid;
 
         let details = [];
 
@@ -5706,9 +5730,10 @@ function renderQueueCallers(callers) {
                 <div class="caller-actions">
                     <button class="btn-answer-queue"
                             onclick="answerQueueCall('${caller.call_sid}')"
-                            ${isAnswering || onCall ? 'disabled' : ''}
-                            ${onCall && !isAnswering ? 'title="Finish your current call first"' : ''}>
-                        ${isAnswering ? 'Connecting...' : onCall ? 'On a call' : 'Answer'}
+                            ${isAnswering || onCall || otherIsRinging ? 'disabled' : ''}
+                            ${onCall && !isAnswering ? 'title="Finish your current call first"'
+                              : otherIsRinging && !isAnswering ? 'title="Another caller is ringing you — answer them first"' : ''}>
+                        ${isAnswering ? 'Connecting...' : onCall ? 'On a call' : otherIsRinging ? 'Waiting' : 'Answer'}
                     </button>
                 </div>
             </div>
