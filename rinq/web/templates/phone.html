@@ -3732,6 +3732,20 @@ function answerCall() {
 // to the server, so it is safe for a leg that never connected (a ring that
 // was cancelled while we were answering it). endCall() uses it for its own
 // teardown after reporting the call as ended.
+// btnHandoff is a static node that completeTransfer() disables and labels
+// "Completing..." — and a SUCCESSFUL hand-off never put it back, because the
+// call ends. So the next warm transfer on the same page showed a dead
+// "Completing..." button that could not be pressed (no request, no notice,
+// no watchdog — the 2026-10-12/13 "transfers freezing" reports). Reset it
+// whenever a call screen is cleared and whenever a new consult starts.
+function resetHandoffButton() {
+    const btn = document.getElementById('btnHandoff');
+    if (btn) {
+        btn.disabled = false;
+        btn.textContent = '✓ Hand off';
+    }
+}
+
 function resetCallUI() {
     resetCallState();
     if (typeof answeringCallSid !== 'undefined') answeringCallSid = null;
@@ -3749,6 +3763,7 @@ function resetCallUI() {
     if (_ecIdle) _ecIdle.style.display = '';
     if (_ecCallControls) _ecCallControls.style.display = '';
     if (_ecCallControlsConsult) _ecCallControlsConsult.style.display = 'none';
+    resetHandoffButton();
     // Reset mute state visually
     isMuted = false;
     updateMuteButton();
@@ -5207,6 +5222,7 @@ async function startTransfer() {
                 consultingTargetName.textContent = targetName;
                 playRingback();
                 consultTargetAnswered = false;
+                resetHandoffButton();
 
                 if (transferType === 'three_way') {
                     // 3-way: close modal immediately — agent stays on the
