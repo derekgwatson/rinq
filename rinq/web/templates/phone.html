@@ -2557,7 +2557,10 @@
                 </div>
             </div>
 
-            <div style="font-size: 0.8em; color: #e67e22; margin-bottom: 12px; text-align: center;">
+            <!-- Text and colour follow the real hold state (updateHoldButton):
+                 opening this box auto-holds the caller, but if that hold
+                 fails they can still hear the agent. -->
+            <div id="transferHoldNote" style="font-size: 0.8em; color: #e67e22; margin-bottom: 12px; text-align: center;">
                 The caller can still hear you while you choose a target.
             </div>
 
@@ -4015,6 +4018,13 @@ function updateHoldButton() {
         }
     }
     if (holdWarning) holdWarning.style.display = isOnHold ? 'block' : 'none';
+    const transferHoldNote = document.getElementById('transferHoldNote');
+    if (transferHoldNote) {
+        transferHoldNote.textContent = isOnHold
+            ? "The caller is on hold and can't hear you."
+            : 'The caller can still hear you while you choose a target.';
+        transferHoldNote.style.color = isOnHold ? '#27ae60' : '#e67e22';
+    }
 }
 
 // ============================================
