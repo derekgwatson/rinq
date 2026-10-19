@@ -267,6 +267,18 @@ class CallLogMixin:
                 result.append(row_dict)
             return result
 
+    def sweep_stale_ringing(self) -> int:
+        """Close call_log rows stuck 'ringing' (see STALE_RINGING_SWEEP_SQL).
+
+        The other two callers only run while someone has the phone page open,
+        so after hours and over a weekend these rows sat open until the first
+        login. The 5-minute cleanup cron calls this so they close regardless.
+        """
+        with self._get_conn() as conn:
+            cursor = conn.execute(STALE_RINGING_SWEEP_SQL)
+            conn.commit()
+            return cursor.rowcount
+
     def close_stale_calls(self, active_sids: set[str]) -> int:
         """Close call_log entries for calls no longer active in Twilio.
 
