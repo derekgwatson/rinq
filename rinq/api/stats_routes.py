@@ -147,6 +147,9 @@ def register(bp):
 
         def _cleanup_current_tenant():
             db = get_db()
+            # Before the queued_calls delete: the sweep skips callers still
+            # waiting in a queue, which it can only see while their row exists.
+            swept_ringing = db.sweep_stale_ringing()
             deleted_count = db.cleanup_old_queued_calls(hours=hours)
 
             # Clean up stale ring attempts (safety net for missed callbacks)
@@ -166,6 +169,7 @@ def register(bp):
             db.log_activity(
                 'queue_cleanup',
                 f'{hours}h',
+                f"Closed {swept_ringing} stale ringing calls. "
                 f"Deleted {deleted_count} old queued_calls, {stale_ring_count} stale ring_attempts, "
                 f"{stale_participants} old participants, {stale_intents} leg_intents, "
                 f"{stale_reconnects} reconnect_attempts, "
