@@ -4927,6 +4927,9 @@ function formatPhoneDisplay(number) {
 // Call Transfer
 // ============================================
 let transferTargets = [];
+// Showroom queues: transferring to one rings the whole store (Jacinta, 2026-10-21).
+// Selected as 'queue:<id>' and always sent blind.
+let transferShowrooms = [];
 let selectedTarget = null;
 let selectedTargetName = '';
 let transferType = 'blind';  // 'blind', 'warm', or 'three_way'
@@ -4971,6 +4974,7 @@ async function fetchTransferTargets() {
         if (targetsRes.ok) {
             const data = await targetsRes.json();
             transferTargets = data.targets || [];
+            transferShowrooms = data.showrooms || [];
         }
 
         renderTransferTargets();
@@ -4991,8 +4995,11 @@ function renderTransferTargets() {
 
     const staff = transferTargets.filter(t => !t.is_mobile && matches(t));
     const mobiles = transferTargets.filter(t => t.is_mobile && matches(t));
+    // Incoming calls only — the server refuses calls we made (see to-queue route)
+    const showrooms = currentTransferCallType === 'outbound' ? [] : transferShowrooms.filter(
+        s => !q || (s.name || '').toLowerCase().includes(q) || 'showroom store'.includes(q));
 
-    if (staff.length === 0 && mobiles.length === 0) {
+    if (staff.length === 0 && mobiles.length === 0 && showrooms.length === 0) {
         const msg = q ? 'No one matches that search' : 'No team members available';
         targetList.innerHTML = `<div style="padding: 20px; text-align: center; color: #7f8c8d;">${msg}</div>`;
         return;
@@ -5067,10 +5074,24 @@ function renderTransferTargets() {
         `;
     }).join('');
 
+    // Showrooms — the caller joins that store's queue and everyone there rings
+    const showroomsHtml = showrooms.map(s => {
+        const key = `queue:${s.queue_id}`;
+        return `
+            <div class="target-item ${selectedTarget === key ? 'selected' : ''}"
+                 onclick="selectTarget('${escapeAttr(key)}', '${escapeAttr(s.name)}', '')">
+                <span class="target-name">${escapeHtml(s.name)}</span>
+                <span class="target-phone">🏬 Whole store rings</span>
+            </div>
+        `;
+    }).join('');
+
     const heading = text => `<div style="padding: 6px 10px; font-size: 0.75em; font-weight: 600; color: #7f8c8d; text-transform: uppercase; letter-spacing: 0.04em; background: #fafafa;">${text}</div>`;
-    targetList.innerHTML =
-        (staffHtml ? (mobilesHtml ? heading('On Tina') : '') + staffHtml : '') +
-        (mobilesHtml ? heading('Mobiles') + mobilesHtml : '');
+    const sections = [['On Tina', staffHtml], ['Showrooms', showroomsHtml], ['Mobiles', mobilesHtml]]
+        .filter(([, html]) => html);
+    targetList.innerHTML = sections
+        .map(([title, html]) => (sections.length > 1 ? heading(title) : '') + html)
+        .join('');
 }
 
 let selectedTargetEmail = '';
@@ -5080,6 +5101,12 @@ function selectTarget(target, name, email) {
     selectedTargetName = name;
     selectedTargetEmail = email || '';
     externalNumberInput.value = '';
+    // A showroom is always a blind hand-off — there's no one person to consult.
+    const isShowroom = String(target || '').startsWith('queue:');
+    if (isShowroom) selectTransferType('blind');
+    btnWarmTransfer.style.opacity = isShowroom ? '0.4' : '1';
+    btnWarmTransfer.style.pointerEvents = isShowroom ? 'none' : 'auto';
+    btnWarmTransfer.title = isShowroom ? 'Showroom transfers are always blind' : '';
     renderTransferTargets();
     updateTransferButton();
 }
@@ -5275,12 +5302,22 @@ async function startTransfer() {
     clearCallNotice();
 
     try {
-        if (transferType === 'blind') {
+        if (target.startsWith('queue:') || transferType === 'blind') {
             // Blind transfer
             let endpoint, body;
             const isQueueCall = currentTransferCallType === 'queue';
 
-            if (!isQueueCall) {
+            if (target.startsWith('queue:')) {
+                // Showroom: caller goes into that store's queue, whole store rings
+                endpoint = '/api/voice/transfer/to-queue';
+                body = {
+                    queue_id: parseInt(target.slice(6), 10),
+                    call_sid: isQueueCall ? currentQueueCallerSid : (currentOutboundCallSid || agentCallSid),
+                    agent_call_sid: agentCallSid,
+                    is_queue_call: isQueueCall,
+                    is_outbound: currentTransferCallType === 'outbound'
+                };
+            } else if (!isQueueCall) {
                 const callSid = currentOutboundCallSid || agentCallSid;
                 endpoint = '/api/voice/transfer/blind-direct';
                 body = {
@@ -5312,6 +5349,10 @@ async function startTransfer() {
                 // to the target server-side; our auto-hold no longer applies.
                 _autoHeldOnModalOpen = false;
                 closeTransferModal();
+                // Showroom: the caller is still live, now waiting at the store.
+                // Report our own leg, not theirs — a late customer-SID signal
+                // would mark them gone from the store agent's call.
+                if (target.startsWith('queue:')) currentQueueCallerSid = null;
                 endCall();
             } else if (data.on_dnd) {
                 // DND is a synchronous reject — consult never started. Treat
@@ -5699,6 +5740,10 @@ if (externalNumberInput) {
         if (this.value.trim()) {
             selectedTarget = null;
             selectedTargetName = '';
+            // Undo selectTarget's showroom-only lock on Warm
+            btnWarmTransfer.style.opacity = '1';
+            btnWarmTransfer.style.pointerEvents = 'auto';
+            btnWarmTransfer.title = '';
             renderTransferTargets();
         }
         updateTransferButton();

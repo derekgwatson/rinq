@@ -212,6 +212,20 @@ class TransferService:
 
         return targets + mobiles
 
+    def get_showroom_targets(self) -> list[dict]:
+        """Queues an agent can transfer a caller into, so the whole store rings.
+
+        Every active queue except test ones. Returned separately from
+        get_transfer_targets() so an old cached phone page can't mistake a
+        showroom for a person.
+        """
+        return [
+            {'queue_id': q['id'], 'name': q['name'],
+             'member_count': q.get('member_count') or 0}
+            for q in self.db.get_queues()
+            if 'test' not in (q.get('name') or '').lower()
+        ]
+
     def blind_transfer_direct(self, call_sid: str, target: str, target_name: str,
                               transferred_by: str, caller_id: str = None) -> dict:
         """Execute a blind transfer on a direct call (not in a conference).
