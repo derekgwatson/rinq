@@ -53,7 +53,158 @@ def register(bp):
         from rinq.services.transfer_service import get_transfer_service
         transfer_service = get_transfer_service()
         targets = transfer_service.get_transfer_targets()
-        return jsonify({"targets": targets})
+        showrooms = transfer_service.get_showroom_targets()
+        return jsonify({"targets": targets, "showrooms": showrooms})
+
+    @bp.route('/voice/transfer/to-queue', methods=['POST'])
+    @api_or_session_auth
+    def transfer_to_queue():
+        """Blind-transfer a caller into a showroom's queue.
+
+        The caller hears hold music and every member of that queue rings, as
+        if they had rung the store direct — so someone picks up when the
+        person they wanted can't. Refused (caller stays with the agent) when
+        nobody at that store could answer.
+        """
+        from rinq.api.routes import _is_queue_paused, _ring_agents_for_queue
+
+        data = request.get_json(silent=True) or {}
+        queue_id = data.get('queue_id')
+        call_sid = data.get('call_sid')
+        agent_call_sid = data.get('agent_call_sid')
+        is_queue_call = bool(data.get('is_queue_call'))
+        if not queue_id or not call_sid:
+            return jsonify({"error": "queue_id and call_sid required"}), 400
+
+        db = get_db()
+        transferred_by = (get_api_caller_email() or '').lower()
+        queue = db.get_queue(int(queue_id))
+        if not queue or not queue.get('is_active'):
+            return jsonify({"success": False, "error": "That showroom isn't set up in Tina"}), 400
+        store = queue.get('name') or 'that showroom'
+
+        # Is anyone at the store able to answer? Same test inbound routing
+        # uses, minus the agent doing the transfer.
+        available = False
+        if not _is_queue_paused(queue):
+            for m in db.get_queue_members(queue['id']):
+                email = (m.get('user_email') or '').lower()
+                if not m.get('is_active') or email == transferred_by:
+                    continue
+                settings = db.get_user_ring_settings(m['user_email'])
+                if settings.get('dnd'):
+                    continue
+                if settings.get('ring_browser', True) or settings.get('ring_sip', True):
+                    available = True
+                    break
+        if not available:
+            return jsonify({
+                "success": False,
+                "error": f"Nobody at {store} can take calls right now. Caller is still on hold."
+            }), 400
+
+        # Find the customer's leg. Queue calls hand us it directly; other
+        # calls (outbound, direct inbound) are conferences we escalated, where
+        # the customer is stored as the child of the agent's leg.
+        if is_queue_call:
+            customer_sid = call_sid
+        else:
+            customer_sid = db.get_call_child_sid(call_sid) if db.get_call_conference(call_sid) else None
+        if not customer_sid:
+            return jsonify({
+                "success": False,
+                "error": "This call can't be sent to a showroom — transfer it to a person instead."
+            }), 400
+
+        # Calls we made are refused for now: on the customer's leg Twilio's
+        # From is OUR number, and every queue webhook reads From as the
+        # customer — a callback request would be saved against our own number.
+        # Outbound call_log rows are keyed on the agent's leg (call_sid).
+        if not is_queue_call and (data.get('is_outbound') or 'outbound' in (
+                db.get_call_log_field(call_sid, 'direction'),
+                db.get_call_log_field(customer_sid, 'direction'))):
+            return jsonify({
+                "success": False,
+                "error": "Showroom transfers work on incoming calls only — transfer this one to a person."
+            }), 400
+
+        # The customer's number and one of ours (store rings to mobiles must
+        # come from a number we own). Inbound, so the customer is From.
+        queued = db.get_queued_call_by_sid(customer_sid)
+        customer_number = queued.get('caller_number') if queued else None
+        our_number = queued.get('called_number') if queued else None
+        if not customer_number:
+            for sid in (customer_sid, call_sid):
+                if db.get_call_log_field(sid, 'direction'):
+                    customer_number = db.get_call_log_field(sid, 'from_number')
+                    our_number = db.get_call_log_field(sid, 'to_number')
+                    break
+        if not (our_number or '').startswith('+'):
+            our_number = get_twilio_config('twilio_default_caller_id')
+        if not (customer_number or '').startswith('+'):
+            customer_number = None
+
+        enrichment = None
+        if not queued and customer_number:
+            try:
+                from rinq.services.caller_enrichment import get_enrichment_service
+                enrichment = get_enrichment_service().enrich_caller(customer_number)
+            except Exception as e:
+                logger.warning(f"Showroom transfer: enrichment failed for {customer_number}: {e}")
+
+        base_url = config.webhook_base_url
+        # Before the redirect: queue_wait's first hit must find this row, or
+        # it inserts its own and rings the store a second time.
+        archived_id = db.requeue_call(customer_sid, queue['id'], store,
+                                      customer_number or our_number or '', our_number or '',
+                                      transferred_by=transferred_by, enrichment=enrichment)
+
+        queue_name = f"queue_{queue['id']}"
+        wait_url = f"{base_url}/api/voice/queue/{queue['id']}/wait"
+        leave_url = f"{base_url}/api/voice/queue/{queue['id']}/leave"
+        twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Nicole">Please hold while we transfer your call.</Say>
+    <Enqueue waitUrl="{xml_escape(wait_url)}" waitUrlMethod="POST" action="{xml_escape(leave_url)}">{xml_escape(queue_name)}</Enqueue>
+</Response>'''
+
+        service = get_twilio_service()
+        try:
+            service.client.calls(customer_sid).update(twiml=twiml)
+        except Exception as e:
+            # Usually a transient Twilio error — the caller is most likely
+            # still on hold with the agent, so put the record back as it was.
+            logger.warning(f"Showroom transfer: could not redirect customer {customer_sid}: {e}")
+            db.undo_requeue(customer_sid, archived_id)
+            return jsonify({
+                "success": False,
+                "error": f"The transfer to {store} didn't go through — try again. "
+                         "If the caller has hung up, end the call."
+            }), 400
+
+        # Ring the store. queue_wait won't — it only rings for a caller it
+        # inserts itself, and the row above already exists.
+        _ring_agents_for_queue(
+            queue['id'], store, customer_number or our_number, our_number,
+            customer_sid, base_url=base_url, skip_emails={transferred_by}
+        )
+
+        # The agent is done. Same as a blind transfer: end their leg.
+        if agent_call_sid and agent_call_sid != customer_sid:
+            try:
+                service.client.calls(agent_call_sid).update(status='completed')
+            except Exception as e:
+                logger.warning(f"Showroom transfer: could not end agent call {agent_call_sid}: {e}")
+            db.remove_participant(agent_call_sid)
+
+        db.log_activity(
+            action="call_transfer_showroom",
+            target=store,
+            details=f"Caller {customer_sid} ({customer_number or 'unknown'}) transferred into the {store} queue",
+            performed_by=transferred_by
+        )
+        logger.info(f"Showroom transfer: {customer_sid} -> queue {queue['id']} ({store}) by {transferred_by}")
+        return jsonify({"success": True, "transfer_type": "showroom"})
 
     @bp.route('/voice/transfer/blind', methods=['POST'])
     @api_or_session_auth

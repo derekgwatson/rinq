@@ -3390,6 +3390,73 @@ class Database(StatsMixin, CallLogMixin):
             conn.commit()
             return cursor.lastrowid
 
+    def requeue_call(self, call_sid: str, queue_id: int, queue_name: str,
+                     caller_number: str, called_number: str,
+                     transferred_by: str = None, enrichment: dict = None) -> int | None:
+        """Put a live call into a showroom queue as a fresh waiting entry.
+
+        Used when an agent transfers a caller to a showroom. call_sid is
+        UNIQUE here, so a caller who first came in through a queue already
+        has a row — the answer the first store took. That row is kept for the
+        stats by moving it aside to '<sid>#<id>', and the new row copies its
+        caller details. queue_wait skips its own insert and auto-ring when a
+        row exists, so the transfer must ring the store itself.
+
+        The new row is marked transfer_type='showroom' so the queue webhooks
+        leave the call_log's first answer alone (_queue_call_log_update).
+
+        Returns the id of the moved-aside row (for undo_requeue), or None.
+        """
+        now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        details = dict(enrichment or {})
+        archived_id = None
+        with self._get_conn() as conn:
+            old = conn.execute(
+                "SELECT * FROM queued_calls WHERE call_sid = ?", (call_sid,)
+            ).fetchone()
+            if old:
+                old = dict(old)
+                archived_id = old['id']
+                caller_number = old.get('caller_number') or caller_number
+                called_number = old.get('called_number') or called_number
+                for key in ('customer_id', 'customer_name', 'customer_email',
+                            'order_data', 'priority', 'priority_reason'):
+                    details[key] = old.get(key)
+                conn.execute(
+                    "UPDATE queued_calls SET call_sid = ?, ended_at = COALESCE(ended_at, ?) WHERE id = ?",
+                    (f"{call_sid}#{archived_id}", now, archived_id))
+            conn.execute("""
+                INSERT INTO queued_calls (
+                    call_sid, queue_id, queue_name, caller_number, called_number,
+                    customer_id, customer_name, customer_email,
+                    order_data, priority, priority_reason, status, enqueued_at,
+                    transfer_type, transferred_by, transferred_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?, 'showroom', ?, ?)
+            """, (
+                call_sid, queue_id, queue_name, caller_number, called_number,
+                details.get('customer_id'),
+                details.get('customer_name'),
+                details.get('customer_email'),
+                details.get('order_data'),
+                details.get('priority') or 'normal',
+                details.get('priority_reason'),
+                now, transferred_by, now
+            ))
+            conn.commit()
+        return archived_id
+
+    def undo_requeue(self, call_sid: str, archived_id: int | None) -> None:
+        """Reverse requeue_call when the caller couldn't be moved after all."""
+        with self._get_conn() as conn:
+            conn.execute(
+                "DELETE FROM queued_calls WHERE call_sid = ? AND transfer_type = 'showroom'",
+                (call_sid,))
+            if archived_id:
+                conn.execute(
+                    "UPDATE queued_calls SET call_sid = ? WHERE id = ? AND call_sid = ?",
+                    (call_sid, archived_id, f"{call_sid}#{archived_id}"))
+            conn.commit()
+
     def get_queued_calls(self, queue_id: int = None, status: str = 'waiting') -> list[dict]:
         """Get queued calls, optionally filtered by queue and/or status.
 

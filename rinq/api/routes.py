@@ -1985,6 +1985,25 @@ def queue_no_answer(queue_id):
 </Response>''', mimetype='application/xml')
 
 
+def _queue_call_log_update(db, call_sid: str, updates: dict) -> None:
+    """update_call_log for the queue paths, safe for showroom transfers.
+
+    A caller an agent transferred into a showroom queue (transfer_type
+    'showroom', set by requeue_call) has already been answered and talked to.
+    Their call_log row must keep that first answer: rewriting status /
+    answered_at / ring_seconds here would turn the whole first conversation
+    into wait time, or mark a talked-to call 'abandoned' if they hang up
+    while the store rings. Everything else (agent_email, ended_at) still applies.
+    """
+    queued = db.get_queued_call_by_sid(call_sid)
+    if queued and queued.get('transfer_type') == 'showroom':
+        updates = {k: v for k, v in updates.items()
+                   if k not in ('status', 'answered_at', 'ring_seconds', 'call_type')}
+        if not updates:
+            return
+    db.update_call_log(call_sid, updates)
+
+
 @api_bp.route('/voice/queue/<int:queue_id>/leave', methods=['POST'])
 def queue_leave(queue_id):
     """Handle when a caller leaves the queue (hangup, bridged to agent, etc).
@@ -2016,7 +2035,7 @@ def queue_leave(queue_id):
         start_twilio_thread(cancel_calls)
 
         db.update_queued_call_status(call_sid, 'abandoned')
-        db.update_call_log(call_sid, {
+        _queue_call_log_update(db, call_sid, {
             'status': 'abandoned',
             'ring_seconds': ring_seconds,
             'ended_at': 'CURRENT_TIMESTAMP',
@@ -2042,7 +2061,7 @@ def queue_leave(queue_id):
             # 'redirected' = we redirected caller to a conference (browser softphone answer)
             if queued_call.get('status') == 'waiting':
                 db.update_queued_call_status(call_sid, 'answered')
-            db.update_call_log(call_sid, {
+            _queue_call_log_update(db, call_sid, {
                 'status': 'answered',
                 'ring_seconds': ring_seconds,
                 'answered_at': 'CURRENT_TIMESTAMP',
@@ -2062,7 +2081,7 @@ def queue_leave(queue_id):
 
             if chose_voicemail:
                 logger.info(f"Queue {queue_id} voicemail escape for {call_sid} after {queue_time}s")
-                db.update_call_log(call_sid, {
+                _queue_call_log_update(db, call_sid, {
                     'status': 'voicemail',
                     'ring_seconds': ring_seconds,
                 })
@@ -2075,7 +2094,7 @@ def queue_leave(queue_id):
             elif chose_callback:
                 # Callback — already handled by queue-escape, just update call_log
                 logger.info(f"Queue {queue_id} callback request for {call_sid} after {queue_time}s")
-                db.update_call_log(call_sid, {
+                _queue_call_log_update(db, call_sid, {
                     'status': 'callback',
                     'ring_seconds': ring_seconds,
                     'ended_at': 'CURRENT_TIMESTAMP',
@@ -2083,7 +2102,7 @@ def queue_leave(queue_id):
             else:
                 logger.info(f"Queue {queue_id} max wait timeout for {call_sid} after {queue_time}s")
                 db.update_queued_call_status(call_sid, 'timeout')
-                db.update_call_log(call_sid, {
+                _queue_call_log_update(db, call_sid, {
                     'status': 'voicemail',
                     'ring_seconds': ring_seconds,
                 })
@@ -2110,7 +2129,7 @@ def queue_leave(queue_id):
                 return _build_voicemail_twiml(queue_id, call_sid, from_number=request.form.get('From', ''), audio_type=vm_audio_type)
     elif queue_result in ('error', 'system-error'):
         db.update_queued_call_status(call_sid, 'timeout')
-        db.update_call_log(call_sid, {
+        _queue_call_log_update(db, call_sid, {
             'status': 'failed',
             'ring_seconds': ring_seconds,
             'ended_at': 'CURRENT_TIMESTAMP',
@@ -2137,7 +2156,7 @@ def queue_leave(queue_id):
         else:
             # Actually abandoned
             db.update_queued_call_status(call_sid, 'abandoned')
-            db.update_call_log(call_sid, {
+            _queue_call_log_update(db, call_sid, {
                 'status': 'abandoned',
                 'ring_seconds': ring_seconds,
                 'ended_at': 'CURRENT_TIMESTAMP',
@@ -2462,7 +2481,7 @@ def queue_agent_answer(queue_id):
         return Response(twiml, mimetype='application/xml')
 
     db.update_queued_call_status(customer_call_sid, 'answered', answered_by=agent_info)
-    db.update_call_log(customer_call_sid, {
+    _queue_call_log_update(db, customer_call_sid, {
         'status': 'answered',
         'agent_email': agent_email,
         'answered_at': 'CURRENT_TIMESTAMP',
