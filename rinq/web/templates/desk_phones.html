@@ -136,7 +136,9 @@
                     {% if p.screen_url %}
                     <div class="last-rang" style="white-space: normal;">
                         Screen page:
-                        <a href="#" class="sp-copy-screen" data-url="{{ p.screen_url }}" title="Polycom: Settings → Microbrowser → Idle Browser home page">copy</a>
+                        <a href="#" class="sp-copy-screen" data-url="{{ p.screen_url|replace('https://', 'http://') }}" title="Polycom: Settings → Microbrowser → Idle Display Home">copy</a>
+                        · Yealink auto-provision:
+                        <a href="#" class="sp-copy-screen" data-url="{{ p.screen_url|replace('https://', 'http://') }}/prov/" title="Yealink: Settings → Auto Provision → Server URL">copy</a>
                     </div>
                     {% endif %}
                 </td>

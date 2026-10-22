@@ -2014,17 +2014,16 @@ def _phone_screen_url(tenant_id: str, username: str) -> str:
     return f"{base}/phone-screen/{tenant_id}/{username}/{_phone_screen_token(tenant_id, username)}"
 
 
-@web_bp.route('/phone-screen/<tenant_id>/<username>/<token>')
-def phone_screen(tenant_id, username, token):
-    """What a shared desk phone shows on its idle screen: who is on it.
+def _phone_screen_occupant(tenant_id, username, token):
+    """Check a phone-screen URL and return (name, extension) of who is on the
+    phone, or (None, None). 404s on a bad token or a non-shared login.
 
-    Fetched by the handset's own browser (Polycom idle browser) on a timer,
-    with no session — so tenant resolution skips this path (middleware) and
-    the tenant is set here, only after the token checks out.
+    These URLs are fetched by handsets with no session — so tenant resolution
+    skips this path (middleware) and the tenant is set here, only after the
+    token checks out.
     """
     import hmac
     from flask import abort, g
-    from markupsafe import escape
     from rinq.database.master import get_master_db
 
     if not hmac.compare_digest(token, _phone_screen_token(tenant_id, username)):
@@ -2040,10 +2039,48 @@ def phone_screen(tenant_id, username, token):
         abort(404)
 
     email = db.get_staff_email_for_sip_username(username)
-    if email:
-        person = db.get_user_by_email(email)
-        name = (person or {}).get('friendly_name') or email.split('@')[0]
-        ext = (db.get_staff_extension(email) or {}).get('extension')
+    if not email:
+        return None, None
+    person = db.get_user_by_email(email)
+    name = (person or {}).get('friendly_name') or email.split('@')[0]
+    return name, (db.get_staff_extension(email) or {}).get('extension')
+
+
+@web_bp.route('/phone-screen/<tenant_id>/<username>/<token>/prov/<path:filename>')
+def phone_screen_provisioning(tenant_id, username, token, filename):
+    """Yealink auto-provisioning: set only the line label to who is on it.
+
+    The handset is pointed (Settings -> Auto Provision, repeatedly) at
+    .../prov/ and asks for <its MAC>.cfg plus a model-wide common file. Only
+    the MAC file is answered, and it carries one setting — the label beside
+    the line key. Nothing that could take the phone off Tina.
+    """
+    from flask import abort
+    if not filename.lower().endswith('.cfg') or filename.lower().startswith('y0000'):
+        abort(404)  # common/model files: nothing to say
+    name, ext = _phone_screen_occupant(tenant_id, username, token)
+    if name:
+        label = f"{name.split()[0]} {ext}" if ext else name.split()[0]
+    else:
+        label = "Not logged in"
+    label = ''.join(c for c in label if c.isprintable() and c not in '\r\n')
+    resp = make_response(f"#!version:1.0.0.1\naccount.1.label = {label}\n")
+    resp.headers['Content-Type'] = 'text/plain; charset=utf-8'
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+
+@web_bp.route('/phone-screen/<tenant_id>/<username>/<token>')
+def phone_screen(tenant_id, username, token):
+    """What a shared desk phone shows on its idle screen: who is on it.
+
+    Fetched by the handset's own browser (Polycom idle browser / screen
+    saver) on a timer.
+    """
+    from markupsafe import escape
+
+    name, ext = _phone_screen_occupant(tenant_id, username, token)
+    if name:
         lines = [f"<b>{escape(name)}</b>"]
         if ext:
             lines.append(f"Ext {escape(ext)}")
