@@ -1923,6 +1923,10 @@ def desk_phones():
     # per-person signal and means nothing for a handset.
     users = [u for u in users if not u.get('is_shared_device')]
     shared_phones = db.get_shared_desk_phones() if configured else []
+    from rinq.tenant.context import get_current_tenant
+    tenant_id = (get_current_tenant() or {}).get('id')
+    for p in shared_phones:
+        p['screen_url'] = _phone_screen_url(tenant_id, p['username']) if tenant_id else None
 
     # Only alert on a phone that demonstrably worked and then stopped. Users
     # who never had one responding are almost always browser-only — ring_sip
@@ -1965,6 +1969,69 @@ def _shared_phone_username(name: str) -> str:
     slug = ''.join(c if c.isalnum() else '_' for c in name.lower())
     slug = '_'.join(part for part in slug.split('_') if part)
     return f"desk_{slug}"
+
+
+def _phone_screen_token(tenant_id: str, username: str) -> str:
+    """Unguessable key for a shared phone's screen page.
+
+    The handset fetches the page with no login, so the URL itself is the
+    credential. It only reveals who is sitting at that phone.
+    """
+    import hashlib
+    import hmac
+    from flask import current_app
+    msg = f"phone-screen:{tenant_id}:{username}".encode()
+    return hmac.new(current_app.secret_key.encode(), msg, hashlib.sha256).hexdigest()[:20]
+
+
+def _phone_screen_url(tenant_id: str, username: str) -> str:
+    base = request.url_root.rstrip('/').replace('http://', 'https://')
+    return f"{base}/phone-screen/{tenant_id}/{username}/{_phone_screen_token(tenant_id, username)}"
+
+
+@web_bp.route('/phone-screen/<tenant_id>/<username>/<token>')
+def phone_screen(tenant_id, username, token):
+    """What a shared desk phone shows on its idle screen: who is on it.
+
+    Fetched by the handset's own browser (Polycom idle browser) on a timer,
+    with no session — so tenant resolution skips this path (middleware) and
+    the tenant is set here, only after the token checks out.
+    """
+    import hmac
+    from flask import abort, g
+    from markupsafe import escape
+    from rinq.database.master import get_master_db
+
+    if not hmac.compare_digest(token, _phone_screen_token(tenant_id, username)):
+        abort(404)
+    tenant = get_master_db().get_tenant(tenant_id)
+    if not tenant:
+        abort(404)
+    g.tenant = tenant
+    db = get_db()
+
+    phone = db.get_user_by_username(username)
+    if not phone or not phone.get('is_shared_device'):
+        abort(404)
+
+    email = db.get_staff_email_for_sip_username(username)
+    if email:
+        person = db.get_user_by_email(email)
+        name = (person or {}).get('friendly_name') or email.split('@')[0]
+        ext = (db.get_staff_extension(email) or {}).get('extension')
+        lines = [f"<b>{escape(name)}</b>"]
+        if ext:
+            lines.append(f"Ext {escape(ext)}")
+        lines.append("*51 to log out")
+    else:
+        lines = ["<b>Nobody logged in</b>", "Dial *50 + your ext"]
+
+    body = "<br/>".join(lines)
+    html = (f'<html><head><title>Tina</title></head><body>{body}</body></html>')
+    resp = make_response(html)
+    resp.headers['Content-Type'] = 'text/html; charset=utf-8'
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
 
 
 @web_bp.route('/desk-phones/shared', methods=['POST'])

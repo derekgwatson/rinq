@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 # Routes that don't need tenant context
 TENANT_EXEMPT_PREFIXES = (
     '/login', '/auth/', '/logout', '/health', '/info', '/static/',
+    # A desk phone's idle-screen page: no session, the tenant is in the URL
+    # and is only adopted after its token checks out (web/routes.py).
+    '/phone-screen/',
 )
 
 # Media-TwiML endpoints exempt from signature validation. Twilio fetches
