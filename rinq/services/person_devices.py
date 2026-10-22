@@ -36,6 +36,20 @@ def browser_identity(email: str) -> str:
     return email.replace('@', '_at_').replace('.', '_')
 
 
+def sip_uri_for_person(email: str, db, sip_domain: str) -> str | None:
+    """The desk phone that rings for this person.
+
+    A shared desk phone they are logged in to wins over their own SIP login:
+    they are sitting at it, and logging in somewhere means "ring me here",
+    not "ring me here as well".
+    """
+    username = db.get_desk_phone_for_staff(email)
+    if not username:
+        user = db.get_user_by_email(email)
+        username = user.get('username') if user else None
+    return f"sip:{username}@{sip_domain}" if username else None
+
+
 def person_ring_targets(email: str, db, sip_domain: str | None) -> list[RingTarget]:
     """Every device that should ring for this person, in browser/sip/mobile order."""
     if not email:
@@ -49,9 +63,9 @@ def person_ring_targets(email: str, db, sip_domain: str | None) -> list[RingTarg
         targets.append(RingTarget('browser', f"client:{browser_identity(email)}", email))
 
     if settings.get('ring_sip', True) and sip_domain:
-        user = db.get_user_by_email(email)
-        if user and user.get('username'):
-            targets.append(RingTarget('sip', f"sip:{user['username']}@{sip_domain}", email))
+        uri = sip_uri_for_person(email, db, sip_domain)
+        if uri:
+            targets.append(RingTarget('sip', uri, email))
 
     ext = db.get_staff_extension(email)
     if ext and ext.get('forward_to'):

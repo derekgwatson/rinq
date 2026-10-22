@@ -642,6 +642,119 @@ class Database(StatsMixin, CallLogMixin):
             """, (username,)).fetchone()
             return dict(row) if row else None
 
+    # =========================================================================
+    # Shared desk phones (the handset logs in as itself; people log in to it)
+    # =========================================================================
+
+    def get_staff_email_for_sip_username(self, username: str) -> str | None:
+        """Who is a SIP username, right now?
+
+        A personal credential is its owner. A shared desk phone is whoever is
+        logged in to it, or nobody. The one answer for every path that turns
+        a SIP identity into a person (outbound caller, call log, answering
+        agent, transfer target) — see migration 083.
+        """
+        if not username:
+            return None
+        with self._get_conn() as conn:
+            row = conn.execute("""
+                SELECT u.staff_email, u.is_shared_device, l.staff_email AS occupant
+                FROM users u
+                LEFT JOIN desk_phone_logins l ON l.device_username = u.username
+                WHERE u.username = ?
+            """, (username,)).fetchone()
+        if not row:
+            return None
+        if row['is_shared_device']:
+            return row['occupant']
+        return row['staff_email']
+
+    def get_desk_phone_for_staff(self, email: str) -> str | None:
+        """The shared desk phone (SIP username) this person is logged in to."""
+        if not email:
+            return None
+        with self._get_conn() as conn:
+            row = conn.execute("""
+                SELECT l.device_username FROM desk_phone_logins l
+                JOIN users u ON u.username = l.device_username
+                WHERE l.staff_email = ? AND u.is_active = 1
+            """, (email.lower(),)).fetchone()
+            return row['device_username'] if row else None
+
+    def get_shared_desk_phones(self) -> list[dict]:
+        """Every shared desk phone with whoever is logged in to it."""
+        with self._get_conn() as conn:
+            rows = conn.execute("""
+                SELECT u.sid, u.username, u.friendly_name, u.is_active,
+                       l.staff_email AS occupant_email, l.logged_in_at, l.logged_in_by,
+                       p.friendly_name AS occupant_name, e.extension AS occupant_extension
+                FROM users u
+                LEFT JOIN desk_phone_logins l ON l.device_username = u.username
+                LEFT JOIN staff_extensions e ON e.email = l.staff_email
+                LEFT JOIN users p ON p.staff_email = l.staff_email AND p.is_shared_device = 0
+                WHERE u.is_shared_device = 1
+                ORDER BY u.friendly_name
+            """).fetchall()
+            return [dict(row) for row in rows]
+
+    def mark_shared_desk_phone(self, sid: str) -> None:
+        with self._get_conn() as conn:
+            conn.execute("UPDATE users SET is_shared_device = 1 WHERE sid = ?", (sid,))
+            conn.commit()
+
+    def log_in_desk_phone(self, device_username: str, email: str, performed_by: str) -> dict:
+        """Put a person on a shared desk phone.
+
+        Replaces whoever was on this phone, and moves the person off any other
+        phone they were on. Returns {'previous_occupant', 'previous_phone'}.
+        """
+        email = email.lower()
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            prev_occ = conn.execute(
+                "SELECT staff_email FROM desk_phone_logins WHERE device_username = ?",
+                (device_username,)).fetchone()
+            prev_phone = conn.execute(
+                "SELECT device_username FROM desk_phone_logins WHERE staff_email = ?",
+                (email,)).fetchone()
+            conn.execute(
+                "DELETE FROM desk_phone_logins WHERE device_username = ? OR staff_email = ?",
+                (device_username, email))
+            conn.execute("""
+                INSERT INTO desk_phone_logins (device_username, staff_email, logged_in_at, logged_in_by)
+                VALUES (?, ?, ?, ?)
+            """, (device_username, email, now, performed_by))
+            conn.commit()
+        previous_occupant = prev_occ['staff_email'] if prev_occ else None
+        previous_phone = prev_phone['device_username'] if prev_phone else None
+        return {
+            'previous_occupant': None if previous_occupant == email else previous_occupant,
+            'previous_phone': None if previous_phone == device_username else previous_phone,
+        }
+
+    def log_out_desk_phone(self, device_username: str) -> str | None:
+        """Empty a shared desk phone. Returns who was on it, if anyone."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT staff_email FROM desk_phone_logins WHERE device_username = ?",
+                (device_username,)).fetchone()
+            conn.execute("DELETE FROM desk_phone_logins WHERE device_username = ?",
+                         (device_username,))
+            conn.commit()
+            return row['staff_email'] if row else None
+
+    def log_out_staff_from_desk_phones(self, email: str) -> str | None:
+        """Take a person off whichever shared desk phone they are on."""
+        if not email:
+            return None
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT device_username FROM desk_phone_logins WHERE staff_email = ?",
+                (email.lower(),)).fetchone()
+            conn.execute("DELETE FROM desk_phone_logins WHERE staff_email = ?", (email.lower(),))
+            conn.commit()
+            return row['device_username'] if row else None
+
     def update_user_default_caller_id(self, sid: str, caller_id: str | None, updated_by: str) -> bool:
         """Set a user's default caller ID for outbound calls.
 

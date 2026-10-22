@@ -80,12 +80,19 @@ def _deactivate_extension(email, performed_by, db):
     forward_to is cleared because it points at the person's personal mobile —
     leaving it set forwards company calls to someone who has left.
     """
+    # Off any shared desk phone first: left there, the next person to pick up
+    # that handset would call out as someone who has left (migration 083).
+    desk_phone = db.log_out_staff_from_desk_phones(email)
+
     ext = db.get_staff_extension(email)
     if not ext:
+        if desk_phone:
+            return _step('extension', DONE, f"No extension; logged out of desk phone {desk_phone}")
         return _step('extension', ALREADY_CLEAR, 'No extension')
 
     had_forward = bool(ext.get('forward_to'))
-    if not ext.get('is_active') and ext.get('is_active_locked') and not had_forward:
+    if (not ext.get('is_active') and ext.get('is_active_locked')
+            and not had_forward and not desk_phone):
         return _step('extension', ALREADY_CLEAR,
                      f"Extension {ext.get('extension')} already deactivated")
 
@@ -98,6 +105,8 @@ def _deactivate_extension(email, performed_by, db):
     detail = f"Deactivated extension {ext.get('extension')}"
     if had_forward:
         detail += f" and cleared mobile forward to {ext['forward_to']}"
+    if desk_phone:
+        detail += f"; logged out of desk phone {desk_phone}"
     return _step('extension', DONE, detail)
 
 
