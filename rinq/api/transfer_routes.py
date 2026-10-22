@@ -1029,6 +1029,29 @@ def _handle_failed_blind_transfer(original_call, transfer_state, db):
                     status_callback_event=['completed', 'busy', 'no-answer', 'failed', 'canceled'],
                 )
                 logger.info(f"Calling agent {transferred_by} back after failed blind transfer: {callback_call.sid}")
+                # Tag the callback leg the way a transfer target's leg is
+                # tagged (conference + customer), so the agent can transfer
+                # the caller again from it. Untagged, a retry fell through to
+                # blind_transfer_direct, which moved the AGENT to the target
+                # and hung up on the caller.
+                try:
+                    db.log_call({
+                        'call_sid': callback_call.sid,
+                        'parent_call_sid': original_call,
+                        'direction': 'inbound',
+                        'from_number': caller_id,
+                        'to_number': agent_identity,
+                        'status': 'ringing',
+                        'agent_email': agent_email,
+                        'conference_name': xfer_conf,
+                    })
+                    db.set_call_child_sid(callback_call.sid, original_call)
+                    # blind_transfer pointed the call at the target for
+                    # presence; it's back with the agent, so point it back —
+                    # otherwise the target shows "on a call" until it ends.
+                    db.update_call_log(original_call, {'agent_email': agent_email})
+                except Exception as e:
+                    logger.warning(f"Could not tag callback leg {callback_call.sid} for {original_call}: {e}")
                 db.update_queued_call_transfer_status(original_call, 'callback')
                 db.update_call_log_transfer_status(original_call, 'callback')
                 try:
