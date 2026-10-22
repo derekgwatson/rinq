@@ -578,6 +578,35 @@ def register(bp):
 
         return jsonify({"is_transfer": False})
 
+    @bp.route('/voice/transfer/screened-answer', methods=['POST'])
+    def transfer_screened_answer():
+        """A transfer target's mobile pressed 1: claim the transfer, then join.
+
+        No auth required - Twilio calls this directly.
+        """
+        from rinq.api.routes import _safe_screen_next
+        from rinq.services.transfer_service import get_transfer_service
+
+        group_key = request.args.get('ring_group', '')
+        next_path = _safe_screen_next(request.args.get('next', ''))
+        leg_sid = request.values.get('CallSid', '')
+
+        won = bool(next_path) and get_transfer_service().claim_transfer_leg(group_key, leg_sid)
+        if not won:
+            logger.info(f"Transfer screened answer lost: {leg_sid} ({group_key})")
+            twiml = '''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Nicole">Sorry, this call has already been answered or the caller has hung up.</Say>
+    <Hangup/>
+</Response>'''
+            return Response(twiml, mimetype='application/xml')
+
+        twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Redirect method="POST">{xml_escape(next_path)}</Redirect>
+</Response>'''
+        return Response(twiml, mimetype='application/xml')
+
     @bp.route('/voice/transfer/consult-status', methods=['POST'])
     def transfer_consult_status():
         """Status callback for consultation call during warm transfer."""
@@ -590,6 +619,25 @@ def register(bp):
 
         if not original_call:
             return '', 200
+
+        # Every-device ringing (transfer_service._ring_person_for_transfer):
+        # several legs share this callback. Only the winner's events, and the
+        # death of the LAST leg, may reach the single-leg handling below —
+        # otherwise the first phone to fail (an unopened browser fails in
+        # ~100ms) would fail the whole transfer while the others still ring.
+        ring_group = request.args.get('ring_group')
+        ring_group_failed = False
+        if ring_group:
+            outcome = _ring_group_status(ring_group, request.form.get('CallSid', ''),
+                                         call_status, request.args.get('screened') == '1', db)
+            if outcome == 'handled':
+                return '', 200
+            if outcome == 'all_failed':
+                # Whatever the last leg's own status (a mobile whose voicemail
+                # picked up reads 'completed' with a duration), nobody took the
+                # transfer — handle it as a ring failure, never as a success.
+                ring_group_failed = True
+                call_status = 'no-answer'
 
         # Mark the consult call participant as left
         consult_call_sid = request.form.get('CallSid', '')
@@ -615,7 +663,7 @@ def register(bp):
         # up mid-consult without completing. warm_transfer_complete() sets
         # transfer_status='completed' in the first case, so we can
         # discriminate on that.
-        call_duration = int(request.form.get('CallDuration', '0') or '0')
+        call_duration = 0 if ring_group_failed else int(request.form.get('CallDuration', '0') or '0')
         transfer_type_db = transfer_state.get('transfer_type') if transfer_state else None
         if call_status == 'completed' and call_duration > 0:
             is_warm_mid_consult = (
@@ -691,6 +739,7 @@ def register(bp):
                         if (is_mid_consult_disconnect
                                 and transfer_status_db == 'consulting'
                                 and _auto_reconnect_enabled(db)
+                                and _reconnect_device_is_browser(ring_group, consult_call_sid, db)
                                 and not db.get_leg_intent(consult_call_sid)
                                 and not db.get_reconnect_attempt(conference_name)
                                 and _others_present(conference_name, db, exclude_sid=consult_call_sid)):
@@ -879,6 +928,71 @@ def register(bp):
             return '', 200
 
         return '', 200
+
+
+_TERMINAL_STATUSES = ('completed', 'busy', 'no-answer', 'failed', 'canceled')
+
+
+def _reconnect_device_is_browser(ring_group, leg_sid, db) -> bool:
+    """Auto-reconnect re-rings the target's BROWSER, and only the browser
+    sends the "I hung up on purpose" beacon. So when every-device ringing let
+    a desk phone or mobile take the transfer, its hang-up can't be told from
+    a drop — never reconnect those. ring_group is the one the callback names."""
+    if not ring_group:
+        return True  # single-leg transfer: the browser, as before
+    leg = db.get_transfer_ring_leg(ring_group, leg_sid) or {}
+    return leg.get('kind') == 'browser'
+
+
+def _ring_group_status(group_key, leg_sid, call_status, screened, db) -> str:
+    """Handle one leg's status for a transfer that rings several devices.
+
+    Returns 'handled' when this event is dealt with here, 'winner' when it is
+    the answered leg's own event (normal consult-status handling), or
+    'all_failed' when this was the last leg to die and nobody answered.
+    """
+    from rinq.services.transfer_service import get_transfer_service
+
+    group = db.get_transfer_ring_group(group_key)
+    if not group:
+        # Cleaned up (long call) — only the winner lives that long.
+        return 'winner'
+
+    if call_status == 'in-progress':
+        if screened:
+            # A mobile picking up may be its voicemail; the screen claims it
+            # once 1 is pressed (/voice/transfer/screened-answer).
+            return 'handled'
+        service = get_transfer_service()
+        if not service.claim_transfer_leg(group_key, leg_sid):
+            winner = (db.get_transfer_ring_group(group_key) or {}).get('winner_sid')
+            if winner != leg_sid:
+                # Another of their phones already took it.
+                logger.info(f"Transfer ring group {group_key}: {leg_sid} answered too late, hanging up")
+                try:
+                    get_twilio_service().client.calls(leg_sid).update(status='completed')
+                except Exception as e:
+                    logger.debug(f"Could not hang up late leg {leg_sid}: {e}")
+        return 'handled'
+
+    if call_status in _TERMINAL_STATUSES:
+        if group.get('winner_sid') == leg_sid:
+            return 'winner'  # the answered leg ended — normal handling
+        # A leg that answered too late may have joined the conference before
+        # it was hung up; don't leave it on the participant list.
+        from rinq.api.routes import _handle_participant_left
+        _handle_participant_left(leg_sid, db)
+        all_failed = db.mark_transfer_ring_leg_dead(group_key, leg_sid)
+        if group.get('closed'):
+            # Go back / Cancel already restored the call; running the failure
+            # handling now could hit the NEXT transfer the agent has started.
+            return 'handled'
+        if all_failed:
+            logger.info(f"Transfer ring group {group_key}: every device failed ({call_status})")
+            return 'all_failed'  # fail the transfer once, the normal way
+        return 'handled'
+
+    return 'handled'  # initiated / ringing: nothing to do
 
 
 def _handle_failed_blind_transfer(original_call, transfer_state, db):

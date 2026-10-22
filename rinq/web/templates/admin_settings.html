@@ -174,5 +174,31 @@
 
         <button type="submit" class="btn">Save Settings</button>
     </form>
+
+    <!-- Transfers: which of the target's phones ring -->
+    <div class="settings-section" style="margin-top: 24px;">
+        <h3>Transfers</h3>
+        {% if transfer_ring_all %}
+        <p class="settings-description">
+            <strong>On: a transfer rings every phone the person has</strong> &mdash; their Tina
+            browser tab, their desk phone, and their mobile if they forward to one. The mobile
+            hears "press 1 to answer", so its voicemail can't take the call. Whichever phone
+            answers first gets the caller.
+        </p>
+        {% else %}
+        <p class="settings-description">
+            <strong>Off: a transfer to someone's extension rings only their Tina browser tab.</strong>
+            Anyone working from a desk phone or their mobile won't hear it, and the transfer comes
+            back to whoever sent it. Turn this on to ring every phone they have, the same way a
+            call to their own number does.
+        </p>
+        {% endif %}
+        <form method="POST" action="{{ url_for('web.admin_settings_set_transfer_ring_all') }}">
+            <input type="hidden" name="transfer_ring_all" value="{{ '0' if transfer_ring_all else '1' }}">
+            <button type="submit" class="btn{{ '' if transfer_ring_all else ' btn-primary' }}">
+                {{ 'Turn off' if transfer_ring_all else 'Ring every phone on transfer' }}
+            </button>
+        </form>
+    </div>
 </div>
 {% endblock %}

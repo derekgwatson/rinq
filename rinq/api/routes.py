@@ -26,6 +26,7 @@ try:
 except ImportError:
     from rinq.auth.decorators import api_or_session_auth, get_api_caller, get_api_caller_email
 from rinq.services.twilio_service import get_twilio_service, twilio_list, start_twilio_thread
+from rinq.services.person_devices import person_ring_targets, mobile_screen_url
 from rinq.services.auth import login_required, get_current_user
 from rinq.database.db import get_db, _parse_dt
 from rinq.config import config
@@ -620,15 +621,9 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
             for member in active_members:
                 user_email = member['user_email']
 
-                # Get user's ring settings (includes DND check)
-                ring_settings = db.get_user_ring_settings(user_email)
-
-                # SIP devices (desk phone, Zoiper, etc.)
-                if ring_settings.get('ring_sip', True) and sip_domain:
-                    user = db.get_user_by_email(user_email)
-                    sip_uri = f"sip:{user['username']}@{sip_domain}" if user and user.get('username') else None
-
-                    if sip_uri:
+                # Same device list as direct calls and transfers (services/person_devices)
+                for target in person_ring_targets(user_email, db, sip_domain):
+                    if target.kind == 'sip':
                         try:
                             # Carry the identity on the callback URL rather than
                             # relying on ring_attempts metadata: store_ring_attempts()
@@ -640,14 +635,14 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
                                 f"{status_callback_url}&sip_user={quote(user_email)}"
                             )
                             call = service.client.calls.create(
-                                to=sip_uri,
+                                to=target.to,
                                 from_=customer_caller_id,
                                 url=answer_url,
                                 timeout=30,
                                 status_callback=sip_status_callback_url,
                                 status_callback_event=['initiated', 'ringing', 'answered', 'completed']
                             )
-                            logger.info(f"Initiated SIP call to {sip_uri} for queue {queue_name}: {call.sid}")
+                            logger.info(f"Initiated SIP call to {target.to} for queue {queue_name}: {call.sid}")
                             db.stamp_sip_activity(user_email)
                             db.stamp_sip_ring_attempt(user_email)
                             agent_call_sids.append(call.sid)
@@ -661,61 +656,58 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
                         except Exception as e:
                             logger.error(f"Failed to call SIP device for {user_email}: {e}")
 
-                # Browser softphone (Twilio Client)
-                if ring_settings.get('ring_browser', True):
-                    identity = _email_to_browser_identity(user_email)
-                    try:
-                        call = service.client.calls.create(
-                            to=f"client:{identity}",
-                            from_=customer_caller_id,
-                            url=answer_url,
-                            timeout=30,
-                            status_callback=status_callback_url,
-                            status_callback_event=['initiated', 'ringing', 'answered', 'completed']
-                        )
-                        logger.info(f"Initiated browser ring for {user_email} (queue {queue_name}): {call.sid}")
-                        agent_call_sids.append(call.sid)
-                        metadata_by_sid[call.sid] = json.dumps({
-                            'customer_call_sid': customer_call_sid,
-                            'queue_id': queue_id,
-                            'user_email': user_email,
-                            'device_type': 'browser'
-                        })
-                        calls_initiated += 1
-                    except Exception as e:
-                        logger.error(f"Failed to ring browser for {user_email}: {e}")
+                    elif target.kind == 'browser':
+                        try:
+                            call = service.client.calls.create(
+                                to=target.to,
+                                from_=customer_caller_id,
+                                url=answer_url,
+                                timeout=30,
+                                status_callback=status_callback_url,
+                                status_callback_event=['initiated', 'ringing', 'answered', 'completed']
+                            )
+                            logger.info(f"Initiated browser ring for {user_email} (queue {queue_name}): {call.sid}")
+                            agent_call_sids.append(call.sid)
+                            metadata_by_sid[call.sid] = json.dumps({
+                                'customer_call_sid': customer_call_sid,
+                                'queue_id': queue_id,
+                                'user_email': user_email,
+                                'device_type': 'browser'
+                            })
+                            calls_initiated += 1
+                        except Exception as e:
+                            logger.error(f"Failed to ring browser for {user_email}: {e}")
 
-                # Mobile forward. Screened: the leg only reaches agent-answer
-                # (which claims the call) once a person presses 1, so a mobile
-                # that is off or declines can't let its voicemail take the call.
-                ext = db.get_staff_extension(user_email)
-                if ext and ext.get('forward_to') and not ring_settings.get('dnd') and our_caller_id:
-                    mobile_answer_path = (
-                        f"/api/voice/queue/{queue_id}/agent-answer"
-                        f"?customer_call_sid={customer_call_sid}&agent_email={quote(user_email, safe='')}"
-                    )
-                    try:
-                        call = service.client.calls.create(
-                            to=ext['forward_to'],
-                            # A mobile leg must present a number we own (gotcha 3)
-                            from_=our_caller_id,
-                            url=_mobile_screen_url(base_url, mobile_answer_path,
-                                                   f"Call from the {queue_name} queue"),
-                            timeout=30,
-                            status_callback=status_callback_url,
-                            status_callback_event=['initiated', 'ringing', 'answered', 'completed']
+                    # Mobile forward. Screened: the leg only reaches agent-answer
+                    # (which claims the call) once a person presses 1, so a mobile
+                    # that is off or declines can't let its voicemail take the call.
+                    elif target.kind == 'mobile' and our_caller_id:
+                        mobile_answer_path = (
+                            f"/api/voice/queue/{queue_id}/agent-answer"
+                            f"?customer_call_sid={customer_call_sid}&agent_email={quote(user_email, safe='')}"
                         )
-                        logger.info(f"Initiated mobile ring to {ext['forward_to']} for {user_email} (queue {queue_name}): {call.sid}")
-                        agent_call_sids.append(call.sid)
-                        metadata_by_sid[call.sid] = json.dumps({
-                            'customer_call_sid': customer_call_sid,
-                            'queue_id': queue_id,
-                            'user_email': user_email,
-                            'device_type': 'mobile'
-                        })
-                        calls_initiated += 1
-                    except Exception as e:
-                        logger.error(f"Failed to ring mobile for {user_email}: {e}")
+                        try:
+                            call = service.client.calls.create(
+                                to=target.to,
+                                # A mobile leg must present a number we own (gotcha 3)
+                                from_=our_caller_id,
+                                url=mobile_screen_url(base_url, mobile_answer_path,
+                                                       f"Call from the {queue_name} queue"),
+                                timeout=30,
+                                status_callback=status_callback_url,
+                                status_callback_event=['initiated', 'ringing', 'answered', 'completed']
+                            )
+                            logger.info(f"Initiated mobile ring to {target.to} for {user_email} (queue {queue_name}): {call.sid}")
+                            agent_call_sids.append(call.sid)
+                            metadata_by_sid[call.sid] = json.dumps({
+                                'customer_call_sid': customer_call_sid,
+                                'queue_id': queue_id,
+                                'user_email': user_email,
+                                'device_type': 'mobile'
+                            })
+                            calls_initiated += 1
+                        except Exception as e:
+                            logger.error(f"Failed to ring mobile for {user_email}: {e}")
 
             # Store agent call SIDs in DB for cancellation (shared across workers)
             if agent_call_sids:
@@ -801,7 +793,7 @@ def _ring_targets_into_conference(dial_targets: list, conference_name: str,
                 f"?conference={quote(conference_name, safe='')}"
                 f"&caller_call_sid={quote(caller_call_sid or '', safe='')}"
             )
-            mobile_url = _mobile_screen_url(base_url, screened_answer_path, "Incoming call")
+            mobile_url = mobile_screen_url(base_url, screened_answer_path, "Incoming call")
             mobile_status_url = f"{status_url}&screened=1"
 
             call_sids = []
@@ -910,36 +902,23 @@ def _build_dial_targets(routing: dict) -> list[str]:
             return
         seen_emails.add(user_email)
 
-        # Ring settings include DND check — if DND is on, both are False
-        settings = db.get_user_ring_settings(user_email)
-        if settings.get('dnd'):
-            logger.info(f"Skipping {user_email} - DND enabled")
-            return
+        if sip_domain is None:
+            sip_domain = _get_sip_domain()
 
-        # Browser softphone
-        if settings.get('ring_browser', True):
-            identity = _email_to_browser_identity(user_email)
-            targets.append(f'<Client>{identity}</Client>')
-
-        # SIP devices (desk phone, Zoiper, etc.)
-        if settings.get('ring_sip', True):
-            if sip_domain is None:
-                sip_domain = _get_sip_domain()
-
-            if sip_domain:
-                sip_uri = _get_sip_uri_for_user(user_email, sip_domain)
-                if sip_uri:
-                    targets.append(f'<Sip>{sip_uri}</Sip>')
-                    logger.info(f"Added SIP target for {user_email}: {sip_uri}")
-                    db.stamp_sip_activity(user_email)
-                else:
-                    logger.warning(f"Could not build SIP URI for {user_email} - no SIP credentials found")
-
-        # Mobile forwarding (from staff_extensions)
-        ext = db.get_staff_extension(user_email)
-        if ext and ext.get('forward_to'):
-            targets.append(f'<Number>{xml_escape(ext["forward_to"])}</Number>')
-            logger.info(f"Added mobile forward target for {user_email}: {ext['forward_to']}")
+        # Same device list as queue calls and transfers (services/person_devices)
+        person_targets = person_ring_targets(user_email, db, sip_domain)
+        if not person_targets:
+            logger.info(f"Skipping {user_email} - DND enabled or no ring device")
+        for t in person_targets:
+            if t.kind == 'browser':
+                targets.append(f'<Client>{t.to[len("client:"):]}</Client>')
+            elif t.kind == 'sip':
+                targets.append(f'<Sip>{t.to}</Sip>')
+                logger.info(f"Added SIP target for {user_email}: {t.to}")
+                db.stamp_sip_activity(user_email)
+            elif t.kind == 'mobile':
+                targets.append(f'<Number>{xml_escape(t.to)}</Number>')
+                logger.info(f"Added mobile forward target for {user_email}: {t.to}")
 
     # Queue members (call flow routing)
     queue = routing.get('queue')
@@ -2959,12 +2938,8 @@ def _claim_inbound_answer(conference_name: str, caller_call_sid: str, agent_call
 # reaches the real answer URL (`next`) when someone presses 1 — voicemail
 # can't, the leg hangs up, and the other phones keep ringing.
 
-def _mobile_screen_url(base_url: str, next_path: str, label: str) -> str:
-    """URL for a mobile leg: prompt, then on '1' redirect to next_path."""
-    return (
-        f"{base_url}/api/voice/mobile-screen"
-        f"?next={quote(next_path, safe='')}&label={quote(label, safe='')}"
-    )
+# The screen's URL is built by mobile_screen_url (services/person_devices.py),
+# shared with transfers.
 
 
 def _safe_screen_next(next_path: str) -> str | None:
