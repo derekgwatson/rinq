@@ -192,11 +192,11 @@ class TransferService:
         except Exception as e:
             logger.warning(f"Transfer {original_call}: could not ring {target.kind} {target.to}: {e}")
             return
+        placed.append((call.sid, target.kind))  # first, so a failure below still hangs it up
         self.db.add_transfer_ring_leg(group_key, call.sid, target.kind, target.to)
         if target.kind == 'sip':
             self.db.stamp_sip_activity(email)
             self.db.stamp_sip_ring_attempt(email)
-        placed.append((call.sid, target.kind))
         logger.info(f"Transfer {original_call}: ringing {target.kind} {target.to} as {call.sid} ({group_key})")
 
     def claim_transfer_leg(self, group_key: str, call_sid: str) -> bool:
@@ -708,8 +708,10 @@ class TransferService:
                 # them for every leg would leave a call_log row per phone.
                 self.db.set_call_conference(target_sid, new_conference)
                 self.db.set_call_child_sid(target_sid, call_sid)
-            # Store consult call SID so transfer context lookup works
-            self.db.update_transfer_consultation(call_sid, target_sid, new_conference)
+            # Store consult call SID so transfer context lookup works (a ring
+            # group's placer already did, unless a leg had answered)
+            if not ring_group:
+                self.db.update_transfer_consultation(call_sid, target_sid, new_conference)
             logger.info(f"Stored conference {new_conference} for customer={call_sid}, target={target_sid}")
 
             # Redirect the customer into the new conference
@@ -1217,16 +1219,19 @@ class TransferService:
             Dict with success status or error
         """
         try:
-            # Every-device ringing: stop any leg answering from here on, BEFORE
-            # reading the state — so a claim either landed already (and the
-            # state below shows its leg) or can no longer happen.
-            ring_group = self.db.get_latest_transfer_ring_group(call_sid)
-            if ring_group:
-                self.db.close_transfer_ring_group(ring_group['group_key'])
-
             transfer_state = self.db.get_transfer_state(call_sid)
             if not transfer_state:
                 return {'success': False, 'error': 'No transfer in progress'}
+
+            # Every-device ringing: this transfer's ring group (found through
+            # its consult leg — an earlier transfer of the same customer has
+            # its own group, whose winner may be the agent pressing Go back).
+            # Closed now, so no leg can answer from here on; a leg that won
+            # between the read above and the close is hung up further down.
+            ring_group = self.db.get_transfer_ring_group_for_leg(
+                call_sid, transfer_state.get('transfer_consult_call_sid'))
+            if ring_group:
+                self.db.close_transfer_ring_group(ring_group['group_key'])
 
             # Transfer already failed — clean up any lingering consult leg then
             # check whether the customer's conference is still alive before

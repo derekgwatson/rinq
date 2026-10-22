@@ -3901,12 +3901,20 @@ class Database(StatsMixin, CallLogMixin):
         group['context'] = json.loads(group['context']) if group.get('context') else {}
         return group
 
-    def get_latest_transfer_ring_group(self, original_call_sid: str) -> dict | None:
+    def get_transfer_ring_group_for_leg(self, original_call_sid: str, call_sid: str) -> dict | None:
+        """The ring group that call_sid is a leg of, for this customer's call.
+        A customer can be transferred more than once, so "their latest group"
+        may belong to an earlier transfer — always find it through a leg of
+        the transfer you mean (its consult call)."""
+        if not call_sid:
+            return None
         with self._get_conn() as conn:
             row = conn.execute(
-                "SELECT group_key FROM transfer_ring_groups WHERE original_call_sid = ? "
-                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
-                (original_call_sid,)
+                "SELECT g.group_key FROM transfer_ring_groups g "
+                "JOIN transfer_ring_legs l ON l.group_key = g.group_key "
+                "WHERE g.original_call_sid = ? AND l.call_sid = ? "
+                "ORDER BY g.created_at DESC, g.rowid DESC LIMIT 1",
+                (original_call_sid, call_sid)
             ).fetchone()
         return self.get_transfer_ring_group(row['group_key']) if row else None
 
