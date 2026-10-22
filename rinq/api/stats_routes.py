@@ -166,6 +166,10 @@ def register(bp):
             # call they guard.
             stale_rec_starts = db.cleanup_old_recording_starts(hours=hours)
 
+            # Transfer ring groups only have to outlive the transfer they track
+            # (a winner's final callback arrives when the call ends).
+            db.cleanup_old_transfer_ring_groups(hours=6)
+
             db.log_activity(
                 'queue_cleanup',
                 f'{hours}h',

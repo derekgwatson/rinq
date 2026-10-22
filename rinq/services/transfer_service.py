@@ -13,6 +13,7 @@ Architecture:
 """
 
 import logging
+import uuid
 from datetime import datetime
 
 from twilio.base.exceptions import TwilioException, TwilioRestException
@@ -22,10 +23,16 @@ from xml.sax.saxutils import escape as xml_escape
 
 from rinq.config import config
 from rinq.database.db import get_db
+from rinq.services.person_devices import person_ring_targets, mobile_screen_url
 from rinq.services.twilio_service import get_twilio_service, twilio_list
 from rinq.tenant.context import get_twilio_config
 
 logger = logging.getLogger(__name__)
+
+# Per-tenant bot_settings flag: transfers to a person ring every device they
+# have (browser + desk phone + screened mobile), not just the browser.
+# Default off. Toggled at /admin/settings.
+TRANSFER_RING_ALL_KEY = 'transfer_ring_all_devices'
 
 # transfer_failure_reason values after which the server has taken the customer
 # OFF hold (transfer_routes: mid-consult disconnect, failed auto-reconnect).
@@ -59,6 +66,152 @@ class TransferService:
         """
         return config.webhook_base_url
 
+    # =========================================================================
+    # Ringing every device a transfer target has
+    # =========================================================================
+    # Gated by the per-tenant flag below. Off: a transfer to an extension
+    # rings only the target's browser (the old behaviour). On: it rings the
+    # same devices a queue or direct call would — browser, desk phone and a
+    # screened mobile (services/person_devices.py) — and the first to answer
+    # takes the call. Bookkeeping in migration 082.
+
+    def ring_all_devices_enabled(self) -> bool:
+        try:
+            return self.db.get_bot_setting(TRANSFER_RING_ALL_KEY, '0') == '1'
+        except Exception as e:
+            logger.warning(f"Could not read {TRANSFER_RING_ALL_KEY} — defaulting to off: {e}")
+            return False
+
+    def _ring_person_for_transfer(self, *, original_call: str, email: str, kind: str,
+                                  conference: str, role: str, client_from: str,
+                                  pstn_from: str | None, label: str,
+                                  source: str = 'queued_calls', timeout: int = 30) -> dict:
+        """Ring every device `email` has into `conference`.
+
+        kind: 'blind' | 'warm' | 'three_way' — decides the winner's bookkeeping.
+        client_from: caller ID for browser/SIP legs (the customer's number).
+        pstn_from: caller ID for the mobile leg — must be a number we own
+            (gotcha 3); no mobile leg without one.
+
+        Returns {'group_key', 'primary_sid', 'all_failed'}. primary_sid is the
+        leg recorded as the consult call until one answers (the browser leg
+        when there is one, so the target's softphone still shows "Transfer
+        from …"). primary_sid None = nothing could be rung. all_failed = every
+        leg died before placing finished; no status callback will report
+        that, so the caller must handle it.
+        """
+        from rinq.services.sip import get_sip_domain
+
+        targets = person_ring_targets(email, self.db, get_sip_domain())
+        if not pstn_from:
+            targets = [t for t in targets if t.kind != 'mobile']
+        if not targets:
+            return {'group_key': None, 'primary_sid': None, 'all_failed': False}
+
+        group_key = f"xfer:{original_call}:{uuid.uuid4().hex[:8]}"
+        # expected starts above any real leg count, so a leg that dies while
+        # the others are still being placed can't read as "all failed".
+        self.db.create_transfer_ring_group(group_key, original_call, 99, {
+            'kind': kind,
+            'conference': conference,
+            'source': source,
+            'email': email,
+            'client_from': client_from,
+            'pstn_from': pstn_from,
+        })
+
+        join_path = f"/api/voice/conference/join?room={quote(conference, safe='')}&role={role}"
+        status_url = (
+            f"{self.base_url}/api/voice/transfer/consult-status"
+            f"?original_call={quote(original_call, safe='')}&source={source}"
+            f"&ring_group={quote(group_key, safe='')}"
+        )
+
+        placed = []
+        for target in targets:
+            if target.kind == 'mobile':
+                screened_path = (
+                    f"/api/voice/transfer/screened-answer"
+                    f"?ring_group={quote(group_key, safe='')}&next={quote(join_path, safe='')}"
+                )
+                url = mobile_screen_url(self.base_url, screened_path, label)
+                leg_status_url = f"{status_url}&screened=1"
+                from_ = pstn_from
+            else:
+                url = f"{self.base_url}{join_path}"
+                leg_status_url = status_url
+                from_ = client_from
+            try:
+                call = self.twilio.client.calls.create(
+                    to=target.to,
+                    from_=from_,
+                    url=url,
+                    timeout=timeout,
+                    status_callback=leg_status_url,
+                    status_callback_event=['answered', 'completed'],
+                )
+            except Exception as e:
+                logger.warning(f"Transfer {original_call}: could not ring {target.kind} {target.to}: {e}")
+                continue
+            self.db.add_transfer_ring_leg(group_key, call.sid, target.kind, target.to)
+            if target.kind == 'sip':
+                self.db.stamp_sip_activity(email)
+                self.db.stamp_sip_ring_attempt(email)
+            placed.append((call.sid, target.kind))
+            logger.info(f"Transfer {original_call}: ringing {target.kind} {target.to} as {call.sid} ({group_key})")
+
+        if not placed:
+            self.db.finalize_transfer_ring_group(group_key, 0)
+            return {'group_key': group_key, 'primary_sid': None, 'all_failed': False}
+
+        primary_sid = next((sid for sid, k in placed if k == 'browser'), placed[0][0])
+        all_failed = self.db.finalize_transfer_ring_group(group_key, len(placed))
+        return {'group_key': group_key, 'primary_sid': primary_sid, 'all_failed': all_failed}
+
+    def claim_transfer_leg(self, group_key: str, call_sid: str) -> bool:
+        """First leg to answer wins the transfer: stop the others ringing and
+        point the transfer's bookkeeping at the leg that answered."""
+        if not self.db.claim_transfer_ring_group(group_key, call_sid):
+            return False
+
+        group = self.db.get_transfer_ring_group(group_key) or {}
+        ctx = group.get('context') or {}
+        original_call = group.get('original_call_sid')
+        conference = ctx.get('conference')
+        self.cancel_transfer_ring_legs(group_key, except_sid=call_sid)
+
+        self.db.update_transfer_consultation(original_call, call_sid, conference,
+                                             source=ctx.get('source', 'queued_calls'))
+        if ctx.get('kind') == 'blind':
+            # What blind_transfer did for its single target leg up front.
+            leg = self.db.get_transfer_ring_leg(group_key, call_sid) or {}
+            to_addr = leg.get('to_addr') or ''
+            from_number = ctx.get('pstn_from') if leg.get('kind') == 'mobile' else ctx.get('client_from')
+            self.db.log_call({
+                'call_sid': call_sid,
+                'direction': 'inbound',
+                'from_number': from_number,
+                'to_number': to_addr,
+                'status': 'ringing',
+                'conference_name': conference,
+            })
+            self.db.set_call_conference(call_sid, conference)
+            self.db.set_call_child_sid(call_sid, original_call)
+        logger.info(f"Transfer {original_call}: {call_sid} answered ({group_key})")
+        return True
+
+    def cancel_transfer_ring_legs(self, group_key: str, except_sid: str = None) -> None:
+        """Hang up every leg of a transfer that is still ringing."""
+        if not group_key:
+            return
+        for sid in self.db.get_ringing_transfer_legs(group_key):
+            if sid == except_sid:
+                continue
+            try:
+                self.twilio.client.calls(sid).update(status='completed')
+            except Exception as e:
+                logger.debug(f"Could not cancel transfer ring leg {sid}: {e}")
+
     def _build_extension_dial_twiml(self, extension: str, caller_id: str,
                                      transferred_by: str = None,
                                      customer_number: str = None) -> str | None:
@@ -83,10 +236,9 @@ class TransferService:
         email = ext_record['email']
         targets = []
 
-        # Browser softphone — include callerName param so the receiving
-        # agent sees the customer they're about to pick up (preferred),
-        # otherwise at least who is transferring the call.
-        identity = email.replace('@', '_at_').replace('.', '_')
+        # Who is calling — the browser shows it via the callerName param:
+        # the customer they're about to pick up (preferred), otherwise at
+        # least who is transferring the call.
         if customer_number:
             caller_label = f'Transfer: {customer_number}'
         elif transferred_by:
@@ -94,27 +246,27 @@ class TransferService:
             caller_label = f'Transfer: {caller_name}'
         else:
             caller_label = None
-        if caller_label:
-            targets.append(
-                f'<Client>'
-                f'<Identity>{identity}</Identity>'
-                f'<Parameter name="callerName" value="{xml_escape(caller_label)}" />'
-                f'</Client>'
-            )
-        else:
-            targets.append(f'<Client>{identity}</Client>')
 
-        # SIP device (if they have one)
-        from rinq.services.sip import get_sip_domain, get_sip_uri_for_user as _get_sip_uri_for_user
-        sip_domain = get_sip_domain()
-        if sip_domain:
-            sip_uri = _get_sip_uri_for_user(email, sip_domain)
-            if sip_uri:
-                targets.append(f'<Sip>{sip_uri}</Sip>')
-
-        # Mobile forwarding
-        if ext_record.get('forward_to'):
-            targets.append(f'<Number>{ext_record["forward_to"]}</Number>')
+        # Same device list as every other way of ringing a person
+        # (services/person_devices). The mobile is left out: in a <Dial> the
+        # first leg to pick up wins before any "press 1" screen could run, so
+        # a mobile's voicemail would take the transfer. This path predates
+        # conferences and is only reached for a call that isn't in one.
+        from rinq.services.sip import get_sip_domain
+        for t in person_ring_targets(email, self.db, get_sip_domain()):
+            if t.kind == 'browser':
+                identity = t.to[len('client:'):]
+                if caller_label:
+                    targets.append(
+                        f'<Client>'
+                        f'<Identity>{identity}</Identity>'
+                        f'<Parameter name="callerName" value="{xml_escape(caller_label)}" />'
+                        f'</Client>'
+                    )
+                else:
+                    targets.append(f'<Client>{identity}</Client>')
+            elif t.kind == 'sip':
+                targets.append(f'<Sip>{t.to}</Sip>')
 
         if not targets:
             return None
@@ -459,43 +611,67 @@ class TransferService:
             transfer_from = customer_number if (customer_number and target_is_client_or_sip) else fallback_caller_id
 
             # Call the target into the new conference
-            status_callback_url = (
-                f"{self.base_url}/api/voice/transfer/consult-status"
-                f"?original_call={call_sid}&source=queued_calls"
-            )
-            try:
-                target_call = self.twilio.client.calls.create(
-                    to=target_to,
-                    from_=transfer_from,
-                    url=conference_join_url,
-                    timeout=30,
-                    status_callback=status_callback_url,
-                    status_callback_event=['answered', 'completed', 'busy', 'no-answer', 'failed', 'canceled'],
+            ring_group = None
+            if is_ext and self.ring_all_devices_enabled():
+                # Every device they have; the first to answer takes the call
+                # (claim_transfer_leg does the bookkeeping below for the winner).
+                rung = self._ring_person_for_transfer(
+                    original_call=call_sid, email=ext_record['email'], kind='blind',
+                    conference=new_conference, role='agent',
+                    client_from=customer_number or fallback_caller_id,
+                    pstn_from=fallback_caller_id,
+                    label='Transferred call',
                 )
-                logger.info(f"Blind transfer: called target {target_to} as {target_call.sid}")
-                # Create proper call_log record for the target call
-                self.db.log_call({
-                    'call_sid': target_call.sid,
-                    'direction': 'inbound',
-                    'from_number': transfer_from,
-                    'to_number': target_to,
-                    'status': 'ringing',
-                    'conference_name': new_conference,
-                })
-            except Exception as e:
-                logger.warning(f"Blind transfer: could not call target {target_to} "
-                               f"for {call_sid}: {e}")
-                self.db.fail_transfer(call_sid, f'Could not reach {target_name}')
-                return {'success': False, 'error': f'Could not reach {target_name}: {e}'}
+                ring_group = rung['group_key']
+                if not rung['primary_sid'] or rung['all_failed']:
+                    # Nothing rang, or every device failed at once (e.g. only
+                    # a browser, and it isn't open). The customer is still with
+                    # the agent — say so rather than calling the agent back.
+                    self.db.fail_transfer(call_sid, 'no-answer')
+                    return {'success': False, 'error': f"Couldn't reach {target_name} on any of their phones"}
+                target_sid = rung['primary_sid']
+            else:
+                status_callback_url = (
+                    f"{self.base_url}/api/voice/transfer/consult-status"
+                    f"?original_call={call_sid}&source=queued_calls"
+                )
+                try:
+                    target_call = self.twilio.client.calls.create(
+                        to=target_to,
+                        from_=transfer_from,
+                        url=conference_join_url,
+                        timeout=30,
+                        status_callback=status_callback_url,
+                        status_callback_event=['answered', 'completed', 'busy', 'no-answer', 'failed', 'canceled'],
+                    )
+                    logger.info(f"Blind transfer: called target {target_to} as {target_call.sid}")
+                    # Create proper call_log record for the target call
+                    self.db.log_call({
+                        'call_sid': target_call.sid,
+                        'direction': 'inbound',
+                        'from_number': transfer_from,
+                        'to_number': target_to,
+                        'status': 'ringing',
+                        'conference_name': new_conference,
+                    })
+                except Exception as e:
+                    logger.warning(f"Blind transfer: could not call target {target_to} "
+                                   f"for {call_sid}: {e}")
+                    self.db.fail_transfer(call_sid, f'Could not reach {target_name}')
+                    return {'success': False, 'error': f'Could not reach {target_name}: {e}'}
+                target_sid = target_call.sid
 
             # Store conference info BEFORE any more Twilio calls — ensures
             # hold/hangup can find the conference even if later steps fail
             self.db.set_call_conference(call_sid, new_conference)
-            self.db.set_call_conference(target_call.sid, new_conference)
-            self.db.set_call_child_sid(target_call.sid, call_sid)
+            if not ring_group:
+                # A ring group's winner gets these when it answers — writing
+                # them for every leg would leave a call_log row per phone.
+                self.db.set_call_conference(target_sid, new_conference)
+                self.db.set_call_child_sid(target_sid, call_sid)
             # Store consult call SID so transfer context lookup works
-            self.db.update_transfer_consultation(call_sid, target_call.sid, new_conference)
-            logger.info(f"Stored conference {new_conference} for customer={call_sid}, target={target_call.sid}")
+            self.db.update_transfer_consultation(call_sid, target_sid, new_conference)
+            logger.info(f"Stored conference {new_conference} for customer={call_sid}, target={target_sid}")
 
             # Redirect the customer into the new conference
             customer_conf_url = f"{self.base_url}/api/voice/conference/join?room={new_conference}&role=caller"
@@ -507,10 +683,13 @@ class TransferService:
                 # (canceling a ringing leg never runs its TwiML, so gotcha 21's
                 # after-dial concern doesn't apply here).
                 logger.warning(f"Blind transfer: could not redirect customer {call_sid}: {e}")
-                try:
-                    self.twilio.client.calls(target_call.sid).update(status='canceled')
-                except Exception as cancel_err:
-                    logger.warning(f"Blind transfer: could not cancel target leg {target_call.sid}: {cancel_err}")
+                if ring_group:
+                    self.cancel_transfer_ring_legs(ring_group)
+                else:
+                    try:
+                        self.twilio.client.calls(target_sid).update(status='canceled')
+                    except Exception as cancel_err:
+                        logger.warning(f"Blind transfer: could not cancel target leg {target_sid}: {cancel_err}")
                 self.db.fail_transfer(call_sid, 'Caller disconnected before transfer')
                 return {'success': False, 'error': 'Caller disconnected before transfer completed'}
 
@@ -548,6 +727,59 @@ class TransferService:
             logger.exception(f"Error during blind transfer: {e}")
             self.db.fail_transfer(call_sid, str(e))
             return {'success': False, 'error': str(e)}
+
+    def _place_consult_legs(self, *, call_sid, is_ext, ext_record, kind, conference_name,
+                            target_to, target_join_url, consult_from, customer_number,
+                            fallback_caller_id):
+        """Ring the warm / 3-way target into the main conference and record the
+        consult leg. Returns the consult call SID (with every-device ringing,
+        the browser leg until one answers), or None if nothing could be rung —
+        in which case the transfer is already marked failed and, for warm, the
+        customer is still held as for any ring failure.
+        """
+        status_callback = f"{self.base_url}/api/voice/transfer/consult-status?original_call={call_sid}"
+        if not (is_ext and self.ring_all_devices_enabled()):
+            consult_call = self.twilio.client.calls.create(
+                to=target_to,
+                from_=consult_from,
+                url=target_join_url,
+                status_callback=status_callback,
+                status_callback_event=['answered', 'completed', 'busy', 'no-answer', 'failed', 'canceled']
+            )
+            # consult_conference IS the main conference in the single-conf model
+            self.db.update_transfer_consultation(call_sid, consult_call.sid, conference_name)
+            return consult_call.sid
+
+        rung = self._ring_person_for_transfer(
+            original_call=call_sid, email=ext_record['email'], kind=kind,
+            conference=conference_name, role='agent_no_exit',
+            client_from=customer_number or fallback_caller_id,
+            pstn_from=fallback_caller_id,
+            label='Transferred call',
+            timeout=60,  # Twilio's default, which the single-leg consult used
+        )
+        if rung['primary_sid']:
+            self.db.update_transfer_consultation(call_sid, rung['primary_sid'], conference_name)
+        if rung['primary_sid'] and not rung['all_failed']:
+            return rung['primary_sid']
+
+        # Every device failed before we finished ringing them (e.g. only a
+        # browser, and it isn't open), so no status callback will report it.
+        # Do what consult-status does for a ring failure: the customer stays
+        # held so the agent can try someone else; a warm transfer's
+        # endConferenceOnExit goes back on so the agent hanging up still ends
+        # the call.
+        if kind == 'warm':
+            from rinq.api.transfer_routes import _restore_end_conference_on_exit
+            _restore_end_conference_on_exit(conference_name)
+        self.db.fail_transfer(call_sid, 'no-answer')
+        self.db.log_activity(
+            action="call_transfer_failed",
+            target=call_sid,
+            details="Transfer target did not answer: no-answer (no device could be rung)",
+            performed_by="twilio"
+        )
+        return None
 
     def warm_transfer_start(self, call_sid: str, target: str, target_name: str,
                             transferred_by: str, agent_call_sid: str,
@@ -650,28 +882,27 @@ class TransferService:
                     f"{self.base_url}/api/voice/conference/join"
                     f"?room={conference_name}&role=agent_no_exit"
                 )
-                consult_call = self.twilio.client.calls.create(
-                    to=target_to,
-                    from_=consult_from,
-                    url=target_join_url,
-                    status_callback=f"{self.base_url}/api/voice/transfer/consult-status?original_call={call_sid}",
-                    status_callback_event=['answered', 'completed', 'busy', 'no-answer', 'failed', 'canceled']
+                consult_sid = self._place_consult_legs(
+                    call_sid=call_sid, is_ext=is_ext, ext_record=ext_record if is_ext else None,
+                    kind='three_way', conference_name=conference_name,
+                    target_to=target_to, target_join_url=target_join_url,
+                    consult_from=consult_from, customer_number=customer_number,
+                    fallback_caller_id=fallback_caller_id,
                 )
-
-                # For 3-way the "consult conference" is the main conference itself
-                self.db.update_transfer_consultation(call_sid, consult_call.sid, conference_name)
+                if not consult_sid:
+                    return {'success': False, 'error': f"Couldn't reach {target_name} on any of their phones"}
 
                 self.db.log_activity(
                     action="call_transfer_three_way_start",
                     target=target_display,
-                    details=f"Started 3-way call for {call_sid} to {target_name}. Call: {consult_call.sid}",
+                    details=f"Started 3-way call for {call_sid} to {target_name}. Call: {consult_sid}",
                     performed_by=transferred_by
                 )
-                logger.info(f"3-way call started: {call_sid} -> {target_display}, call: {consult_call.sid}")
+                logger.info(f"3-way call started: {call_sid} -> {target_display}, call: {consult_sid}")
                 return {
                     'success': True,
                     'transfer_type': 'three_way',
-                    'consult_call_sid': consult_call.sid,
+                    'consult_call_sid': consult_sid,
                     'consult_conference': conference_name,
                 }
 
@@ -699,28 +930,27 @@ class TransferService:
                 f"{self.base_url}/api/voice/conference/join"
                 f"?room={conference_name}&role=agent_no_exit"
             )
-            consult_call = self.twilio.client.calls.create(
-                to=target_to,
-                from_=consult_from,
-                url=target_join_url,
-                status_callback=f"{self.base_url}/api/voice/transfer/consult-status?original_call={call_sid}",
-                status_callback_event=['answered', 'completed', 'busy', 'no-answer', 'failed', 'canceled']
+            consult_sid = self._place_consult_legs(
+                call_sid=call_sid, is_ext=is_ext, ext_record=ext_record if is_ext else None,
+                kind='warm', conference_name=conference_name,
+                target_to=target_to, target_join_url=target_join_url,
+                consult_from=consult_from, customer_number=customer_number,
+                fallback_caller_id=fallback_caller_id,
             )
-
-            # consult_conference IS the main conference in the single-conf model
-            self.db.update_transfer_consultation(call_sid, consult_call.sid, conference_name)
+            if not consult_sid:
+                return {'success': False, 'error': f"Couldn't reach {target_name} on any of their phones"}
 
             self.db.log_activity(
                 action="call_transfer_warm_start",
                 target=target_display,
-                details=f"Started warm transfer for {call_sid} to {target_name}. Consult call: {consult_call.sid}",
+                details=f"Started warm transfer for {call_sid} to {target_name}. Consult call: {consult_sid}",
                 performed_by=transferred_by
             )
-            logger.info(f"Warm transfer started: {call_sid} -> {target_display}, consult: {consult_call.sid}")
+            logger.info(f"Warm transfer started: {call_sid} -> {target_display}, consult: {consult_sid}")
             return {
                 'success': True,
                 'transfer_type': 'warm',
-                'consult_call_sid': consult_call.sid,
+                'consult_call_sid': consult_sid,
                 'consult_conference': conference_name,
             }
 
@@ -1065,6 +1295,12 @@ class TransferService:
                         self.twilio.client.calls(consult_call_sid).update(status='completed')
                     except Exception as e:
                         logger.warning(f"Could not cancel ringing consult call: {e}")
+
+            # With every-device ringing, the target's other phones may still
+            # be ringing — the consult leg above is only one of them.
+            ring_group = self.db.get_latest_transfer_ring_group(call_sid)
+            if ring_group and not ring_group.get('winner_sid'):
+                self.cancel_transfer_ring_legs(ring_group['group_key'], except_sid=consult_call_sid)
 
             # 3-way: the customer was never held. Warm: true once the unhold below succeeds.
             resumed = is_three_way

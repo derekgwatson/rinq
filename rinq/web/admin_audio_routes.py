@@ -377,10 +377,34 @@ def register(bp):
         settings = db.get_bot_settings()
         audio_files = db.get_audio_files()
 
+        from rinq.services.transfer_service import TRANSFER_RING_ALL_KEY
         return render_template('admin_settings.html',
                                settings=settings,
                                audio_files=audio_files,
+                               transfer_ring_all=db.get_bot_setting(TRANSFER_RING_ALL_KEY, '0') == '1',
                                current_user=user)
+
+    @bp.route('/admin/settings/transfer-ring-all', methods=['POST'])
+    @admin_required
+    def admin_settings_set_transfer_ring_all():
+        """Turn every-device ringing for transfers on or off (per tenant)."""
+        from rinq.services.transfer_service import TRANSFER_RING_ALL_KEY
+
+        enable = request.form.get('transfer_ring_all') == '1'
+        user = get_current_user()
+        db = get_db()
+        db.set_bot_setting(TRANSFER_RING_ALL_KEY, '1' if enable else '0', f'session:{user.email}')
+        db.log_activity(
+            'transfer_ring_all_changed',
+            'on' if enable else 'off',
+            f"Transfers ring every device: turned {'on' if enable else 'off'}",
+            user.email,
+        )
+        if enable:
+            flash('Transfers now ring every phone the person has: browser, desk phone and mobile.', 'success')
+        else:
+            flash('Transfers now ring only the Tina browser tab.', 'success')
+        return redirect(url_for('web.admin_settings'))
 
     @bp.route('/admin/settings', methods=['POST'])
     @admin_required

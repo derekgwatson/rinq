@@ -3835,6 +3835,136 @@ class Database(StatsMixin, CallLogMixin):
             conn.commit()
             return cursor.rowcount
 
+    # ── Transfer ring groups (migration 082) ───────────────────────────
+    # A transfer to a person rings every device they have. These track
+    # "first to answer wins" and "fail once when every leg has died",
+    # counting deaths by SID so a leg that dies before it was stored still
+    # counts. See migration 082 for why ring_attempts can't do this.
+
+    def create_transfer_ring_group(self, group_key: str, original_call_sid: str,
+                                   expected: int, context: dict) -> None:
+        with self._get_conn() as conn:
+            conn.execute(
+                "INSERT INTO transfer_ring_groups (group_key, original_call_sid, expected, context) "
+                "VALUES (?, ?, ?, ?)",
+                (group_key, original_call_sid, expected, json.dumps(context))
+            )
+            conn.commit()
+
+    def add_transfer_ring_leg(self, group_key: str, call_sid: str, kind: str, to_addr: str) -> None:
+        """Record a leg as ringing — unless its death already arrived."""
+        with self._get_conn() as conn:
+            conn.execute(
+                "INSERT INTO transfer_ring_legs (group_key, call_sid, kind, to_addr, state) "
+                "VALUES (?, ?, ?, ?, 'ringing') "
+                "ON CONFLICT(group_key, call_sid) DO UPDATE SET kind = excluded.kind, "
+                "to_addr = excluded.to_addr",
+                (group_key, call_sid, kind, to_addr)
+            )
+            conn.commit()
+
+    def get_transfer_ring_leg(self, group_key: str, call_sid: str) -> dict | None:
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM transfer_ring_legs WHERE group_key = ? AND call_sid = ?",
+                (group_key, call_sid)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def finalize_transfer_ring_group(self, group_key: str, expected: int) -> bool:
+        """Set the real leg count once every leg is placed. Returns True if
+        every placed leg has already died (the failure is then the caller's to
+        handle — no status callback will report it)."""
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE transfer_ring_groups SET expected = ? WHERE group_key = ?",
+                (expected, group_key)
+            )
+            cursor = conn.execute(
+                "UPDATE transfer_ring_groups SET failed_fired = 1 "
+                "WHERE group_key = ? AND winner_sid IS NULL AND failed_fired = 0 "
+                "AND (SELECT COUNT(*) FROM transfer_ring_legs "
+                "     WHERE group_key = ? AND state = 'dead') >= expected",
+                (group_key, group_key)
+            )
+            conn.commit()
+            return cursor.rowcount == 1
+
+    def get_transfer_ring_group(self, group_key: str) -> dict | None:
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM transfer_ring_groups WHERE group_key = ?", (group_key,)
+            ).fetchone()
+        if not row:
+            return None
+        group = dict(row)
+        group['context'] = json.loads(group['context']) if group.get('context') else {}
+        return group
+
+    def get_latest_transfer_ring_group(self, original_call_sid: str) -> dict | None:
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT group_key FROM transfer_ring_groups WHERE original_call_sid = ? "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (original_call_sid,)
+            ).fetchone()
+        return self.get_transfer_ring_group(row['group_key']) if row else None
+
+    def claim_transfer_ring_group(self, group_key: str, call_sid: str) -> bool:
+        """Atomically make call_sid the winner. False if another leg already won,
+        the group already failed, or this leg already died."""
+        with self._get_conn() as conn:
+            cursor = conn.execute(
+                "UPDATE transfer_ring_groups SET winner_sid = ? "
+                "WHERE group_key = ? AND winner_sid IS NULL AND failed_fired = 0 "
+                "AND NOT EXISTS (SELECT 1 FROM transfer_ring_legs "
+                "                WHERE group_key = ? AND call_sid = ? AND state = 'dead')",
+                (call_sid, group_key, group_key, call_sid)
+            )
+            conn.commit()
+            return cursor.rowcount == 1
+
+    def get_ringing_transfer_legs(self, group_key: str) -> list[str]:
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT call_sid FROM transfer_ring_legs WHERE group_key = ? AND state = 'ringing'",
+                (group_key,)
+            ).fetchall()
+        return [r['call_sid'] for r in rows]
+
+    def mark_transfer_ring_leg_dead(self, group_key: str, call_sid: str, kind: str = None) -> bool:
+        """Record a leg's death. Returns True exactly once per group: for the
+        death that leaves every expected leg dead with no winner."""
+        with self._get_conn() as conn:
+            conn.execute(
+                "INSERT INTO transfer_ring_legs (group_key, call_sid, kind, state) "
+                "VALUES (?, ?, ?, 'dead') "
+                "ON CONFLICT(group_key, call_sid) DO UPDATE SET state = 'dead'",
+                (group_key, call_sid, kind)
+            )
+            cursor = conn.execute(
+                "UPDATE transfer_ring_groups SET failed_fired = 1 "
+                "WHERE group_key = ? AND winner_sid IS NULL AND failed_fired = 0 "
+                "AND (SELECT COUNT(*) FROM transfer_ring_legs "
+                "     WHERE group_key = ? AND state = 'dead') >= expected",
+                (group_key, group_key)
+            )
+            conn.commit()
+            return cursor.rowcount == 1
+
+    def cleanup_old_transfer_ring_groups(self, hours: int = 6) -> int:
+        with self._get_conn() as conn:
+            conn.execute(
+                "DELETE FROM transfer_ring_legs WHERE created_at < datetime('now', ?)",
+                (f'-{hours} hours',)
+            )
+            cursor = conn.execute(
+                "DELETE FROM transfer_ring_groups WHERE created_at < datetime('now', ?)",
+                (f'-{hours} hours',)
+            )
+            conn.commit()
+            return cursor.rowcount
+
     # ── Tenant-wide recording start guard ──────────────────────────────
     # recording_starts: one row per conversation whose recording we have
     # already started, keyed on the recorded leg's call SID. Several webhooks
