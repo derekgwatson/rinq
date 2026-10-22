@@ -17,8 +17,9 @@ count deaths by SID against how many legs were actually placed:
   while the legs are being placed (so no early death can look like "all
   failed"), then is set to the number actually placed. winner_sid is set
   atomically by the first leg to answer; failed_fired is set atomically by
-  the last leg to die, so the failure is handled exactly once. context holds
-  what the winner's bookkeeping needs.
+  the last leg to die, so the failure is handled exactly once. closed is
+  set by Go back / Cancel so no leg can answer after it. context holds what
+  the winner's bookkeeping needs.
 - transfer_ring_legs: one row per leg, state 'ringing' | 'dead'. A death
   can arrive before the creator stores the leg; the store never touches
   state, so the death always sticks.
@@ -37,6 +38,7 @@ def up(conn):
             expected INTEGER NOT NULL,
             winner_sid TEXT,
             failed_fired INTEGER NOT NULL DEFAULT 0,
+            closed INTEGER NOT NULL DEFAULT 0,
             context TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         )

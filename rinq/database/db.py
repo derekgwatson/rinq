@@ -3916,13 +3916,47 @@ class Database(StatsMixin, CallLogMixin):
         with self._get_conn() as conn:
             cursor = conn.execute(
                 "UPDATE transfer_ring_groups SET winner_sid = ? "
-                "WHERE group_key = ? AND winner_sid IS NULL AND failed_fired = 0 "
+                "WHERE group_key = ? AND winner_sid IS NULL AND failed_fired = 0 AND closed = 0 "
                 "AND NOT EXISTS (SELECT 1 FROM transfer_ring_legs "
                 "                WHERE group_key = ? AND call_sid = ? AND state = 'dead')",
                 (call_sid, group_key, group_key, call_sid)
             )
             conn.commit()
             return cursor.rowcount == 1
+
+    def close_transfer_ring_group(self, group_key: str) -> None:
+        """No leg may answer from now on (the agent cancelled the transfer).
+        Deaths still count, so the transfer still fails once, the normal way."""
+        with self._get_conn() as conn:
+            conn.execute("UPDATE transfer_ring_groups SET closed = 1 WHERE group_key = ?", (group_key,))
+            conn.commit()
+
+    def abandon_transfer_ring_group(self, group_key: str) -> None:
+        """Placing the legs broke part-way; the caller fails the transfer
+        itself, so no leg may answer and no death may fail it again."""
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE transfer_ring_groups SET closed = 1, failed_fired = 1 WHERE group_key = ?",
+                (group_key,)
+            )
+            conn.commit()
+
+    def set_transfer_consult_unless_answered(self, call_sid: str, consult_call_sid: str,
+                                             consult_conference: str, group_key: str,
+                                             source: str = 'queued_calls') -> None:
+        """update_transfer_consultation, but only while no leg of the ring
+        group has answered — the winner's own write must never be undone."""
+        with self._get_conn() as conn:
+            for table in self._transfer_tables(source):
+                conn.execute(f"""
+                    UPDATE {table}
+                    SET transfer_status = 'consulting',
+                        transfer_consult_call_sid = ?, transfer_consult_conference = ?
+                    WHERE call_sid = ?
+                      AND NOT EXISTS (SELECT 1 FROM transfer_ring_groups
+                                      WHERE group_key = ? AND winner_sid IS NOT NULL)
+                """, (consult_call_sid, consult_conference, call_sid, group_key))
+            conn.commit()
 
     def get_ringing_transfer_legs(self, group_key: str) -> list[str]:
         with self._get_conn() as conn:

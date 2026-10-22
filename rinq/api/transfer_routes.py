@@ -739,6 +739,7 @@ def register(bp):
                         if (is_mid_consult_disconnect
                                 and transfer_status_db == 'consulting'
                                 and _auto_reconnect_enabled(db)
+                                and _reconnect_device_is_browser(original_call, consult_call_sid, db)
                                 and not db.get_leg_intent(consult_call_sid)
                                 and not db.get_reconnect_attempt(conference_name)
                                 and _others_present(conference_name, db, exclude_sid=consult_call_sid)):
@@ -932,6 +933,18 @@ def register(bp):
 _TERMINAL_STATUSES = ('completed', 'busy', 'no-answer', 'failed', 'canceled')
 
 
+def _reconnect_device_is_browser(original_call, leg_sid, db) -> bool:
+    """Auto-reconnect re-rings the target's BROWSER, and only the browser
+    sends the "I hung up on purpose" beacon. So when every-device ringing let
+    a desk phone or mobile take the transfer, its hang-up can't be told from
+    a drop — never reconnect those."""
+    group = db.get_latest_transfer_ring_group(original_call)
+    if not group:
+        return True  # single-leg transfer: the browser, as before
+    leg = db.get_transfer_ring_leg(group['group_key'], leg_sid) or {}
+    return leg.get('kind') == 'browser'
+
+
 def _ring_group_status(group_key, leg_sid, call_status, screened, db) -> str:
     """Handle one leg's status for a transfer that rings several devices.
 
@@ -966,6 +979,10 @@ def _ring_group_status(group_key, leg_sid, call_status, screened, db) -> str:
     if call_status in _TERMINAL_STATUSES:
         if group.get('winner_sid') == leg_sid:
             return 'winner'  # the answered leg ended — normal handling
+        # A leg that answered too late may have joined the conference before
+        # it was hung up; don't leave it on the participant list.
+        from rinq.api.routes import _handle_participant_left
+        _handle_participant_left(leg_sid, db)
         if db.mark_transfer_ring_leg_dead(group_key, leg_sid):
             logger.info(f"Transfer ring group {group_key}: every device failed ({call_status})")
             return 'all_failed'  # fail the transfer once, the normal way
