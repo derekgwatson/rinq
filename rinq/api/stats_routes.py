@@ -202,6 +202,42 @@ def register(bp):
         }), 200 if not errors else 207
 
 
+    @bp.route('/security/sip-check', methods=['POST'])
+    @api_or_session_auth
+    def check_sip_sign_ins():
+        """Read failed desk-phone sign-ins from Twilio and alert on them.
+
+        Called by cron every 10 minutes. Failures from an unknown address email
+        the admins straight away; failures from a store are tallied into a
+        weekly list. See services/sip_auth_alerts.py.
+        """
+        from flask import session
+        from rinq.services import sip_auth_alerts
+        from rinq.tenant.context import iter_tenant_contexts
+
+        def _check_current_tenant():
+            return sip_auth_alerts.check(get_db(), g.tenant, get_twilio_service().client)
+
+        if session.get('user_id'):
+            return jsonify({'success': True, **_check_current_tenant()})
+
+        # Cron (unix socket, no session) — no ambient tenant, so iterate.
+        results, errors = {}, []
+        for tenant in iter_tenant_contexts():
+            try:
+                results[tenant['id']] = _check_current_tenant()
+            except Exception as e:
+                logger.error(f"Desk-phone sign-in check failed for tenant {tenant['id']}: {e}",
+                             exc_info=True)
+                errors.append(f"{tenant['id']}: {e}")
+
+        return jsonify({
+            'success': not errors,
+            'tenants': results,
+            'errors': errors or None,
+        }), 200 if not errors else 207
+
+
     @bp.route('/voicemail/cleanup', methods=['POST'])
     @api_or_session_auth
     def cleanup_voicemail_recordings():
