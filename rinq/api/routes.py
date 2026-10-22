@@ -4810,6 +4810,19 @@ def _shared_desk_phone_username(from_identity: str, db) -> str | None:
     return username if user and user.get('is_shared_device') else None
 
 
+def _empty_shared_phone_caller_id(from_identity: str, db) -> str | None:
+    """Caller ID for a shared desk phone with nobody logged in.
+
+    The phone's own number (users.default_caller_id on the phone's row — the
+    column people stopped using in migration 049) so a Hume phone shows the
+    Hume number, else the tenant default.
+    """
+    username = _shared_desk_phone_username(from_identity, db)
+    phone = db.get_user_by_username(username) if username else None
+    return ((phone or {}).get('default_caller_id')
+            or get_twilio_config('twilio_default_caller_id'))
+
+
 def _say_and_hangup(text: str) -> Response:
     twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -4990,6 +5003,9 @@ def _handle_internal_extension_call(extension: str, from_identity: str, staff_em
         caller_ext = db.get_staff_extension(staff_email)
         if caller_ext and caller_ext.get('default_caller_id'):
             dial_caller_id = caller_ext['default_caller_id']
+    if not dial_caller_id and not staff_email:
+        # An empty shared desk phone calling an extension: its own number.
+        dial_caller_id = _empty_shared_phone_caller_id(from_identity, db)
     if not dial_caller_id:
         dial_caller_id = get_twilio_config('twilio_default_caller_id') or ''
 
@@ -5230,8 +5246,9 @@ def voice_outbound():
         return _handle_desk_phone_code(stripped, from_identity, db)
 
     # A shared desk phone nobody is logged in to still works as a store phone:
-    # it calls out on the tenant's default number, chosen explicitly by an
-    # admin (gotcha 38 — never an implicit pick). Don't refuse these calls:
+    # it calls out on the phone's own number if an admin set one (Desk phones
+    # page), else the tenant's default — both explicit choices (gotcha 38 —
+    # never an implicit pick). Don't refuse these calls:
     # an empty phone on a shop counter must still be able to ring out.
     empty_shared_phone = (not staff_email
                           and bool(_shared_desk_phone_username(from_identity, db)))
@@ -5263,7 +5280,7 @@ def voice_outbound():
                 logger.info(f"Caller ID for {lookup_email}: {caller_id} "
                             f"(source={cid['source']})")
         elif empty_shared_phone:
-            caller_id = get_twilio_config('twilio_default_caller_id')
+            caller_id = _empty_shared_phone_caller_id(from_identity, db)
 
         if not caller_id and empty_shared_phone:
             return _say_and_hangup(

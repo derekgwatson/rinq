@@ -98,8 +98,18 @@
         A shared phone signs in as itself, once, and is never re-set up. Whoever is on it gets
         their calls there. Staff change it from the phone: dial <strong>*50</strong> then their
         extension to log in, <strong>*51</strong> to log out, and <strong>*50</strong> on its own to hear who's on it. Logging in at one phone moves
-        you off any other. A phone with nobody on it still calls out, on the default number.
+        you off any other. A phone with nobody on it still calls out, showing the number you pick
+        for it below (blank = the company default{% if company_default %}, {{ company_default }}{% endif %}).
     </p>
+    {% macro number_picker(selected) %}
+    <select class="sp-number">
+        <option value="">Company default</option>
+        {% for c in number_choices %}
+        <option value="{{ c.number }}" {{ 'selected' if c.number == selected }}>{{ c.name ~ ' · ' if c.name }}{{ c.number }}</option>
+        {% endfor %}
+    </select>
+    <span class="sp-number-status text-muted" style="margin-left: 8px; font-size: 0.85rem;"></span>
+    {% endmacro %}
     {% if sip_domain %}
     <p class="text-muted" style="font-size: 0.9rem;">
         Phone setup: server / domain <code>{{ sip_domain }}</code>, plus the login and password below.
@@ -113,6 +123,7 @@
                 <th>Login</th>
                 <th>Password</th>
                 <th>Who's on it</th>
+                <th>Number when nobody's on it</th>
                 <th></th>
             </tr>
         </thead>
@@ -125,7 +136,9 @@
                     {% if p.screen_url %}
                     <div class="last-rang" style="white-space: normal;">
                         Screen page:
-                        <a href="#" class="sp-copy-screen" data-url="{{ p.screen_url }}" title="Polycom: Settings → Microbrowser → Idle Browser home page">copy</a>
+                        <a href="#" class="sp-copy-screen" data-url="{{ p.screen_url|replace('https://', 'http://') }}" title="Polycom: Settings → Microbrowser → Idle Display Home">copy</a>
+                        · Yealink auto-provision:
+                        <a href="#" class="sp-copy-screen" data-url="{{ p.screen_url|replace('https://', 'http://') }}/prov/" title="Yealink: Settings → Auto Provision → Server URL">copy</a>
                     </div>
                     {% endif %}
                 </td>
@@ -135,12 +148,18 @@
                 <td>
                     <select class="sp-occupant">
                         <option value="">Nobody</option>
+                        {% if p.occupant_email and p.occupant_email not in staff_choices|map(attribute='email')|list %}
+                        {# On the phone via *50 but not an active extension — show them, or the
+                           picker reads "Nobody" and a stray change would log them out. #}
+                        <option value="{{ p.occupant_email }}" selected>{{ p.occupant_name or p.occupant_email.split('@')[0] }}{% if p.occupant_extension %} ({{ p.occupant_extension }}){% endif %}</option>
+                        {% endif %}
                         {% for s in staff_choices %}
                         <option value="{{ s.email }}" {{ 'selected' if s.email == p.occupant_email }}>{{ s.name }}{% if s.extension %} ({{ s.extension }}){% endif %}</option>
                         {% endfor %}
                     </select>
                     <span class="sp-status text-muted" style="margin-left: 8px; font-size: 0.85rem;"></span>
                 </td>
+                <td>{{ number_picker(p.empty_caller_id) }}</td>
                 <td>
                     <form method="POST" action="{{ url_for('web.delete_desk_phone', sid=p.sid) }}" style="margin: 0;">
                         <button type="submit" class="btn btn-danger btn-small confirm-delete">Delete</button>
@@ -159,12 +178,13 @@
         </select>
         <span class="sp-status text-muted" style="margin-left: 8px; font-size: 0.85rem;"></span>
     </template>
+    <template id="sp-number-template">{{ number_picker(None) }}</template>
     {% if not shared_phones %}
     <p class="text-muted" id="sp-empty">No shared phones yet. Add one for each handset, then set the handset up with its login.</p>
     {% endif %}
 
     <div style="margin-top: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-        <input type="text" id="sp-name" placeholder="e.g. Hume desk 3" style="max-width: 240px;">
+        <input type="text" id="sp-name" placeholder="e.g. Polycom 592E3A (make + last 6 of MAC)" style="max-width: 240px;">
         <button type="button" class="btn btn-small" id="sp-add">+ Add shared phone</button>
         <span id="sp-add-status" class="text-muted" style="font-size: 0.85rem;"></span>
     </div>
@@ -399,8 +419,23 @@
             .catch(() => { status.textContent = 'Not saved — check your connection'; });
     }
 
+    function saveNumber(select) {
+        const tr = select.closest('tr');
+        const status = tr.querySelector('.sp-number-status');
+        status.textContent = 'Saving…';
+        fetch(`/desk-phones/shared/${tr.dataset.sid}/caller-id`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({number: select.value}),
+        })
+            .then(r => r.json())
+            .then(d => { status.textContent = d.success ? '✓ Saved' : (d.error || 'Not saved'); })
+            .catch(() => { status.textContent = 'Not saved — check your connection'; });
+    }
+
     table.addEventListener('change', e => {
         if (e.target.matches('.sp-occupant')) saveOccupant(e.target);
+        if (e.target.matches('.sp-number')) saveNumber(e.target);
     });
     table.addEventListener('click', e => {
         if (!e.target.matches('.sp-copy-screen')) return;
@@ -431,7 +466,8 @@
                 // Copy the staff picker from the page's template row, if any.
                 const picker = document.querySelector('#sp-picker-template');
                 tr.innerHTML = '<td></td><td><code></code></td><td><code></code></td>' +
-                    '<td></td><td class="text-muted" style="font-size: 0.85rem;">Reload to delete</td>';
+                    '<td></td><td></td><td class="text-muted" style="font-size: 0.85rem;">Reload to delete</td>';
+                tr.children[4].innerHTML = document.getElementById('sp-number-template').innerHTML;
                 tr.children[0].textContent = d.name;
                 tr.children[1].querySelector('code').textContent = d.username;
                 tr.children[2].querySelector('code').textContent = d.password;

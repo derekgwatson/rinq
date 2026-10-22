@@ -686,6 +686,7 @@ class Database(StatsMixin, CallLogMixin):
         with self._get_conn() as conn:
             rows = conn.execute("""
                 SELECT u.sid, u.username, u.friendly_name, u.is_active,
+                       u.default_caller_id AS empty_caller_id,
                        l.staff_email AS occupant_email, l.logged_in_at, l.logged_in_by,
                        p.friendly_name AS occupant_name, e.extension AS occupant_extension
                 FROM users u
