@@ -120,7 +120,15 @@
             {% for p in shared_phones %}
             <tr data-sid="{{ p.sid }}" data-username="{{ p.username }}">
                 <td>{{ p.friendly_name or p.username }}</td>
-                <td><code>{{ p.username }}</code></td>
+                <td>
+                    <code>{{ p.username }}</code>
+                    {% if p.screen_url %}
+                    <div class="last-rang" style="white-space: normal;">
+                        Screen page:
+                        <a href="#" class="sp-copy-screen" data-url="{{ p.screen_url }}" title="Polycom: Settings → Microbrowser → Idle Browser home page">copy</a>
+                    </div>
+                    {% endif %}
+                </td>
                 <td style="white-space: nowrap;">
                     <button type="button" class="btn btn-small" onclick="showPassword('{{ p.sid }}', this)" style="background: #17a2b8; color: white;">Show Password</button>
                 </td>
@@ -393,6 +401,14 @@
 
     table.addEventListener('change', e => {
         if (e.target.matches('.sp-occupant')) saveOccupant(e.target);
+    });
+    table.addEventListener('click', e => {
+        if (!e.target.matches('.sp-copy-screen')) return;
+        e.preventDefault();
+        navigator.clipboard.writeText(e.target.dataset.url).then(() => {
+            e.target.textContent = 'copied ✓';
+            setTimeout(() => { e.target.textContent = 'copy'; }, 1500);
+        });
     });
 
     const nameInput = document.getElementById('sp-name');
