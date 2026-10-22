@@ -5336,6 +5336,10 @@ async function startTransfer() {
                 };
             }
 
+            // The server ends our leg as part of a successful blind transfer,
+            // and that disconnect can arrive before this response does — so
+            // endCall() must already know it wasn't the caller hanging up.
+            _agentHungUp = true;
             const response = await fetch(endpoint, {
                 method: 'POST',
                 credentials: 'same-origin',
@@ -5343,6 +5347,7 @@ async function startTransfer() {
                 body: JSON.stringify(body)
             });
             const data = await response.json();
+            if (!(response.ok && data.success)) _agentHungUp = false;
 
             if (response.ok && data.success) {
                 // Blind transfer accepted — Twilio is bridging the customer
@@ -5441,6 +5446,7 @@ async function startTransfer() {
             }
         }
     } catch (error) {
+        _agentHungUp = false;
         showTransferError('Transfer error: ' + error.message);
         btnStartTransfer.disabled = false;
         btnStartTransfer.textContent = 'Transfer';
