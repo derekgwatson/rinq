@@ -1942,6 +1942,8 @@ def desk_phones():
                          users=users,
                          shared_phones=shared_phones,
                          staff_choices=_desk_phone_staff_choices(db) if configured else [],
+                         number_choices=_desk_phone_number_choices(db) if configured else [],
+                         company_default=get_twilio_config('twilio_default_caller_id'),
                          needs_attention=needs_attention,
                          sign_ins=sip_auth_alerts.failing_phones(db),
                          known_addresses=sip_auth_alerts.get_known_addresses(db),
@@ -1958,6 +1960,29 @@ def _desk_phone_staff_choices(db) -> list[dict]:
         'name': names.get(e['email']) or e['email'].split('@')[0],
     } for e in db.get_active_staff_extensions()]
     return sorted(choices, key=lambda c: c['name'].lower())
+
+
+def _desk_phone_number_choices(db) -> list[dict]:
+    """Numbers a shared phone may show when nobody is logged in to it.
+
+    Owned numbers plus active verified caller IDs, named by the office name
+    where there is one (a friendly_name that is just the number's own digits
+    is no name — gotcha 39).
+    """
+    def _name(row, digits):
+        name = ((row or {}).get('friendly_name') or '').strip()
+        return None if not name or ''.join(c for c in name if c.isdigit()) == digits else name
+
+    rows = {}
+    for vc in db.get_verified_caller_ids(active_only=True):
+        rows[vc['phone_number']] = vc
+    for pn in db.get_phone_numbers():
+        rows.setdefault(pn['phone_number'], pn)
+    choices = []
+    for number, row in rows.items():
+        digits = ''.join(c for c in number if c.isdigit())
+        choices.append({'number': number, 'name': _name(row, digits)})
+    return sorted(choices, key=lambda c: ((c['name'] or '~').lower(), c['number']))
 
 
 def _shared_phone_username(name: str) -> str:
@@ -2072,6 +2097,30 @@ def add_shared_desk_phone():
     )
     return jsonify({'success': True, 'sid': result['sid'], 'username': username,
                     'password': password, 'name': name})
+
+
+@web_bp.route('/desk-phones/shared/<sid>/caller-id', methods=['POST'])
+@admin_required
+def set_shared_desk_phone_caller_id(sid):
+    """The number a shared phone shows when nobody is logged in (save in place)."""
+    db = get_db()
+    user = get_current_user()
+    phone = db.get_user(sid)
+    if not phone or not phone.get('is_shared_device'):
+        return jsonify({'success': False, 'error': 'Not a shared desk phone'}), 404
+
+    number = ((request.get_json(silent=True) or {}).get('number') or '').strip() or None
+    if number and number not in {c['number'] for c in _desk_phone_number_choices(db)}:
+        return jsonify({'success': False, 'error': 'Not one of our numbers'}), 400
+
+    db.update_user_default_caller_id(sid, number, updated_by=_audit_tag(user))
+    db.log_activity(
+        action="shared_desk_phone_caller_id",
+        target=phone['username'],
+        details=f"Number when nobody is logged in: {number or 'company default'}",
+        performed_by=_audit_tag(user),
+    )
+    return jsonify({'success': True})
 
 
 @web_bp.route('/desk-phones/shared/<sid>/occupant', methods=['POST'])
