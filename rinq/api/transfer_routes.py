@@ -34,10 +34,7 @@ def _resolve_transfer_target_email(call_sid: str) -> str | None:
             return identity.replace('_at_', '@').replace('_', '.')
         if to.startswith('sip:'):
             sip_user = to[4:].split('@')[0]
-            db = get_db()
-            user = db.get_user_by_username(sip_user)
-            if user:
-                return user.get('staff_email')
+            return get_db().get_staff_email_for_sip_username(sip_user)
     except Exception as e:
         logger.debug(f"Could not resolve transfer target email from call {call_sid}: {e}")
     return None

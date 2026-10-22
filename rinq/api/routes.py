@@ -2742,9 +2742,11 @@ def conference_join():
                         resolved_role = 'agent'  # Staff member, not customer
                     elif to.startswith('sip:'):
                         sip_user = to[4:].split('@')[0]
-                        user = db.get_user_by_username(sip_user)
+                        # A shared desk phone's own name is "Hume desk 3" —
+                        # the participant is whoever is logged in to it.
+                        email = db.get_staff_email_for_sip_username(sip_user)
+                        user = db.get_user_by_email(email) if email else None
                         if user:
-                            email = user.get('staff_email')
                             name = user.get('friendly_name')
                         resolved_role = 'agent'  # Staff member, not customer
                     elif to.startswith('+'):
@@ -3094,10 +3096,7 @@ def _resolve_agent_email(call_sid: str, service) -> str | None:
             return _browser_identity_to_email(identity)
         if to.startswith('sip:'):
             sip_user = to[4:].split('@')[0]
-            db = get_db()
-            user = db.get_user_by_username(sip_user)
-            if user:
-                return user.get('staff_email')
+            return get_db().get_staff_email_for_sip_username(sip_user)
     except Exception as e:
         logger.debug(f"Could not resolve agent email from call {call_sid}: {e}")
     return None
@@ -4799,11 +4798,81 @@ def _resolve_sip_email(from_identity: str, db) -> str | None:
     sip_part = from_identity[4:]
     if '@' not in sip_part:
         return None
-    sip_username = sip_part.split('@')[0]
-    sip_user = db.get_user_by_username(sip_username)
-    if sip_user:
-        return sip_user.get('staff_email')
-    return None
+    return db.get_staff_email_for_sip_username(sip_part.split('@')[0])
+
+
+def _shared_desk_phone_username(from_identity: str, db) -> str | None:
+    """The SIP username if this call comes from a shared desk phone, else None."""
+    if not from_identity or not from_identity.startswith('sip:'):
+        return None
+    username = from_identity[4:].split('@', 1)[0].split(';', 1)[0]
+    user = db.get_user_by_username(username)
+    return username if user and user.get('is_shared_device') else None
+
+
+def _say_and_hangup(text: str) -> Response:
+    twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Nicole">{xml_escape(text)}</Say>
+    <Hangup/>
+</Response>'''
+    return Response(twiml, mimetype='application/xml')
+
+
+def _spoken_name(email: str, db) -> str:
+    user = db.get_user_by_email(email)
+    return (user.get('friendly_name') if user else None) or email.split('@')[0]
+
+
+def _handle_desk_phone_code(code: str, from_identity: str, db) -> Response:
+    """*50<extension> logs a person in to a shared desk phone; *51 logs out.
+
+    Only shared desk phones (migration 083) can be logged in to — a handset
+    signed in with someone's own login IS that person, so there is nothing to
+    change on it.
+    """
+    device = _shared_desk_phone_username(from_identity, db)
+    if not device:
+        return _say_and_hangup(
+            "This only works on a shared desk phone. This phone is signed in "
+            "with a personal login. Ask your administrator to set it up as a shared desk phone.")
+
+    if code == '*51':
+        previous = db.log_out_desk_phone(device)
+        if not previous:
+            return _say_and_hangup("Nobody was logged in to this phone.")
+        db.log_activity(
+            action="desk_phone_logout",
+            target=device,
+            details=f"*51: {previous} logged out",
+            performed_by=f"feature-code:{previous}",
+        )
+        return _say_and_hangup(f"{_spoken_name(previous, db)} is logged out of this phone.")
+
+    extension = code[3:]
+    ext = db.get_staff_extension_by_ext(extension) if extension.isdigit() else None
+    if not extension:
+        return _say_and_hangup("Dial star 5 0 followed by your extension.")
+    if not ext or not ext.get('email'):
+        return _say_and_hangup(
+            f"Extension {' '.join(extension)} was not found. "
+            "Dial star 5 0 followed by your extension.")
+
+    email = ext['email']
+    moved = db.log_in_desk_phone(device, email, performed_by=f"feature-code:{email}")
+    db.stamp_sip_activity(email)
+    details = f"*50{extension}: {email} logged in"
+    if moved['previous_occupant']:
+        details += f", replacing {moved['previous_occupant']}"
+    if moved['previous_phone']:
+        details += f", moved off {moved['previous_phone']}"
+    db.log_activity(
+        action="desk_phone_login",
+        target=device,
+        details=details,
+        performed_by=f"feature-code:{email}",
+    )
+    return _say_and_hangup(f"{_spoken_name(email, db)} is now on this phone.")
 
 
 def _handle_caller_id_toggle(from_identity: str, staff_email: str, db) -> Response:
@@ -5151,6 +5220,18 @@ def voice_outbound():
     if stripped == '*99':
         return _handle_caller_id_toggle(from_identity, staff_email, db)
 
+    # Feature codes: *50<extension> logs a person in to a shared desk phone,
+    # *51 logs them out. Dialled from the handset itself.
+    if stripped == '*51' or stripped.startswith('*50'):
+        return _handle_desk_phone_code(stripped, from_identity, db)
+
+    # A shared desk phone nobody is logged in to still works as a store phone:
+    # it calls out on the tenant's default number, chosen explicitly by an
+    # admin (gotcha 38 — never an implicit pick). Don't refuse these calls:
+    # an empty phone on a shop counter must still be able to ring out.
+    empty_shared_phone = (not staff_email
+                          and bool(_shared_desk_phone_username(from_identity, db)))
+
     # Check if this is a 4-digit extension (internal call)
     if stripped.isdigit() and len(stripped) == 4:
         return _handle_internal_extension_call(stripped, from_identity, staff_email, call_sid, db)
@@ -5177,6 +5258,13 @@ def voice_outbound():
             if caller_id:
                 logger.info(f"Caller ID for {lookup_email}: {caller_id} "
                             f"(source={cid['source']})")
+        elif empty_shared_phone:
+            caller_id = get_twilio_config('twilio_default_caller_id')
+
+        if not caller_id and empty_shared_phone:
+            return _say_and_hangup(
+                "Nobody is logged in to this phone. To log in, dial star 5 0 "
+                "followed by your extension.")
 
         if not caller_id:
             # Refuse rather than dial from an arbitrarily chosen number. A desk

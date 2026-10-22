@@ -1919,6 +1919,10 @@ def desk_phones():
     # from ring outcomes — a credential set to ring with no responding handset
     # is a desk phone that was never set up, or is logged in as someone else.
     users = db.get_desk_phone_health() if configured else []
+    # Shared desk phones are listed in their own section — ring health is a
+    # per-person signal and means nothing for a handset.
+    users = [u for u in users if not u.get('is_shared_device')]
+    shared_phones = db.get_shared_desk_phones() if configured else []
 
     # Only alert on a phone that demonstrably worked and then stopped. Users
     # who never had one responding are almost always browser-only — ring_sip
@@ -1932,10 +1936,118 @@ def desk_phones():
                          configured=configured,
                          sip_domain=sip_domain,
                          users=users,
+                         shared_phones=shared_phones,
+                         staff_choices=_desk_phone_staff_choices(db) if configured else [],
                          needs_attention=needs_attention,
                          sign_ins=sip_auth_alerts.failing_phones(db),
                          known_addresses=sip_auth_alerts.get_known_addresses(db),
                          current_user=get_current_user())
+
+
+def _desk_phone_staff_choices(db) -> list[dict]:
+    """Active staff for the "who's on this phone" picker, by name."""
+    names = {u['staff_email']: u.get('friendly_name')
+             for u in db.get_users() if u.get('staff_email')}
+    choices = [{
+        'email': e['email'],
+        'extension': e.get('extension'),
+        'name': names.get(e['email']) or e['email'].split('@')[0],
+    } for e in db.get_active_staff_extensions()]
+    return sorted(choices, key=lambda c: c['name'].lower())
+
+
+def _shared_phone_username(name: str) -> str:
+    """'Hume desk 3' -> 'desk_hume_desk_3'.
+
+    The desk_ prefix keeps it clear of the usernames derived from staff
+    emails, which credential sync auto-links to people by name.
+    """
+    slug = ''.join(c if c.isalnum() else '_' for c in name.lower())
+    slug = '_'.join(part for part in slug.split('_') if part)
+    return f"desk_{slug}"
+
+
+@web_bp.route('/desk-phones/shared', methods=['POST'])
+@admin_required
+def add_shared_desk_phone():
+    """Create a shared desk phone login (JSON in and out, no reload)."""
+    db = get_db()
+    user = get_current_user()
+    data = request.get_json(silent=True) or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'success': False, 'error': 'Give the phone a name, e.g. Hume desk 3'}), 400
+
+    cred_list_sid = get_twilio_config('twilio_sip_credential_list_sid')
+    if not cred_list_sid:
+        return jsonify({'success': False, 'error': 'Desk phone credentials not configured'}), 400
+
+    username = _shared_phone_username(name)
+    if username == 'desk_' or db.get_user_by_username(username):
+        return jsonify({'success': False, 'error': f'A phone login called {username} already exists'}), 400
+
+    password = _generate_sip_password()
+    result = get_twilio_service().create_user_credential(
+        credential_list_sid=cred_list_sid,
+        username=username,
+        password=password,
+        friendly_name=name,
+    )
+    if not result.get('success'):
+        return jsonify({'success': False, 'error': result.get('error')}), 400
+
+    db.mark_shared_desk_phone(result['sid'])
+    db.log_activity(
+        action="create_shared_desk_phone",
+        target=username,
+        details=f"Created shared desk phone {name}",
+        performed_by=_audit_tag(user),
+    )
+    return jsonify({'success': True, 'sid': result['sid'], 'username': username,
+                    'password': password, 'name': name})
+
+
+@web_bp.route('/desk-phones/shared/<sid>/occupant', methods=['POST'])
+@admin_required
+def set_shared_desk_phone_occupant(sid):
+    """Put someone on a shared desk phone, or empty it (JSON, save in place)."""
+    db = get_db()
+    user = get_current_user()
+    phone = db.get_user(sid)
+    if not phone or not phone.get('is_shared_device'):
+        return jsonify({'success': False, 'error': 'Not a shared desk phone'}), 404
+
+    email = ((request.get_json(silent=True) or {}).get('email') or '').strip().lower()
+    if not email:
+        previous = db.log_out_desk_phone(phone['username'])
+        if previous:
+            db.log_activity(
+                action="desk_phone_logout",
+                target=phone['username'],
+                details=f"{previous} logged out by admin",
+                performed_by=_audit_tag(user),
+            )
+        return jsonify({'success': True, 'note': None})
+
+    if not db.get_staff_extension(email):
+        return jsonify({'success': False, 'error': 'That person has no extension'}), 400
+
+    moved = db.log_in_desk_phone(phone['username'], email, performed_by=_audit_tag(user))
+    details = f"{email} logged in by admin"
+    note = None
+    if moved['previous_phone']:
+        details += f", moved off {moved['previous_phone']}"
+        other = db.get_user_by_username(moved['previous_phone'])
+        note = f"Moved off {(other or {}).get('friendly_name') or moved['previous_phone']}"
+    if moved['previous_occupant']:
+        details += f", replacing {moved['previous_occupant']}"
+    db.log_activity(
+        action="desk_phone_login",
+        target=phone['username'],
+        details=details,
+        performed_by=_audit_tag(user),
+    )
+    return jsonify({'success': True, 'note': note, 'moved_from_username': moved['previous_phone']})
 
 
 @web_bp.route('/desk-phones/known-addresses', methods=['POST'])
@@ -2022,6 +2134,7 @@ def delete_desk_phone(sid):
 
     if result.get('success'):
         # Delete from local DB
+        db.log_out_desk_phone(desk_user['username'])
         db.delete_user(sid)
         flash(f'Deleted desk phone user: {desk_user["username"]}', 'success')
         db.log_activity(

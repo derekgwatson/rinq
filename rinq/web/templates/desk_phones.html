@@ -91,6 +91,78 @@
 {% endblock %}
 
 {% block content %}
+{% if configured %}
+<div class="card">
+    <h2>Shared desk phones</h2>
+    <p class="text-muted" style="margin-top: 0;">
+        A shared phone signs in as itself, once, and is never re-set up. Whoever is on it gets
+        their calls there. Staff change it from the phone: dial <strong>*50</strong> then their
+        extension to log in, <strong>*51</strong> to log out. Logging in at one phone moves
+        you off any other. A phone with nobody on it still calls out, on the default number.
+    </p>
+    {% if sip_domain %}
+    <p class="text-muted" style="font-size: 0.9rem;">
+        Phone setup: server / domain <code>{{ sip_domain }}</code>, plus the login and password below.
+    </p>
+    {% endif %}
+
+    <table id="shared-phones">
+        <thead>
+            <tr>
+                <th>Phone</th>
+                <th>Login</th>
+                <th>Password</th>
+                <th>Who's on it</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in shared_phones %}
+            <tr data-sid="{{ p.sid }}" data-username="{{ p.username }}">
+                <td>{{ p.friendly_name or p.username }}</td>
+                <td><code>{{ p.username }}</code></td>
+                <td style="white-space: nowrap;">
+                    <button type="button" class="btn btn-small" onclick="showPassword('{{ p.sid }}', this)" style="background: #17a2b8; color: white;">Show Password</button>
+                </td>
+                <td>
+                    <select class="sp-occupant">
+                        <option value="">Nobody</option>
+                        {% for s in staff_choices %}
+                        <option value="{{ s.email }}" {{ 'selected' if s.email == p.occupant_email }}>{{ s.name }}{% if s.extension %} ({{ s.extension }}){% endif %}</option>
+                        {% endfor %}
+                    </select>
+                    <span class="sp-status text-muted" style="margin-left: 8px; font-size: 0.85rem;"></span>
+                </td>
+                <td>
+                    <form method="POST" action="{{ url_for('web.delete_desk_phone', sid=p.sid) }}" style="margin: 0;">
+                        <button type="submit" class="btn btn-danger btn-small confirm-delete">Delete</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <template id="sp-picker-template">
+        <select class="sp-occupant">
+            <option value="">Nobody</option>
+            {% for s in staff_choices %}
+            <option value="{{ s.email }}">{{ s.name }}{% if s.extension %} ({{ s.extension }}){% endif %}</option>
+            {% endfor %}
+        </select>
+        <span class="sp-status text-muted" style="margin-left: 8px; font-size: 0.85rem;"></span>
+    </template>
+    {% if not shared_phones %}
+    <p class="text-muted" id="sp-empty">No shared phones yet. Add one for each handset, then set the handset up with its login.</p>
+    {% endif %}
+
+    <div style="margin-top: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+        <input type="text" id="sp-name" placeholder="e.g. Hume desk 3" style="max-width: 240px;">
+        <button type="button" class="btn btn-small" id="sp-add">+ Add shared phone</button>
+        <span id="sp-add-status" class="text-muted" style="font-size: 0.85rem;"></span>
+    </div>
+</div>
+{% endif %}
+
 <div class="card">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
         <h2>All Desk Phone Credentials</h2>
@@ -290,6 +362,80 @@
 
 {% block extra_js %}
 <script>
+(function () {
+    const table = document.querySelector('#shared-phones tbody');
+    if (!table) return;
+
+    function saveOccupant(select) {
+        const tr = select.closest('tr');
+        const status = tr.querySelector('.sp-status');
+        status.textContent = 'Saving…';
+        fetch(`/desk-phones/shared/${tr.dataset.sid}/occupant`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({email: select.value}),
+        })
+            .then(r => r.json())
+            .then(d => {
+                if (!d.success) { status.textContent = d.error || 'Not saved'; return; }
+                status.textContent = d.note ? `✓ Saved — ${d.note}` : '✓ Saved';
+                // One person, one phone: clear them off the row they moved from.
+                if (d.moved_from_username) {
+                    const other = table.querySelector(`tr[data-username="${CSS.escape(d.moved_from_username)}"]`);
+                    if (other) {
+                        other.querySelector('.sp-occupant').value = '';
+                        other.querySelector('.sp-status').textContent = '';
+                    }
+                }
+            })
+            .catch(() => { status.textContent = 'Not saved — check your connection'; });
+    }
+
+    table.addEventListener('change', e => {
+        if (e.target.matches('.sp-occupant')) saveOccupant(e.target);
+    });
+
+    const nameInput = document.getElementById('sp-name');
+    const addStatus = document.getElementById('sp-add-status');
+    function addPhone() {
+        const name = nameInput.value.trim();
+        if (!name) { addStatus.textContent = 'Give the phone a name first'; return; }
+        addStatus.textContent = 'Creating…';
+        fetch('{{ url_for("web.add_shared_desk_phone") }}', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name}),
+        })
+            .then(r => r.json())
+            .then(d => {
+                if (!d.success) { addStatus.textContent = d.error || 'Not created'; return; }
+                const tr = document.createElement('tr');
+                tr.dataset.sid = d.sid;
+                tr.dataset.username = d.username;
+                // Copy the staff picker from the page's template row, if any.
+                const picker = document.querySelector('#sp-picker-template');
+                tr.innerHTML = '<td></td><td><code></code></td><td><code></code></td>' +
+                    '<td></td><td class="text-muted" style="font-size: 0.85rem;">Reload to delete</td>';
+                tr.children[0].textContent = d.name;
+                tr.children[1].querySelector('code').textContent = d.username;
+                tr.children[2].querySelector('code').textContent = d.password;
+                if (picker) {
+                    tr.children[3].innerHTML = picker.innerHTML;
+                } else {
+                    tr.children[3].textContent = 'Reload to set';
+                }
+                table.appendChild(tr);
+                const empty = document.getElementById('sp-empty');
+                if (empty) empty.remove();
+                nameInput.value = '';
+                addStatus.textContent = '✓ Added';
+            })
+            .catch(() => { addStatus.textContent = 'Not created — check your connection'; });
+    }
+    document.getElementById('sp-add').addEventListener('click', addPhone);
+    nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') addPhone(); });
+})();
+
 (function () {
     const table = document.querySelector('#known-addresses tbody');
     const status = document.getElementById('ka-status');

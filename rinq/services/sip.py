@@ -66,8 +66,5 @@ def get_sip_uri_for_user(user_email: str, sip_domain: str) -> str | None:
 
     Returns 'sip:username@domain.sip.twilio.com' or None if user has no SIP credentials.
     """
-    db = get_db()
-    user = db.get_user_by_email(user_email)
-    if user and user.get('username'):
-        return f"sip:{user['username']}@{sip_domain}"
-    return None
+    from rinq.services.person_devices import sip_uri_for_person
+    return sip_uri_for_person(user_email, get_db(), sip_domain)
