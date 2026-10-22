@@ -208,10 +208,136 @@
 
     {% endif %}
 </div>
+
+<div class="card">
+    <h2>Sign-in problems</h2>
+    <p class="text-muted" style="margin-top: 0;">
+        Desk phones that tried to sign in with a wrong or deleted login, checked every 10 minutes.
+        Attempts from an address that isn't one of our stores email the admins straight away;
+        phones at our stores are listed here and sent as a weekly list.
+    </p>
+
+    {% if sign_ins.unknown %}
+    <div class="alert-unreachable">
+        <h3>Sign-in attempts from addresses we don't know</h3>
+        <ul>
+            {% for r in sign_ins.unknown %}
+            <li>
+                <strong>{{ r.ip }}</strong> — {{ r.count }} attempt{{ 's' if r.count != 1 }}
+                as {{ r.logins|join(', ') or 'unknown' }}
+                {%- if r.last_dt %}, last {{ r.last_dt.strftime('%-d %b %H:%M') }} UTC{% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+        <p class="hint">If one of these is a store, add it below. If not, press Regenerate on each login tried.</p>
+    </div>
+    {% endif %}
+
+    <h3>Phones at our stores that can't sign in</h3>
+    {% if sign_ins.stale %}
+    <table>
+        <thead>
+            <tr>
+                <th>Store</th>
+                <th>Signed in as</th>
+                <th>Phone's address in the store</th>
+                <th>Failed attempts</th>
+                <th>Last tried</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in sign_ins.stale %}
+            <tr>
+                <td>{{ r.label }}</td>
+                <td><code>{{ r.username or '-' }}</code></td>
+                <td>{{ r.lan_ip or '-' }}</td>
+                <td>{{ r.count }}</td>
+                <td>{{ r.last_dt.strftime('%-d %b %H:%M') ~ ' UTC' if r.last_dt else '-' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p class="text-muted" style="font-size: 0.85rem;">
+        Switch the phone off, disable that account on it, or re-pair it for whoever sits there.
+        A row drops off two weeks after the phone stops trying.
+    </p>
+    {% elif sign_ins.last_checked %}
+    <p class="text-muted">None — every desk phone at our stores is signing in fine.</p>
+    {% else %}
+    <p class="text-muted">Not checked yet.</p>
+    {% endif %}
+
+    <h3 style="margin-top: 24px;">Our store addresses</h3>
+    <p class="text-muted" style="font-size: 0.9rem;">
+        Each store's internet address (Store health shows it). Sign-ins from anywhere else raise an alert.
+    </p>
+    <table id="known-addresses">
+        <thead><tr><th>Address</th><th>Store</th><th></th></tr></thead>
+        <tbody>
+            {% for a in known_addresses %}
+            <tr>
+                <td><input type="text" class="ka-ip" value="{{ a.ip }}" placeholder="e.g. 193.119.49.51"></td>
+                <td><input type="text" class="ka-label" value="{{ a.label }}" placeholder="e.g. Hume"></td>
+                <td><button type="button" class="btn btn-small ka-remove" title="Remove">&times;</button></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <button type="button" class="btn btn-small" id="ka-add" style="margin-top: 8px;">+ Add address</button>
+    <span id="ka-status" class="text-muted" style="margin-left: 10px; font-size: 0.85rem;"></span>
+</div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
+(function () {
+    const table = document.querySelector('#known-addresses tbody');
+    const status = document.getElementById('ka-status');
+
+    function collect() {
+        return Array.from(table.querySelectorAll('tr')).map(tr => ({
+            ip: tr.querySelector('.ka-ip').value.trim(),
+            label: tr.querySelector('.ka-label').value.trim(),
+        })).filter(a => a.ip);
+    }
+
+    function save() {
+        status.textContent = 'Saving…';
+        fetch('{{ url_for("web.save_sip_known_addresses") }}', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({addresses: collect()}),
+        })
+            .then(r => r.json())
+            .then(d => { status.textContent = d.success ? '✓ Saved' : 'Not saved'; })
+            .catch(() => { status.textContent = 'Not saved — check your connection'; });
+    }
+
+    function addRow(ip, label) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td><input type="text" class="ka-ip" placeholder="e.g. 193.119.49.51"></td>' +
+            '<td><input type="text" class="ka-label" placeholder="e.g. Hume"></td>' +
+            '<td><button type="button" class="btn btn-small ka-remove" title="Remove">&times;</button></td>';
+        tr.querySelector('.ka-ip').value = ip || '';
+        tr.querySelector('.ka-label').value = label || '';
+        table.appendChild(tr);
+        return tr;
+    }
+
+    table.addEventListener('change', e => {
+        if (e.target.matches('input')) save();
+    });
+    table.addEventListener('click', e => {
+        if (e.target.matches('.ka-remove')) {
+            e.target.closest('tr').remove();
+            save();
+        }
+    });
+    document.getElementById('ka-add').addEventListener('click', () => {
+        addRow().querySelector('.ka-ip').focus();
+    });
+})();
+
 function showPassword(sid, btn) {
     // Disable button while fetching
     btn.disabled = true;

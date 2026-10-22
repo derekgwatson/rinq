@@ -1926,12 +1926,29 @@ def desk_phones():
     needs_attention = [u for u in users
                        if u['expects_desk_phone'] and u['sip_status']['regressed']]
 
+    from rinq.services import sip_auth_alerts
+
     return render_template('desk_phones.html',
                          configured=configured,
                          sip_domain=sip_domain,
                          users=users,
                          needs_attention=needs_attention,
+                         sign_ins=sip_auth_alerts.failing_phones(db),
+                         known_addresses=sip_auth_alerts.get_known_addresses(db),
                          current_user=get_current_user())
+
+
+@web_bp.route('/desk-phones/known-addresses', methods=['POST'])
+@admin_required
+def save_sip_known_addresses():
+    """Save the store address list (save-in-place, JSON in and out)."""
+    from rinq.services import sip_auth_alerts
+
+    data = request.get_json(silent=True) or {}
+    user = get_current_user()
+    saved = sip_auth_alerts.save_known_addresses(
+        get_db(), data.get('addresses') or [], f'session:{user.email}')
+    return jsonify({'success': True, 'addresses': saved})
 
 
 @web_bp.route('/desk-phones/add', methods=['POST'])
