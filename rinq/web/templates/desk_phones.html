@@ -146,6 +146,11 @@
                 <td>
                     <select class="sp-occupant">
                         <option value="">Nobody</option>
+                        {% if p.occupant_email and p.occupant_email not in staff_choices|map(attribute='email')|list %}
+                        {# On the phone via *50 but not an active extension — show them, or the
+                           picker reads "Nobody" and a stray change would log them out. #}
+                        <option value="{{ p.occupant_email }}" selected>{{ p.occupant_name or p.occupant_email.split('@')[0] }}{% if p.occupant_extension %} ({{ p.occupant_extension }}){% endif %}</option>
+                        {% endif %}
                         {% for s in staff_choices %}
                         <option value="{{ s.email }}" {{ 'selected' if s.email == p.occupant_email }}>{{ s.name }}{% if s.extension %} ({{ s.extension }}){% endif %}</option>
                         {% endfor %}
