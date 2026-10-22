@@ -4852,7 +4852,11 @@ def _handle_desk_phone_code(code: str, from_identity: str, db) -> Response:
     extension = code[3:]
     ext = db.get_staff_extension_by_ext(extension) if extension.isdigit() else None
     if not extension:
-        return _say_and_hangup("Dial star 5 0 followed by your extension.")
+        # Bare *50: say who is on this phone, then how to log in.
+        occupant = db.get_staff_email_for_sip_username(device)
+        who = (f"{_spoken_name(occupant, db)} is on this phone."
+               if occupant else "Nobody is logged in to this phone.")
+        return _say_and_hangup(f"{who} To log in, dial star 5 0 followed by your extension.")
     if not ext or not ext.get('email'):
         return _say_and_hangup(
             f"Extension {' '.join(extension)} was not found. "
