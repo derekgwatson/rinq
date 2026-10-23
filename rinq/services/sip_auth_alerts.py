@@ -137,7 +137,11 @@ def _send(tenant, subject: str, body: str) -> list[str]:
 
 def _fmt(iso: str) -> str:
     try:
-        return datetime.fromisoformat(iso).strftime('%Y-%m-%d %H:%M UTC')
+        import pytz
+        dt = datetime.fromisoformat(iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(pytz.timezone('Australia/Sydney')).strftime('%-d %b %H:%M')
     except Exception:
         return iso
 
