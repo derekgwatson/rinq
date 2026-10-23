@@ -2060,9 +2060,11 @@ def phone_screen_provisioning(tenant_id, username, token, filename):
         abort(404)  # common/model files: nothing to say
     name, ext = _phone_screen_occupant(tenant_id, username, token)
     if name:
-        label = f"{name.split()[0]} {ext}" if ext else name.split()[0]
+        # A T41S line key fits ~7 characters: first name only (*50 alone
+        # says who is on the phone, extension and all).
+        label = name.split()[0]
     else:
-        label = "Not logged in"
+        label = "Nobody"
     label = ''.join(c for c in label if c.isprintable() and c not in '\r\n')
     resp = make_response(f"#!version:1.0.0.1\naccount.1.label = {label}\n")
     resp.headers['Content-Type'] = 'text/plain; charset=utf-8'
