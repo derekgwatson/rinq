@@ -110,6 +110,10 @@
     </select>
     <span class="sp-number-status text-muted" style="margin-left: 8px; font-size: 0.85rem;"></span>
     {% endmacro %}
+    {% macro notes_box(notes) %}
+    <textarea class="sp-notes" rows="2" maxlength="1000" placeholder="e.g. front counter, MAC 592E3A" style="min-width: 180px; width: 100%;">{{ notes or '' }}</textarea>
+    <span class="sp-notes-status text-muted" style="font-size: 0.85rem;"></span>
+    {% endmacro %}
     {% if sip_domain %}
     <p class="text-muted" style="font-size: 0.9rem;">
         Phone setup: server / domain <code>{{ sip_domain }}</code>, plus the login and password below.
@@ -124,6 +128,7 @@
                 <th>Password</th>
                 <th>Who's on it</th>
                 <th>Number when nobody's on it</th>
+                <th>Notes</th>
                 <th></th>
             </tr>
         </thead>
@@ -160,6 +165,7 @@
                     <span class="sp-status text-muted" style="margin-left: 8px; font-size: 0.85rem;"></span>
                 </td>
                 <td>{{ number_picker(p.empty_caller_id) }}</td>
+                <td>{{ notes_box(p.notes) }}</td>
                 <td>
                     <form method="POST" action="{{ url_for('web.delete_desk_phone', sid=p.sid) }}" style="margin: 0;">
                         <button type="submit" class="btn btn-danger btn-small confirm-delete">Delete</button>
@@ -179,6 +185,7 @@
         <span class="sp-status text-muted" style="margin-left: 8px; font-size: 0.85rem;"></span>
     </template>
     <template id="sp-number-template">{{ number_picker(None) }}</template>
+    <template id="sp-notes-template">{{ notes_box(None) }}</template>
     {% if not shared_phones %}
     <p class="text-muted" id="sp-empty">No shared phones yet. Add one for each handset, then set the handset up with its login.</p>
     {% endif %}
@@ -446,9 +453,25 @@
             .catch(() => { status.textContent = 'Not saved — check your connection'; });
     }
 
+    function saveNotes(box) {
+        const tr = box.closest('tr');
+        const status = tr.querySelector('.sp-notes-status');
+        status.textContent = 'Saving…';
+        fetch(`/desk-phones/shared/${tr.dataset.sid}/notes`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({notes: box.value}),
+        })
+            .then(r => r.json())
+            .then(d => { status.textContent = d.success ? '✓ Saved' : (d.error || 'Not saved'); })
+            .catch(() => { status.textContent = 'Not saved — check your connection'; });
+    }
+
+    // A textarea's change event fires on blur, and only if the text changed.
     table.addEventListener('change', e => {
         if (e.target.matches('.sp-occupant')) saveOccupant(e.target);
         if (e.target.matches('.sp-number')) saveNumber(e.target);
+        if (e.target.matches('.sp-notes')) saveNotes(e.target);
     });
     table.addEventListener('click', e => {
         if (!e.target.matches('.sp-copy-screen')) return;
@@ -479,8 +502,9 @@
                 // Copy the staff picker from the page's template row, if any.
                 const picker = document.querySelector('#sp-picker-template');
                 tr.innerHTML = '<td></td><td><code></code></td><td><code></code></td>' +
-                    '<td></td><td></td><td class="text-muted" style="font-size: 0.85rem;">Reload to delete</td>';
+                    '<td></td><td></td><td></td><td class="text-muted" style="font-size: 0.85rem;">Reload to delete</td>';
                 tr.children[4].innerHTML = document.getElementById('sp-number-template').innerHTML;
+                tr.children[5].innerHTML = document.getElementById('sp-notes-template').innerHTML;
                 tr.children[0].textContent = d.name;
                 tr.children[1].querySelector('code').textContent = d.username;
                 tr.children[2].querySelector('code').textContent = d.password;
