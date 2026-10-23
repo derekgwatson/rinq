@@ -278,7 +278,6 @@
         <nav id="mainNav">
             <a href="{{ url_for('web.index') }}" {% if active_nav == 'home' %}class="active"{% endif %} data-pwa-hide>My Numbers</a>
             <a href="{{ url_for('web.phone') }}" {% if active_nav == 'phone' %}class="active"{% endif %} id="navPhoneLink">📞 Phone</a>
-            <a href="{{ url_for('web.my_devices') }}" {% if active_nav == 'my_devices' %}class="active"{% endif %} data-pwa-hide>My Devices</a>
             <a href="{{ url_for('web.recordings') }}" {% if active_nav == 'recordings' %}class="active"{% endif %} data-pwa-hide>🎙️ Recordings</a>
             <a href="{{ url_for('web.reports') }}" {% if active_nav == 'reports' %}class="active"{% endif %} data-pwa-hide>📈 Reports</a>
             <a href="{{ url_for('web.leaderboard') }}" {% if active_nav == 'leaderboard' %}class="active"{% endif %} data-pwa-hide>🏆 Leaderboard</a>

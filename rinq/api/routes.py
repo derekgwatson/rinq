@@ -4914,7 +4914,7 @@ def _handle_caller_id_toggle(from_identity: str, staff_email: str, db) -> Respon
     if not result:
         twiml = '''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say>No toggle target is configured. Set one in My Devices.</Say>
+    <Say>No toggle target is configured. Set one in My settings, in Tina.</Say>
     <Hangup/>
 </Response>'''
         return Response(twiml, mimetype='application/xml')

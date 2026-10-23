@@ -193,7 +193,7 @@
 
 <div class="card">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-        <h2>All Desk Phone Credentials</h2>
+        <h2>Personal phone logins</h2>
         <form method="POST" action="{{ url_for('web.sync_desk_phones') }}" style="margin: 0;">
             <button type="submit" class="btn-sync">Sync from Twilio</button>
         </form>
@@ -239,11 +239,24 @@
     {% endif %}
 
     <div class="help-tip" style="margin-bottom: 20px;">
-        <strong>Self-Service:</strong> Users can set up their own desk phone credentials via the
-        <strong>Desk Phone</strong> nav link. Credentials are auto-created on first visit.
+        These are <strong>personal</strong> logins: they belong to one person, not a handset.
+        Desk phones should be shared phones (above). A personal login is only for someone who
+        needs Tina in an app like Zoiper on their mobile, since the Tina app only rings while it's open.
+        Staff can't see these details any more. Give them out from here.
+        <a href="{{ url_for('web.vvx300_setup') }}">Polycom VVX 300 setup guide</a>
     </div>
 
-    <h3>Registered Users ({{ users|length }})</h3>
+    <form method="POST" action="{{ url_for('web.add_personal_login') }}" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 20px;">
+        <select name="email" required style="max-width: 260px;">
+            <option value="">Give someone a personal login…</option>
+            {% for s in login_choices %}
+            <option value="{{ s.email }}">{{ s.name }}{% if s.extension %} ({{ s.extension }}){% endif %}</option>
+            {% endfor %}
+        </select>
+        <button type="submit" class="btn btn-small">Create login</button>
+    </form>
+
+    <h3>Personal logins ({{ users|length }})</h3>
 
     {% if users %}
         <table>
@@ -301,8 +314,8 @@
         </table>
     {% else %}
         <div class="empty-state">
-            <h3>No desk phone users yet</h3>
-            <p class="text-muted">Users will appear here when they visit the "Desk Phone" page.</p>
+            <h3>No personal logins</h3>
+            <p class="text-muted">Create one above for anyone who needs a softphone app.</p>
         </div>
     {% endif %}
 

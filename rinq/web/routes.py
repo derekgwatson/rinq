@@ -1936,12 +1936,15 @@ def desk_phones():
 
     from rinq.services import sip_auth_alerts
 
+    staff_choices = _desk_phone_staff_choices(db) if configured else []
     return render_template('desk_phones.html',
                          configured=configured,
                          sip_domain=sip_domain,
                          users=users,
                          shared_phones=shared_phones,
-                         staff_choices=_desk_phone_staff_choices(db) if configured else [],
+                         staff_choices=staff_choices,
+                         login_choices=[s for s in staff_choices
+                                        if s['email'] not in {(u.get('staff_email') or '').lower() for u in users}],
                          number_choices=_desk_phone_number_choices(db) if configured else [],
                          company_default=get_twilio_config('twilio_default_caller_id'),
                          needs_attention=needs_attention,
@@ -2263,6 +2266,29 @@ def add_desk_phone():
     return redirect(url_for('web.desk_phones'))
 
 
+@web_bp.route('/desk-phones/personal', methods=['POST'])
+@admin_required
+def add_personal_login():
+    """Give one person their own SIP login (e.g. Zoiper on a mobile).
+
+    Staff no longer get one automatically — desk phones are shared handsets.
+    """
+    db = get_db()
+    email = request.form.get('email', '').strip().lower()
+    person = next((s for s in _desk_phone_staff_choices(db) if s['email'] == email), None)
+    if not person:
+        flash('Pick a staff member', 'error')
+        return redirect(url_for('web.desk_phones'))
+
+    credential, error = _ensure_personal_sip_credential(email, person['name'], get_current_user())
+    if error:
+        flash(f'Could not create a login for {person["name"]}: {error}', 'error')
+    else:
+        flash(f'{person["name"]} has a phone login: {credential["username"]}. '
+              f'Use Show Password below for the password.', 'success')
+    return redirect(url_for('web.desk_phones'))
+
+
 @web_bp.route('/desk-phones/delete/<sid>', methods=['POST'])
 @admin_required
 def delete_desk_phone(sid):
@@ -2482,7 +2508,7 @@ def swap_desk_phone_caller_id():
     if not result:
         return jsonify({
             'ok': False,
-            'error': 'No toggle target configured. Set one in My Devices.'
+            'error': 'No toggle target configured. Set one in My settings.'
         }), 400
 
     db.log_activity(
@@ -2498,190 +2524,127 @@ def swap_desk_phone_caller_id():
     })
 
 
-@web_bp.route('/my-desk-phone/regenerate', methods=['POST'])
-@login_required
-def regenerate_desk_phone_password():
-    """Regenerate the user's desk phone password."""
+def _ensure_personal_sip_credential(email: str, name: str, actor) -> tuple:
+    """Find or create a person's own SIP login (desk phone / Zoiper).
+
+    Returns (credential, error). Links an existing Twilio credential with the
+    same username rather than failing on the duplicate.
+    """
     service = get_twilio_service()
     db = get_db()
-    user = get_current_user()
-
     cred_list_sid = get_twilio_config('twilio_sip_credential_list_sid')
     if not cred_list_sid:
-        flash('Desk phone credentials not configured', 'error')
-        return redirect(url_for('web.my_devices'))
+        return None, 'Desk phone credentials not configured'
 
-    # Get user's existing credential
-    credential = db.get_user_by_email(user.email)
-    if not credential:
-        flash('No desk phone credential found', 'error')
-        return redirect(url_for('web.my_devices'))
+    credential = db.get_user_by_email(email)
+    if credential:
+        return credential, None
 
-    # Generate new password
-    new_password = _generate_sip_password()
+    username = _email_to_sip_username(email)
+    existing_creds = service.get_credentials_in_list(cred_list_sid)
+    existing_cred = next((c for c in existing_creds if c['username'] == username), None)
 
-    # Update in Twilio
-    result = service.update_user_credential_password(
-        credential_list_sid=cred_list_sid,
-        credential_sid=credential['sid'],
-        new_password=new_password
-    )
-
-    if result.get('success'):
+    if existing_cred:
+        db.upsert_user({
+            "sid": existing_cred['sid'],
+            "username": username,
+            "friendly_name": name,
+            "staff_email": email,
+            "is_active": 1,
+            "synced_at": None,
+        })
         db.log_activity(
-            action="regenerate_desk_phone_password",
-            target=credential['username'],
-            details=f"Regenerated SIP password",
-            performed_by=_audit_tag(user)
+            action="link_desk_phone",
+            target=username,
+            details=f"Linked existing SIP credential to {name}",
+            performed_by=_audit_tag(actor)
         )
-        # Pass new password via query param to show once
-        return redirect(url_for('web.my_devices', new_password=new_password))
-    else:
-        flash(f'Failed to regenerate password: {result.get("error")}', 'error')
-        return redirect(url_for('web.my_devices'))
+        return db.get_user_by_email(email), None
+
+    result = service.create_user_credential(
+        credential_list_sid=cred_list_sid,
+        username=username,
+        password=_generate_sip_password(),
+        friendly_name=name,
+        staff_email=email
+    )
+    if not result.get('success'):
+        return None, result.get('error') or 'Twilio refused the new login'
+
+    db.log_activity(
+        action="create_desk_phone",
+        target=username,
+        details=f"Created personal SIP login for {name}",
+        performed_by=_audit_tag(actor)
+    )
+    return db.get_user_by_email(email), None
 
 
 @web_bp.route('/my-devices')
 @login_required
 def my_devices():
-    """User's device management page.
+    """The user's own call settings: outbound caller ID and what rings.
 
-    Shows SIP credentials and ring settings (browser/SIP toggles).
-    Auto-creates SIP credentials on first visit.
+    Phone logins and setup guides are admin-only (Admin → Desk phones) since
+    desk phones became shared handsets staff log in to with *50.
     """
-    service = get_twilio_service()
     db = get_db()
     user = get_current_user()
 
-    # Check if SIP is configured for this tenant
-    tenant_sip_cred_list_sid = get_twilio_config('twilio_sip_credential_list_sid')
-    sip_configured = bool(tenant_sip_cred_list_sid)
-    sip_domain = None
-    credential = None
-    stored_password = None
-    callable_numbers = []
-    new_password = request.args.get('new_password')  # From regeneration redirect
+    # Available caller IDs (owned numbers + verified caller IDs)
+    phone_numbers = db.get_phone_numbers()
+    callable_numbers = [{'phone_number': n['phone_number'], 'friendly_name': n.get('friendly_name'), 'section': n.get('section')}
+                        for n in phone_numbers if n.get('section')]
+    for vcid in db.get_verified_caller_ids(active_only=True):
+        callable_numbers.append({
+            'phone_number': vcid['phone_number'],
+            'friendly_name': vcid['friendly_name'],
+            'section': vcid.get('section'),
+        })
 
-    if sip_configured:
-        # Get SIP domain from tenant record (avoids flaky Twilio .list() API)
-        sip_domain = get_twilio_config('twilio_sip_domain')
-        if not sip_domain and service.is_configured:
-            # Fallback: fetch from Twilio API
-            domains = service.get_sip_domains()
-            if domains:
-                sip_domain = domains[0]['domain_name']
-
-        # Check if user already has a credential
-        credential = db.get_user_by_email(user.email)
-
-        if not credential:
-            # Auto-create or link credential for this user
-            username = _email_to_sip_username(user.email)
-
-            # Check if this username already exists in Twilio
-            existing_creds = service.get_credentials_in_list(tenant_sip_cred_list_sid)
-            existing_cred = next((c for c in existing_creds if c['username'] == username), None)
-
-            if existing_cred:
-                # Username already exists in Twilio - link it to this user
-                db.upsert_user({
-                    "sid": existing_cred['sid'],
-                    "username": username,
-                    "friendly_name": user.name,
-                    "staff_email": user.email,
-                    "is_active": 1,
-                    "synced_at": None,
-                })
-                db.log_activity(
-                    action="link_desk_phone",
-                    target=username,
-                    details=f"Linked existing SIP credential to {user.name}",
-                    performed_by=_audit_tag(user)
-                )
-                credential = db.get_user_by_email(user.email)
-                # Don't show password - they need to use existing or regenerate
-                flash('Your existing desk phone credential has been linked. Use your existing password, or click Regenerate to get a new one.', 'info')
-            else:
-                # Create new credential
-                new_password = _generate_sip_password()
-
-                result = service.create_user_credential(
-                    credential_list_sid=tenant_sip_cred_list_sid,
-                    username=username,
-                    password=new_password,
-                    friendly_name=user.name,
-                    staff_email=user.email
-                )
-
-                if result.get('success'):
-                    db.log_activity(
-                        action="auto_create_desk_phone",
-                        target=username,
-                        details=f"Auto-created SIP credential for {user.name}",
-                        performed_by=_audit_tag(user)
-                    )
-                    # Fetch the newly created credential
-                    credential = db.get_user_by_email(user.email)
-                else:
-                    flash(f'Failed to create desk phone credentials: {result.get("error")}', 'error')
-
-        # Get stored password if available
-        if credential:
-            stored_password = db.get_user_password(credential['sid'])
-
-        # Get available caller IDs (owned numbers + verified caller IDs)
-        phone_numbers = db.get_phone_numbers()
-        callable_numbers = [{'phone_number': n['phone_number'], 'friendly_name': n.get('friendly_name'), 'section': n.get('section')}
-                            for n in phone_numbers if n.get('section')]
-        verified_caller_ids = db.get_verified_caller_ids(active_only=True)
-        for vcid in verified_caller_ids:
-            callable_numbers.append({
-                'phone_number': vcid['phone_number'],
-                'friendly_name': vcid['friendly_name'],
-                'section': vcid.get('section'),
-            })
-
-    # Get user's ring settings and staff extension
-    ring_settings = db.get_user_ring_settings(user.email)
     staff_ext = db.get_staff_extension(user.email)
+    shared_phone = db.get_desk_phone_for_staff(user.email)
+    if shared_phone:
+        shared_phone = next((p['friendly_name'] or p['username']
+                             for p in db.get_shared_desk_phones()
+                             if p['username'] == shared_phone), shared_phone)
+    personal_login = db.get_user_by_email(user.email)
 
     return render_template('my_devices.html',
-                         sip_configured=sip_configured,
-                         sip_domain=sip_domain,
-                         credential=credential,
-                         new_password=new_password,
-                         stored_password=stored_password,
                          callable_numbers=callable_numbers,
-                         ring_settings=ring_settings,
+                         ring_settings=db.get_user_ring_settings(user.email),
                          staff_ext=staff_ext,
+                         shared_phone=shared_phone,
+                         personal_login=personal_login,
                          sip_status=sip_reachability(staff_ext or {}),
                          current_user=user)
 
 
-@web_bp.route('/my-devices/vvx300-setup')
-@login_required
-def vvx300_setup():
-    """Setup guide for Polycom VVX 300 desk phones."""
-    user = get_current_user()
-    db = get_db()
+def _tenant_sip_domain():
+    """The tenant's SIP domain, from its record or (fallback) Twilio."""
+    sip_domain = get_twilio_config('twilio_sip_domain')
     service = get_twilio_service()
-
-    credential = None
-    sip_domain = None
-    stored_password = None
-    if get_twilio_config('twilio_sip_credential_list_sid') and service.is_configured:
+    if not sip_domain and service.is_configured:
         domains = service.get_sip_domains()
         if domains:
             sip_domain = domains[0]['domain_name']
-        credential = db.get_user_by_email(user.email)
-        if credential:
-            stored_password = credential.get('password')
+    return sip_domain
 
+
+@web_bp.route('/my-devices/vvx300-setup')
+@login_required
+def vvx300_setup_old():
+    """The guide moved to the admin Desk phones area."""
+    return redirect(url_for('web.vvx300_setup'))
+
+
+@web_bp.route('/desk-phones/vvx300-setup')
+@admin_required
+def vvx300_setup():
+    """Setup guide for Polycom VVX 300 desk phones."""
     return render_template('vvx300_setup.html',
-                         credential=credential,
-                         sip_domain=sip_domain,
-                         stored_password=stored_password,
-                         current_user=user)
+                         sip_domain=_tenant_sip_domain(),
+                         current_user=get_current_user())
 
 
 @web_bp.route('/my-devices/ring-settings', methods=['POST'])

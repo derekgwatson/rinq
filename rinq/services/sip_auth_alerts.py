@@ -186,7 +186,7 @@ def _send_digest(tenant, stale: dict) -> list[str]:
         "regenerated.\n\n"
         + "\n".join(lines) +
         "\n\nFor each one: switch the phone off, disable that account on it, or "
-        "re-pair it for whoever sits there (My Devices). The list is also on "
+        "set it up as a shared phone. The list is also on "
         "the Desk Phones page.\n"
     )
     return _send(tenant, subject, body)
