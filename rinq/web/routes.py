@@ -259,7 +259,43 @@ def index():
                          available_queues=available_queues,
                          assignments=assignments,
                          ext_directory_number=ext_directory_number,
-                         current_user=user)
+                         current_user=user,
+                         **_my_call_settings(db, user.email, staff_ext))
+
+
+def _my_call_settings(db, email: str, staff_ext) -> dict:
+    """Caller ID choices, what rings and which shared phone the user is on.
+
+    Shown in the Settings card on the home page (it used to be the separate
+    My Devices / My settings page, which staff couldn't find).
+    """
+    # Available caller IDs (owned numbers + verified caller IDs)
+    callable_numbers = [{'phone_number': n['phone_number'], 'friendly_name': n.get('friendly_name'), 'section': n.get('section')}
+                        for n in db.get_phone_numbers() if n.get('section')]
+    for vcid in db.get_verified_caller_ids(active_only=True):
+        callable_numbers.append({
+            'phone_number': vcid['phone_number'],
+            'friendly_name': vcid['friendly_name'],
+            'section': vcid.get('section'),
+        })
+
+    shared_phone = db.get_desk_phone_for_staff(email)
+    if shared_phone:
+        shared_phone = next((p['friendly_name'] or p['username']
+                             for p in db.get_shared_desk_phones()
+                             if p['username'] == shared_phone), shared_phone)
+
+    return {
+        'callable_numbers': callable_numbers,
+        'ring_settings': db.get_user_ring_settings(email),
+        'shared_phone': shared_phone,
+        'personal_login': db.get_user_by_email(email),
+        'sip_status': sip_reachability(staff_ext or {}),
+    }
+
+
+def _settings_redirect():
+    return redirect(url_for('web.index', _anchor='settings'))
 
 
 @web_bp.route('/settings', methods=['POST'])
@@ -2472,7 +2508,7 @@ def _email_to_sip_username(email: str) -> str:
 @login_required
 def my_desk_phone():
     """Redirect old desk phone page to combined devices page."""
-    return redirect(url_for('web.my_devices'))
+    return _settings_redirect()
 
 
 @web_bp.route('/my-desk-phone/caller-id', methods=['POST'])
@@ -2488,7 +2524,7 @@ def set_desk_phone_caller_id():
     ext = db.get_staff_extension(user.email)
     if not ext:
         flash('No staff extension found', 'error')
-        return redirect(url_for('web.my_devices'))
+        return _settings_redirect()
 
     db.update_staff_extension_caller_id(
         email=user.email,
@@ -2509,7 +2545,7 @@ def set_desk_phone_caller_id():
     )
 
     flash('Caller ID settings updated', 'success')
-    return redirect(url_for('web.my_devices'))
+    return _settings_redirect()
 
 
 @web_bp.route('/my-desk-phone/swap-caller-id', methods=['POST'])
@@ -2529,7 +2565,7 @@ def swap_desk_phone_caller_id():
     if not result:
         return jsonify({
             'ok': False,
-            'error': 'No toggle target configured. Set one in My settings.'
+            'error': 'No toggle target configured. Set one in Settings on the My Numbers page.'
         }), 400
 
     db.log_activity(
@@ -2604,41 +2640,8 @@ def _ensure_personal_sip_credential(email: str, name: str, actor) -> tuple:
 @web_bp.route('/my-devices')
 @login_required
 def my_devices():
-    """The user's own call settings: outbound caller ID and what rings.
-
-    Phone logins and setup guides are admin-only (Admin → Desk phones) since
-    desk phones became shared handsets staff log in to with *50.
-    """
-    db = get_db()
-    user = get_current_user()
-
-    # Available caller IDs (owned numbers + verified caller IDs)
-    phone_numbers = db.get_phone_numbers()
-    callable_numbers = [{'phone_number': n['phone_number'], 'friendly_name': n.get('friendly_name'), 'section': n.get('section')}
-                        for n in phone_numbers if n.get('section')]
-    for vcid in db.get_verified_caller_ids(active_only=True):
-        callable_numbers.append({
-            'phone_number': vcid['phone_number'],
-            'friendly_name': vcid['friendly_name'],
-            'section': vcid.get('section'),
-        })
-
-    staff_ext = db.get_staff_extension(user.email)
-    shared_phone = db.get_desk_phone_for_staff(user.email)
-    if shared_phone:
-        shared_phone = next((p['friendly_name'] or p['username']
-                             for p in db.get_shared_desk_phones()
-                             if p['username'] == shared_phone), shared_phone)
-    personal_login = db.get_user_by_email(user.email)
-
-    return render_template('my_devices.html',
-                         callable_numbers=callable_numbers,
-                         ring_settings=db.get_user_ring_settings(user.email),
-                         staff_ext=staff_ext,
-                         shared_phone=shared_phone,
-                         personal_login=personal_login,
-                         sip_status=sip_reachability(staff_ext or {}),
-                         current_user=user)
+    """Old My Devices / My settings page — it's all in the home page's Settings card now."""
+    return _settings_redirect()
 
 
 def _tenant_sip_domain():
@@ -2694,7 +2697,7 @@ def update_ring_settings():
     )
 
     flash('Ring settings updated.', 'success')
-    return redirect(url_for('web.my_devices'))
+    return _settings_redirect()
 
 
 @web_bp.route('/phone')
