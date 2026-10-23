@@ -61,6 +61,18 @@ app.secret_key = _secret_key or 'dev-secret-key-change-in-prod'
 app.config['BOT_NAME'] = config.name
 
 # Add custom Jinja2 filters
+@app.template_filter('local_time')
+def local_time_filter(value, fmt='%-d %b %H:%M'):
+    """Show a stored (UTC) datetime in Sydney time. Naive values are UTC."""
+    if not value:
+        return ''
+    import pytz
+    from datetime import timezone as _tz
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=_tz.utc)
+    return value.astimezone(pytz.timezone('Australia/Sydney')).strftime(fmt)
+
+
 @app.template_filter('fromjson')
 def fromjson_filter(value):
     """Parse JSON string into Python object."""

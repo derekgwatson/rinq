@@ -228,7 +228,7 @@
             <li>
                 <strong>{{ user.friendly_name or user.username }}</strong>
                 — {{ user.sip_status.label|lower }}
-                {%- if user.sip_status.last_rang %}, last rang {{ user.sip_status.last_rang.strftime('%-d %b') }}{% endif %}
+                {%- if user.sip_status.last_rang %}, last rang {{ user.sip_status.last_rang|local_time('%-d %b') }}{% endif %}
             </li>
             {% endfor %}
         </ul>
@@ -296,7 +296,7 @@
                             <span class="badge badge-secondary" title="{{ user.sip_status.detail }}">Not yet tested</span>
                         {% endif %}
                         {% if user.sip_status.last_rang %}
-                        <div class="last-rang">Last rang {{ user.sip_status.last_rang.strftime('%-d %b %H:%M') }}</div>
+                        <div class="last-rang">Last rang {{ user.sip_status.last_rang|local_time }}</div>
                         {% endif %}
                     </td>
                     <td style="white-space: nowrap;">
@@ -338,7 +338,7 @@
             <li>
                 <strong>{{ r.ip }}</strong> — {{ r.count }} attempt{{ 's' if r.count != 1 }}
                 as {{ r.logins|join(', ') or 'unknown' }}
-                {%- if r.last_dt %}, last {{ r.last_dt.strftime('%-d %b %H:%M') }} UTC{% endif %}
+                {%- if r.last_dt %}, last {{ r.last_dt|local_time }}{% endif %}
             </li>
             {% endfor %}
         </ul>
@@ -365,7 +365,7 @@
                 <td><code>{{ r.username or '-' }}</code></td>
                 <td>{{ r.lan_ip or '-' }}</td>
                 <td>{{ r.count }}</td>
-                <td>{{ r.last_dt.strftime('%-d %b %H:%M') ~ ' UTC' if r.last_dt else '-' }}</td>
+                <td>{{ r.last_dt|local_time if r.last_dt else '-' }}</td>
             </tr>
             {% endfor %}
         </tbody>
