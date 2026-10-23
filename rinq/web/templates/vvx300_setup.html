@@ -171,39 +171,17 @@
 {% block content %}
 <div class="setup-guide">
     <h2>Polycom VVX 300 Setup</h2>
-    <p class="text-muted">Step-by-step guide for configuring a Polycom VVX 300 desk phone with Twilio SIP.</p>
+    <p class="text-muted">Turning a Polycom VVX 300 into a shared desk phone that staff log in to with *50.</p>
     <p class="text-muted">Access your phone's web interface by entering its IP address in a browser.
         You can find the IP on the phone screen: <strong>Settings &gt; Status &gt; Network &gt; TCP/IP Parameters</strong>.</p>
 
-    {% if credential %}
     <div class="your-creds">
-        <h4>Your SIP Credentials</h4>
-        <p class="text-muted" style="margin: 0 0 10px 0;">You'll need these values during setup.</p>
-        <div class="credential-item">
-            <span class="label">Username</span>
-            <span class="value">{{ credential.username }}</span>
-            <span class="copy-icon" onclick="copyText('{{ credential.username }}', this)" title="Copy"></span>
-        </div>
-        {% if stored_password %}
-        <div class="credential-item">
-            <span class="label">Password</span>
-            <span class="password-field">
-                <span id="passwordDots">••••••••</span>
-                <span id="passwordText" style="display: none;">{{ stored_password }}</span>
-            </span>
-            <span class="action-icon" onclick="togglePassword(this)" title="Show/Hide">👁️</span>
-            <span class="copy-icon" onclick="copyText('{{ stored_password }}', this)" title="Copy"></span>
-        </div>
-        {% endif %}
-        {% if sip_domain %}
-        <div class="credential-item">
-            <span class="label">Domain</span>
-            <span class="value">{{ sip_domain }}</span>
-            <span class="copy-icon" onclick="copyText('{{ sip_domain }}', this)" title="Copy"></span>
-        </div>
-        {% endif %}
+        <h4>Before you start</h4>
+        <p class="text-muted" style="margin: 0;">Add the handset on the <a href="{{ url_for('web.desk_phones') }}">Desk phones</a> page as a
+            <strong>shared phone</strong>, named make + last 6 of its MAC (e.g. "Polycom 592E3A"). You'll need its
+            <strong>login</strong>, <strong>password</strong> and <strong>screen page</strong> link from there.
+            Wherever this guide says "phone login", use that login.</p>
     </div>
-    {% endif %}
 
     <!-- Step 1: SIP Settings -->
     <div class="step-card">
@@ -245,8 +223,8 @@
 
         <h4>Identification</h4>
         <table class="settings-table">
-            <tr><th>Display Name</th><td><span class="note">Your extension number (shown on phone screen)</span></td></tr>
-            <tr><th>Address</th><td>{{ credential.username if credential else 'your_sip_username' }} <span class="note">(your SIP username)</span></td></tr>
+            <tr><th>Display Name</th><td><span class="note">The phone's name, e.g. Polycom 592E3A</span></td></tr>
+            <tr><th>Address</th><td><span class="note">The phone login</span></td></tr>
             <tr><th>Type</th><td>Private</td></tr>
             <tr><th>Number of Line Keys</th><td>1</td></tr>
             <tr><th>Calls Per Line</th><td>24</td></tr>
@@ -260,8 +238,8 @@
         <table class="settings-table">
             <tr><th>Use Login Credentials</th><td>Disable</td></tr>
             <tr><th>Domain</th><td>{{ sip_domain or 'yourdomain.sip.twilio.com' }} <span class="copy-icon" onclick="copyText('{{ sip_domain or 'yourdomain.sip.twilio.com' }}', this)" title="Copy"></span></td></tr>
-            <tr><th>User ID</th><td>{{ credential.username if credential else 'your_sip_username' }}</td></tr>
-            <tr><th>Password</th><td><span class="note">Your SIP password (see credentials above)</span></td></tr>
+            <tr><th>User ID</th><td><span class="note">The phone login</span></td></tr>
+            <tr><th>Password</th><td><span class="note">The phone's password. Type it by hand, then press Tab</span></td></tr>
         </table>
 
         <div class="warning-box">
@@ -284,17 +262,36 @@
             <tr><th>Subscription Expires (s)</th><td>600</td></tr>
         </table>
 
-        <p>Click <strong>Save</strong>. The phone will reboot and register with Twilio.</p>
+        <p>Don't save yet: the next step is on another page, and one Save applies both.</p>
+    </div>
+
+    <!-- Step 3: Who's on it -->
+    <div class="step-card">
+        <h3><span class="step-number">3</span> Show who's on the phone</h3>
+        <p>The VVX 300 has no idle web page, so the screen saver does the job.</p>
+        <p class="nav-path"><strong>Settings &gt; Microbrowser</strong></p>
+        <table class="settings-table">
+            <tr><th>Idle Display Home</th><td><span class="note">The phone's "Screen page" link from the Desk phones page (http, not https)</span></td></tr>
+            <tr><th>Refresh</th><td>30</td></tr>
+        </table>
+        <p class="nav-path"><strong>Preferences &gt; Additional Preferences &gt; Screen Saver</strong></p>
+        <table class="settings-table">
+            <tr><th>Screen Saver</th><td>Enable</td></tr>
+            <tr><th>Wait time</th><td>1 minute</td></tr>
+            <tr><th>Type</th><td>Idle Browser</td></tr>
+        </table>
+        <p>Click <strong>Save</strong>. The phone reboots once and registers with Twilio.</p>
     </div>
 
     <!-- Step 3: Verify -->
     <div class="step-card">
-        <h3><span class="step-number">3</span> Verify Registration</h3>
+        <h3><span class="step-number">4</span> Check it works</h3>
         <p>After the phone reboots, check that it registered successfully:</p>
         <ul>
             <li>On the phone screen: <strong>Settings &gt; Status &gt; Lines &gt; Line 1</strong> should show <strong>Registered</strong></li>
-            <li>Try making a test call to confirm outbound works</li>
-            <li>Have someone call you to confirm inbound works</li>
+            <li>Dial <strong>*50</strong>: it should say nobody is logged in</li>
+            <li>Dial <strong>*50</strong> + an extension to log someone in, then call that extension to check it rings</li>
+            <li>Set the phone's "Number when nobody's on it" on the Desk phones page</li>
         </ul>
     </div>
 
@@ -304,7 +301,7 @@
         <table class="settings-table">
             <tr>
                 <th>Line shows "Unregistered"</th>
-                <td class="note" style="font-family: inherit;">Check username and password match your SIP credentials. Verify Expires is set to 600 or higher.</td>
+                <td class="note" style="font-family: inherit;">Check the login and password match the Desk phones page. Verify Expires is set to 600 or higher.</td>
             </tr>
             <tr>
                 <th>Outbound works, inbound doesn't</th>
@@ -325,7 +322,7 @@
         </table>
     </div>
 
-    <p style="margin-top: 20px;"><a href="{{ url_for('web.my_devices') }}">&larr; Back to My Devices</a></p>
+    <p style="margin-top: 20px;"><a href="{{ url_for('web.desk_phones') }}">&larr; Back to Desk phones</a></p>
 </div>
 {% endblock %}
 

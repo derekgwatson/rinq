@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title_suffix %} - My Devices{% endblock %}
+{% block title_suffix %} - My settings{% endblock %}
 
 {% block extra_css %}
 .section-card {
@@ -241,145 +241,60 @@
 {% endblock %}
 
 {% block content %}
-<h2>My Devices</h2>
-<p class="text-muted">Configure your SIP credentials and choose which devices ring when calls come in.</p>
+<h2>My settings</h2>
+<p class="text-muted">Choose the number people see when you call, and what rings when calls come in for you.</p>
 
-<!-- SIP Credentials Section -->
+<!-- Caller ID Section -->
+{% if callable_numbers %}
 <div class="section-card">
-    <h3>SIP Credentials</h3>
-    <p class="text-muted">Use these settings to configure your desk phone or mobile softphone app (e.g., Zoiper).</p>
-
-    {% if not sip_configured %}
-    <div class="alert alert-warning">
-        SIP credentials have not been configured for this system. Contact your administrator.
-    </div>
-    {% else %}
-
-    {% if ring_settings.ring_sip %}
-    <div class="sip-status sip-status-{{ sip_status.state }}">
-        <div class="sip-status-label">{{ sip_status.label }}</div>
-        {% if sip_status.state == 'ok' %}
-        <p>Your desk phone answered the last time we rang it{% if sip_status.last_rang %},
-            on {{ sip_status.last_rang.strftime('%-d %b at %H:%M') }}{% endif %}.</p>
-        {% else %}
-        <p>{{ sip_status.detail }}</p>
-        {% if sip_status.last_rang %}
-        <p class="hint">It last rang on {{ sip_status.last_rang.strftime('%-d %b at %H:%M') }}.</p>
-        {% endif %}
-        {% endif %}
-    </div>
-    {% endif %}
-
-    <div class="credentials-box">
-        <div class="credential-row">
-            <span class="credential-label">Server / Domain</span>
-            <span class="credential-value">
-                <span class="value-text">{{ sip_domain or 'Not configured' }}</span>
-                {% if sip_domain %}
-                <span class="copy-icon" onclick="copyText('{{ sip_domain }}', this)" title="Copy"></span>
-                {% endif %}
-            </span>
+    <h3>Outbound caller ID</h3>
+    <p class="text-muted">The <em>Active</em> number is shown to the people you call. Dial <strong>*99</strong> from any phone (or use the swap button on the Phone page) to flip between Active and the toggle target.</p>
+    <form method="POST" action="{{ url_for('web.set_desk_phone_caller_id') }}" class="caller-id-form">
+        <div class="form-group">
+            <label for="caller_id" style="display: block; font-size: 0.85em; color: #666; margin-bottom: 4px;">Active</label>
+            <select id="caller_id" name="caller_id">
+                <option value="">-- System default --</option>
+                {% for number in callable_numbers %}
+                <option value="{{ number.phone_number }}"
+                        {% if staff_ext and staff_ext.default_caller_id == number.phone_number %}selected{% endif %}>
+                    {{ number.phone_number }}
+                    {% if number.friendly_name %} - {{ number.friendly_name }}{% endif %}
+                    {% if number.section %} ({{ number.section }}){% endif %}
+                </option>
+                {% endfor %}
+            </select>
         </div>
-        <div class="credential-row">
-            <span class="credential-label">Protocol</span>
-            <span class="credential-value">
-                <span class="value-text">SIP (UDP 5060 or TLS 5061)</span>
-            </span>
+        <div class="form-group">
+            <label for="alternate_caller_id" style="display: block; font-size: 0.85em; color: #666; margin-bottom: 4px;">Toggle target (*99)</label>
+            <select id="alternate_caller_id" name="alternate_caller_id">
+                <option value="">-- None --</option>
+                {% for number in callable_numbers %}
+                <option value="{{ number.phone_number }}"
+                        {% if staff_ext and staff_ext.alternate_caller_id == number.phone_number %}selected{% endif %}>
+                    {{ number.phone_number }}
+                    {% if number.friendly_name %} - {{ number.friendly_name }}{% endif %}
+                    {% if number.section %} ({{ number.section }}){% endif %}
+                </option>
+                {% endfor %}
+            </select>
         </div>
-        <div class="credential-row">
-            <span class="credential-label">Username</span>
-            <span class="credential-value">
-                {% if credential %}
-                <span class="value-text">{{ credential.username }}</span>
-                <span class="copy-icon" onclick="copyText('{{ credential.username }}', this)" title="Copy"></span>
-                {% else %}
-                <span class="text-muted">Not set up</span>
-                {% endif %}
-            </span>
-        </div>
-        <div class="credential-row">
-            <span class="credential-label">Password</span>
-            <div class="credential-value">
-                {% if stored_password %}
-                <span class="password-field" id="passwordDisplay">
-                    <span class="password-dots" id="passwordDots">••••••••</span>
-                    <span id="passwordText" style="display: none;">{{ stored_password }}</span>
-                </span>
-                <span class="action-icon" onclick="togglePassword(this)" title="Show/Hide">👁️</span>
-                <span class="copy-icon" onclick="copyText('{{ stored_password }}', this)" title="Copy"></span>
-                <button type="button" class="action-icon" onclick="toggleQR()" title="Show QR Code">QR</button>
-                <form method="POST" action="{{ url_for('web.regenerate_desk_phone_password') }}" style="display: inline;">
-                    <button type="submit" class="action-icon" title="Generate new password">🔄</button>
-                </form>
-                {% elif credential %}
-                <span class="text-muted">Not stored locally</span>
-                <form method="POST" action="{{ url_for('web.regenerate_desk_phone_password') }}" style="display: inline;">
-                    <button type="submit" class="action-icon" title="Generate new password">🔄</button>
-                </form>
-                {% else %}
-                <span class="text-muted">-</span>
-                {% endif %}
-            </div>
-        </div>
-        <div id="qrSection" style="display: none; text-align: center; padding: 10px 0; border-top: 1px solid #eee;">
-            <canvas id="qrCanvas"></canvas>
-            <div class="text-muted" style="font-size: 0.85em; margin-top: 5px;">Scan with your phone camera to copy password</div>
-        </div>
-    </div>
-
-    {% if callable_numbers %}
-    <div style="margin-top: 15px;">
-        <strong>Outbound Caller ID</strong>
-        <p class="text-muted" style="margin: 5px 0;">When making outbound calls from the softphone or your SIP device, the <em>Active</em> number is shown to the recipient. Dial <strong>*99</strong> from any device (or use the swap button on the softphone) to flip Active and Toggle target.</p>
-        <form method="POST" action="{{ url_for('web.set_desk_phone_caller_id') }}" class="caller-id-form">
-            <div class="form-group">
-                <label for="caller_id" style="display: block; font-size: 0.85em; color: #666; margin-bottom: 4px;">Active</label>
-                <select id="caller_id" name="caller_id">
-                    <option value="">-- System default --</option>
-                    {% for number in callable_numbers %}
-                    <option value="{{ number.phone_number }}"
-                            {% if staff_ext and staff_ext.default_caller_id == number.phone_number %}selected{% endif %}>
-                        {{ number.phone_number }}
-                        {% if number.friendly_name %} - {{ number.friendly_name }}{% endif %}
-                        {% if number.section %} ({{ number.section }}){% endif %}
-                    </option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="form-group">
-                <label for="alternate_caller_id" style="display: block; font-size: 0.85em; color: #666; margin-bottom: 4px;">Toggle target (*99)</label>
-                <select id="alternate_caller_id" name="alternate_caller_id">
-                    <option value="">-- None --</option>
-                    {% for number in callable_numbers %}
-                    <option value="{{ number.phone_number }}"
-                            {% if staff_ext and staff_ext.alternate_caller_id == number.phone_number %}selected{% endif %}>
-                        {{ number.phone_number }}
-                        {% if number.friendly_name %} - {{ number.friendly_name }}{% endif %}
-                        {% if number.section %} ({{ number.section }}){% endif %}
-                    </option>
-                    {% endfor %}
-                </select>
-            </div>
-            <button type="submit" class="btn btn-small">Save</button>
-        </form>
-    </div>
-    {% endif %}
-
-    {% endif %}
+        <button type="submit" class="btn btn-small">Save</button>
+    </form>
 </div>
+{% endif %}
 
 <!-- Ring Settings Section -->
 <div class="section-card">
-    <h3>Ring Settings</h3>
-    <p class="text-muted">Choose which devices ring when calls come in for you.</p>
+    <h3>What rings</h3>
+    <p class="text-muted">Choose what rings when calls come in for you.</p>
 
     <form method="POST" action="{{ url_for('web.update_ring_settings') }}" class="ring-settings-form">
         <label class="toggle-row">
             <input type="checkbox" name="ring_browser" value="1"
                    {% if ring_settings.ring_browser %}checked{% endif %}>
             <div class="toggle-info">
-                <span class="toggle-label">Ring browser softphone</span>
-                <span class="toggle-desc">The Phone page in {{ product_name }} - rings when the page is open in your browser</span>
+                <span class="toggle-label">The {{ product_name }} app</span>
+                <span class="toggle-desc">The Phone page, on a computer or your mobile. Rings while it's open.</span>
             </div>
         </label>
 
@@ -387,108 +302,42 @@
             <input type="checkbox" name="ring_sip" value="1"
                    {% if ring_settings.ring_sip %}checked{% endif %}>
             <div class="toggle-info">
-                <span class="toggle-label">Ring SIP devices</span>
-                <span class="toggle-desc">Desk phone, Zoiper on mobile, or any device using your SIP credentials above</span>
+                <span class="toggle-label">Desk phone</span>
+                <span class="toggle-desc">Whichever desk phone you're logged in to{% if personal_login %}, plus any app using your personal login{% endif %}.</span>
             </div>
         </label>
 
         <div>
-            <button type="submit" class="btn">Save Ring Settings</button>
+            <button type="submit" class="btn">Save</button>
         </div>
     </form>
 </div>
 
-<div class="help-section">
-    <h3>How It Works</h3>
-    <ul>
-        <li><strong>SIP Devices:</strong> Configure your desk phone or Zoiper app with the credentials above. All devices using the same credentials will ring together.
-            <br><a href="{{ url_for('web.vvx300_setup') }}">Polycom VVX 300 setup guide</a></li>
-        <li><strong>Browser Softphone:</strong> Use the <a href="{{ url_for('web.phone') }}">Phone</a> page - no setup needed, just keep it open in your browser.</li>
-        <li>When a call comes in, all your <strong>enabled</strong> device types ring simultaneously. Answer on whichever you prefer.</li>
-        <li>Toggle the settings above to temporarily stop certain device types from ringing.</li>
-    </ul>
+<!-- Desk phone -->
+<div class="section-card">
+    <h3>Desk phone</h3>
+    {% if shared_phone %}
+    <p>You're logged in to <strong>{{ shared_phone }}</strong>. Your calls ring there.</p>
+    {% else %}
+    <p>You're not logged in to a desk phone.</p>
+    {% endif %}
+    <p class="text-muted">On any desk phone, dial <strong>*50</strong> then your extension{% if staff_ext and staff_ext.extension %} (<strong>*50{{ staff_ext.extension }}</strong>){% endif %} to log in, and <strong>*51</strong> to log out. <strong>*50</strong> on its own says who's on that phone.</p>
+    {% if personal_login and ring_settings.ring_sip and sip_status.state != 'ok' and sip_status.last_rang %}
+    <p class="hint">{{ sip_status.detail }}</p>
+    {% endif %}
 </div>
 {% endblock %}
 
 {% block extra_js %}
-<script src="https://unpkg.com/qrcode-generator@1.4.4/qrcode.js"></script>
 <script>
-function togglePassword(btn) {
-    const dots = document.getElementById('passwordDots');
-    const text = document.getElementById('passwordText');
-
-    if (dots.style.display !== 'none') {
-        dots.style.display = 'none';
-        text.style.display = 'inline';
-        if (btn) btn.textContent = '🙈';
-    } else {
-        dots.style.display = 'inline';
-        text.style.display = 'none';
-        if (btn) btn.textContent = '👁️';
-    }
-}
-
-function copyText(text, element) {
-    navigator.clipboard.writeText(text).then(function() {
-        element.classList.add('copied');
-        setTimeout(function() {
-            element.classList.remove('copied');
-        }, 1500);
-    });
-}
-
-var _qrVisible = false;
-
-function toggleQR() {
-    var section = document.getElementById('qrSection');
-    if (_qrVisible) {
-        section.style.display = 'none';
-        _qrVisible = false;
-        return;
-    }
-    if (!section.dataset.generated) {
-        generateQR(document.getElementById('qrCanvas'), '{{ stored_password or new_password or "" }}');
-        section.dataset.generated = '1';
-    }
-    section.style.display = 'block';
-    _qrVisible = true;
-}
-
-function generateQR(canvas, text) {
-    var qr = qrcode(0, 'M');
-    qr.addData(text);
-    qr.make();
-    var size = 200;
-    var count = qr.getModuleCount();
-    var cellSize = size / count;
-    canvas.width = size;
-    canvas.height = size;
-    var ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, size, size);
-    ctx.fillStyle = '#000';
-    for (var r = 0; r < count; r++) {
-        for (var c = 0; c < count; c++) {
-            if (qr.isDark(r, c)) {
-                ctx.fillRect(c * cellSize, r * cellSize, cellSize + 0.5, cellSize + 0.5);
-            }
-        }
-    }
-}
-
 // Loading states for form submissions
 document.querySelectorAll('form').forEach(form => {
     form.addEventListener('submit', function() {
         const btn = this.querySelector('button[type="submit"]');
         if (btn && !btn.disabled) {
             btn.disabled = true;
-            btn.dataset.originalText = btn.textContent;
-            if (btn.classList.contains('action-icon')) {
-                btn.style.opacity = '0.5';
-            } else {
-                btn.textContent = 'Saving...';
-                btn.style.opacity = '0.7';
-            }
+            btn.textContent = 'Saving...';
+            btn.style.opacity = '0.7';
         }
     });
 });
