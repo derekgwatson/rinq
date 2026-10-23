@@ -2165,6 +2165,27 @@ def set_shared_desk_phone_caller_id(sid):
     return jsonify({'success': True})
 
 
+@web_bp.route('/desk-phones/shared/<sid>/notes', methods=['POST'])
+@admin_required
+def set_shared_desk_phone_notes(sid):
+    """Free-text note on a shared phone (save in place on blur)."""
+    db = get_db()
+    user = get_current_user()
+    phone = db.get_user(sid)
+    if not phone or not phone.get('is_shared_device'):
+        return jsonify({'success': False, 'error': 'Not a shared desk phone'}), 404
+
+    notes = ((request.get_json(silent=True) or {}).get('notes') or '').strip()[:1000] or None
+    db.update_user_notes(sid, notes, updated_by=_audit_tag(user))
+    db.log_activity(
+        action="shared_desk_phone_notes",
+        target=phone['username'],
+        details=f"Notes: {notes or '(cleared)'}",
+        performed_by=_audit_tag(user),
+    )
+    return jsonify({'success': True})
+
+
 @web_bp.route('/desk-phones/shared/<sid>/occupant', methods=['POST'])
 @admin_required
 def set_shared_desk_phone_occupant(sid):

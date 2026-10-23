@@ -685,7 +685,7 @@ class Database(StatsMixin, CallLogMixin):
         """Every shared desk phone with whoever is logged in to it."""
         with self._get_conn() as conn:
             rows = conn.execute("""
-                SELECT u.sid, u.username, u.friendly_name, u.is_active,
+                SELECT u.sid, u.username, u.friendly_name, u.is_active, u.notes,
                        u.default_caller_id AS empty_caller_id,
                        l.staff_email AS occupant_email, l.logged_in_at, l.logged_in_by,
                        p.friendly_name AS occupant_name, e.extension AS occupant_extension
@@ -755,6 +755,18 @@ class Database(StatsMixin, CallLogMixin):
             conn.execute("DELETE FROM desk_phone_logins WHERE staff_email = ?", (email.lower(),))
             conn.commit()
             return row['device_username'] if row else None
+
+    def update_user_notes(self, sid: str, notes: str | None, updated_by: str) -> bool:
+        """Set the free-text note on a desk phone login (None clears it)."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_conn() as conn:
+            cursor = conn.execute("""
+                UPDATE users
+                SET notes = ?, updated_at = ?, updated_by = ?
+                WHERE sid = ?
+            """, (notes, now, updated_by, sid))
+            conn.commit()
+            return cursor.rowcount > 0
 
     def update_user_default_caller_id(self, sid: str, caller_id: str | None, updated_by: str) -> bool:
         """Set a user's default caller ID for outbound calls.
