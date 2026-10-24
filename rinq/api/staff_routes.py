@@ -165,6 +165,11 @@ def register(bp):
             {"updated": 5, "skipped": 3, "details": [...]}
         """
         from rinq.integrations.watson.staff import WatsonStaffDirectory
+        from rinq.services.staff_status import tenant_uses_peter
+        from flask import g
+
+        if not tenant_uses_peter(getattr(g, 'tenant', None)):
+            return jsonify({'error': 'This account does not use Peter'}), 400
 
         caller = get_api_caller()
         db = get_db()
@@ -611,7 +616,8 @@ def register(bp):
         When called from a session (admin user), syncs the current tenant only.
         When called via unix socket (cron, no session), iterates all tenants.
 
-        No-ops gracefully for tenants that have no sync source configured.
+        Only Peter-backed tenants (Watson) sync; any other tenant has its
+        Peter entries removed instead.
 
         Also applies Peter's current staff to who is switched off in Tina
         (Peter-backed tenants only - see services/staff_status.py).
@@ -621,7 +627,16 @@ def register(bp):
         from rinq.integrations.watson.staff import WatsonStaffDirectory
 
         def _sync_tenant(tenant_db, tenant):
-            from rinq.services.staff_status import sync_tenant_from_peter
+            from rinq.services.staff_status import sync_tenant_from_peter, tenant_uses_peter
+            if not tenant_uses_peter(tenant):
+                # Peter is Watson's staff list. Any other tenant pulling it
+                # would get Watson staff names and mobiles - clear any copy
+                # an earlier sync left behind and stop there.
+                cleared = tenant_db.delete_address_book_by_source('peter')
+                if cleared:
+                    logger.warning(f"Cleared {cleared} Peter address book entries "
+                                   f"from tenant {(tenant or {}).get('id')}")
+                return None
             try:
                 sync_tenant_from_peter(tenant_db, tenant, updated_by='system:peter')
             except Exception as e:
