@@ -37,8 +37,8 @@ def register(bp):
         extension directory number + Rinq extension.
 
         A staff member is considered "on Rinq" if staff_extensions.is_active = 1,
-        which is controlled from /admin/staff (auto-activated by usage signals,
-        or manually set by an admin).
+        which is set automatically: switched on by usage signals, switched off
+        for anyone who has left (from Peter - see services/staff_status.py).
 
         Returns:
             {
@@ -254,7 +254,7 @@ def register(bp):
     def get_active_staff_phones():
         """Get staff who are actively using Rinq.
 
-        For Peter integration — only returns users an admin has activated.
+        For Peter integration — staff switched on by use, never anyone who has left.
 
         Response:
             {
@@ -612,12 +612,20 @@ def register(bp):
         When called via unix socket (cron, no session), iterates all tenants.
 
         No-ops gracefully for tenants that have no sync source configured.
+
+        Also applies Peter's current staff to who is switched off in Tina
+        (Peter-backed tenants only - see services/staff_status.py).
         """
         from rinq.services.address_book_sync import sync_address_book as _sync
         from rinq.services.address_book_sync import PeterAddressBookSource
         from rinq.integrations.watson.staff import WatsonStaffDirectory
 
-        def _sync_tenant(tenant_db):
+        def _sync_tenant(tenant_db, tenant):
+            from rinq.services.staff_status import sync_tenant_from_peter
+            try:
+                sync_tenant_from_peter(tenant_db, tenant, updated_by='system:peter')
+            except Exception as e:
+                logger.exception(f"Staff status sync from Peter failed: {e}")
             try:
                 source = PeterAddressBookSource(WatsonStaffDirectory())
                 result = _sync(tenant_db, source=source)
@@ -644,8 +652,9 @@ def register(bp):
 
         if session.get('user_id'):
             # Session request — sync current tenant only
+            from flask import g
             tenant_db = get_db()
-            result = _sync_tenant(tenant_db)
+            result = _sync_tenant(tenant_db, getattr(g, 'tenant', None))
             if result:
                 added, updated, removed = result
                 totals = {'added': added, 'updated': updated, 'removed': removed}
@@ -659,7 +668,7 @@ def register(bp):
                 if not os.path.exists(db_dir):
                     continue
                 tenant_db = Database(db_path=os.path.join(db_dir, 'rinq.db'))
-                result = _sync_tenant(tenant_db)
+                result = _sync_tenant(tenant_db, tenant)
                 if result:
                     added, updated, removed = result
                     totals['added'] += added
