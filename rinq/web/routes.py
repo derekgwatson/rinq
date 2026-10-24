@@ -461,7 +461,17 @@ def admin_staff():
     except Exception as e:
         logger.warning(f"Could not sync staff from Peter: {e}")
 
-    # Auto-activate staff with usage signals (won't touch locked ones)
+    # Who has left comes from Peter (Peter-backed tenants only) - see services/staff_status.py
+    from flask import g
+    from rinq.services.staff_status import sync_tenant_from_peter
+    peter = sync_tenant_from_peter(db, getattr(g, 'tenant', None), updated_by='system:peter')
+    if peter and peter.get('skipped'):
+        flash(f"Couldn't check staff against Peter ({peter['skipped']}) - statuses unchanged.", 'warning')
+    elif peter and peter.get('switched_off'):
+        flash(f"Switched off {len(peter['switched_off'])} who aren't current in Peter: "
+              f"{', '.join(e.split('@')[0] for e in peter['switched_off'])}", 'info')
+
+    # Auto-activate staff with usage signals (won't touch anyone Peter says has left)
     auto_activated = db.auto_activate_staff()
     if auto_activated:
         names = [e.split('@')[0].replace('.', ' ').title() for e in auto_activated]
@@ -498,9 +508,11 @@ def admin_staff():
     extensions = db.get_all_staff_extensions()
     signals = db.get_staff_usage_signals()
 
+    from rinq.services.staff_status import tenant_uses_peter
     return render_template('admin_staff.html',
                          extensions=extensions,
                          signals=signals,
+                         uses_peter=tenant_uses_peter(getattr(g, 'tenant', None)),
                          current_user=user)
 
 
@@ -567,52 +579,6 @@ def regenerate_all_staff_audio():
         parts.append(f'{skipped} skipped (no name)')
     flash(f'Name audio: {", ".join(parts)}.', 'success' if not failed else 'warning')
 
-    return redirect(url_for('web.admin_staff'))
-
-
-@web_bp.route('/admin/staff/<email>/activate', methods=['POST'])
-@admin_required
-def toggle_staff_active(email):
-    """Toggle a staff member's active status in Rinq.
-
-    Manual toggle always sets is_active_locked=True so auto-activation
-    won't override the admin's decision.
-    """
-    user = get_current_user()
-    db = get_db()
-    ext = db.get_staff_extension(email)
-    if ext:
-        new_status = not bool(ext.get('is_active'))
-        # Manual toggle always locks the status
-        db.set_staff_extension_active_locked(
-            email, new_status, locked=True, updated_by=f'session:{user.email}'
-        )
-        status_text = 'activated' if new_status else 'deactivated'
-        flash(f'{email.split("@")[0]} manually {status_text} on {config.product_name} (locked).', 'success')
-    else:
-        flash('Staff extension not found.', 'error')
-    return redirect(url_for('web.admin_staff'))
-
-
-@web_bp.route('/admin/staff/<email>/unlock', methods=['POST'])
-@admin_required
-def unlock_staff_active(email):
-    """Remove manual lock so auto-activation can manage this staff member."""
-    user = get_current_user()
-    db = get_db()
-    ext = db.get_staff_extension(email)
-    if ext:
-        now = __import__('datetime').datetime.now(timezone.utc).isoformat()
-        with db._get_conn() as conn:
-            conn.execute("""
-                UPDATE staff_extensions
-                SET is_active_locked = 0, updated_at = ?, updated_by = ?
-                WHERE email = ?
-            """, (now, f'session:{user.email}', email.lower()))
-            conn.commit()
-        flash(f'{email.split("@")[0]} unlocked - auto-activation will manage status.', 'success')
-    else:
-        flash('Staff extension not found.', 'error')
     return redirect(url_for('web.admin_staff'))
 
 
@@ -1990,14 +1956,19 @@ def desk_phones():
 
 
 def _desk_phone_staff_choices(db) -> list[dict]:
-    """Active staff for the "who's on this phone" picker, by name."""
+    """Everyone who hasn't left, for the "who's on this phone" picker, by name.
+
+    Not just Tina-active staff: someone who has never used the phones is
+    exactly who gets put on a shared desk phone for the first time.
+    """
     names = {u['staff_email']: u.get('friendly_name')
              for u in db.get_users() if u.get('staff_email')}
     choices = [{
         'email': e['email'],
         'extension': e.get('extension'),
         'name': names.get(e['email']) or e['email'].split('@')[0],
-    } for e in db.get_active_staff_extensions()]
+    } for e in db.get_all_staff_extensions()
+        if e.get('is_active') or not e.get('is_active_locked')]
     return sorted(choices, key=lambda c: c['name'].lower())
 
 

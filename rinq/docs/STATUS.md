@@ -321,11 +321,10 @@ The admin UI (`/admin/phone-numbers`) presents these as a clear either/or choice
 - **Smart staff activation** on /admin/staff
   - Usage signals shown: call count (with last call date), queue memberships, phone assignments, SIP credentials
   - Auto-activation: staff with call history, queue membership, or phone assignment auto-activated on page load
-  - Manual overrides locked (`is_active_locked`): Activate/Deactivate buttons always lock, preventing auto-activation from overriding
-  - Unlock button to hand control back to auto-activation
+  - ~~Manual Activate/Deactivate + Unlock buttons~~ removed 2026-10-24: `is_active_locked` now means "has left" and is set from Peter (`services/staff_status.py`, on page load + the 2am address-book cron) or by offboarding
   - Inline extension number editing for admins
   - Migration 043: `is_active_locked` column on `staff_extensions`
-- **PAM directory overrides** - PAM calls Tina's `/api/pam/directory-overrides` to replace dead old VoIP numbers with extension directory number for Tina-active staff. Uses `staff_extensions.is_active` (admin-controlled flag, not SIP credentials).
+- **PAM directory overrides** - PAM calls Tina's `/api/pam/directory-overrides` to replace dead old VoIP numbers with extension directory number for Tina-active staff. Uses `staff_extensions.is_active` (automatic flag, not SIP credentials).
 
 ### 2026-03-16
 - **Queue Callback Feature** - callers waiting in queue can press 2 to request a callback

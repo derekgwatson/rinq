@@ -24,10 +24,6 @@
     background: #cce5ff;
     color: #004085;
 }
-.locked-icon {
-    font-size: 0.85em;
-    cursor: help;
-}
 {% endblock %}
 
 {% block content %}
@@ -36,8 +32,8 @@
         <div>
             <h2 style="margin: 0;">Staff Extensions</h2>
             <p class="text-muted" style="margin: 5px 0 0 0;">
-                Staff are auto-activated when they have call history, queue membership, or a phone assignment.
-                Manual overrides are locked and won't be changed by auto-activation.
+                Staff are switched on automatically when they have call history, queue membership, or a phone assignment.
+                Anyone who has left is switched off and kept off{% if uses_peter %} &mdash; that comes from Peter, so to switch someone off, finish them in Peter{% endif %}.
             </p>
         </div>
         <div style="display: flex; gap: 10px; align-items: center;">
@@ -59,7 +55,6 @@
                 <th>Directory</th>
                 <th>Audio</th>
                 <th>Status</th>
-                <th></th>
             </tr>
         </thead>
         <tbody>
@@ -133,25 +128,10 @@
                 <td>
                     {% if ext.is_active %}
                         <span class="badge badge-success">active</span>
+                    {% elif ext.is_active_locked %}
+                        <span class="badge" style="background: #f8d7da; color: #721c24;" title="{% if uses_peter %}Not a current staff member in Peter{% else %}Offboarded{% endif %}">left</span>
                     {% else %}
-                        <span class="badge" style="background: #e9ecef; color: #666;">inactive</span>
-                    {% endif %}
-                    {% if ext.is_active_locked %}
-                        <span class="locked-icon" title="Manually set - auto-activation won't change this">&#128274;</span>
-                    {% endif %}
-                </td>
-                <td style="white-space: nowrap;">
-                    <form method="post" action="{{ url_for('web.toggle_staff_active', email=ext.email) }}" style="margin: 0; display: inline;">
-                        {% if ext.is_active %}
-                            <button type="submit" class="btn btn-secondary" style="padding: 4px 12px; font-size: 0.85em;">Deactivate</button>
-                        {% else %}
-                            <button type="submit" class="btn" style="padding: 4px 12px; font-size: 0.85em;">Activate</button>
-                        {% endif %}
-                    </form>
-                    {% if ext.is_active_locked %}
-                    <form method="post" action="{{ url_for('web.unlock_staff_active', email=ext.email) }}" style="margin: 0; display: inline;">
-                        <button type="submit" class="btn btn-secondary" style="padding: 4px 12px; font-size: 0.85em;" title="Remove manual override, allow auto-activation">Unlock</button>
-                    </form>
+                        <span class="badge" style="background: #e9ecef; color: #666;" title="Not using the phones yet">inactive</span>
                     {% endif %}
                 </td>
             </tr>
