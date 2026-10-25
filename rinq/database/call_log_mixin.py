@@ -55,11 +55,19 @@ ANSWERED_STATUSES = ('answered', 'completed', 'transferred')
 # - the customer's leg of an outbound call (agent_email NULL; the staff member's
 #   leg is the call) — counting both doubled every outbound call
 # - transfer credit rows (call_type 'transfer') and the blind-transfer target
-#   leg (conference '..._xfer') — the same customer call, already counted
+#   leg (conference '..._xfer') — the same customer call, already counted.
+#   A blind transfer also renames the CUSTOMER's own row to call_<its sid>_xfer,
+#   so only a row whose _xfer room is named after a DIFFERENT call is a target
+#   leg — dropping them all left every blind-transferred call uncounted.
+def _not_xfer_target_leg(alias: str = '') -> str:
+    return (f"(COALESCE({alias}conference_name, '') NOT LIKE '%\\_xfer' ESCAPE '\\'"
+            f" OR {alias}conference_name = 'call_' || {alias}call_sid || '_xfer')")
+
+
 ONE_ROW_PER_CALL_SQL = (
     "NOT (direction = 'outbound' AND agent_email IS NULL)"
     " AND COALESCE(call_type, '') <> 'transfer'"
-    " AND COALESCE(conference_name, '') NOT LIKE '%\\_xfer' ESCAPE '\\'"
+    f" AND {_not_xfer_target_leg()}"
 )
 
 # Talk time for reporting. talk_seconds is uncapped: a call whose hang-up was
@@ -532,7 +540,7 @@ class CallLogMixin:
                 WHERE c.started_at >= ? AND c.started_at <= ?
                   AND c.direction = 'inbound'
                   AND COALESCE(c.call_type, '') <> 'transfer'
-                  AND COALESCE(c.conference_name, '') NOT LIKE '%\\_xfer' ESCAPE '\\'
+                  AND {_not_xfer_target_leg('c.')}
             """, [start_utc, start_utc, end_utc]).fetchall()
 
     @staticmethod
