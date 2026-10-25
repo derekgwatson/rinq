@@ -129,6 +129,8 @@ def utility_processor():
         ctx['active_nav'] = 'desk_phones'
     elif path.startswith('/setup'):
         ctx['active_nav'] = 'setup'
+    elif path.startswith('/live'):
+        ctx['active_nav'] = 'live'
     elif path.startswith('/phone'):
         ctx['active_nav'] = 'phone'
     elif path == '/':
@@ -1743,6 +1745,23 @@ def queues():
             queue['pause_status'] = None
 
     return render_template('queues.html', queues=managed_queues, current_user=user)
+
+
+@web_bp.route('/live')
+@manager_required
+def live_calls():
+    """What's happening on the phones right now (services/live_calls.py)."""
+    return render_template('live.html', current_user=get_current_user())
+
+
+@web_bp.route('/live/data')
+@manager_required
+def live_calls_data():
+    """JSON for /live, polled every few seconds."""
+    from rinq.services.live_calls import get_snapshot
+    from rinq.tenant.context import get_current_tenant
+    tenant = get_current_tenant() or {}
+    return jsonify(get_snapshot(get_db(), tenant.get('id', '_none')))
 
 
 @web_bp.route('/admin/users')

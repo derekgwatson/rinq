@@ -1,0 +1,281 @@
+{% extends "base.html" %}
+
+{% block extra_css %}
+.live-summary {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 24px;
+}
+.live-stat {
+    flex: 1 1 140px;
+    background: #fff;
+    border: 1px solid #e9ecef;
+    border-radius: 8px;
+    padding: 16px;
+}
+.live-stat .num {
+    font-size: 2em;
+    font-weight: 700;
+    line-height: 1.1;
+    color: #2c3e50;
+}
+.live-stat .label {
+    color: #6c757d;
+    font-size: 0.9em;
+}
+.live-stat.alert {
+    border-color: #f5c6cb;
+    background: #fff8f8;
+}
+.live-stat.alert .num {
+    color: #c0392b;
+}
+.live-section {
+    margin-bottom: 28px;
+}
+.live-section h3 {
+    margin: 0 0 10px 0;
+    font-size: 1.05em;
+}
+.live-section h3 .count {
+    color: #6c757d;
+    font-weight: 400;
+}
+.live-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.5fr) minmax(0, 1fr) 90px;
+    gap: 12px;
+    align-items: center;
+    padding: 10px 14px;
+    background: #fff;
+    border: 1px solid #e9ecef;
+    border-radius: 6px;
+    margin-bottom: 6px;
+}
+.live-row .who {
+    font-weight: 600;
+}
+.live-row .sub {
+    color: #6c757d;
+    font-size: 0.85em;
+}
+.live-row .time {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+.live-row .time.long {
+    color: #c0392b;
+}
+.state {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.8em;
+    font-weight: 600;
+}
+.state.talking { background: #d4edda; color: #155724; }
+.state.on-hold { background: #fff3cd; color: #856404; }
+.state.dialling { background: #e2e3e5; color: #383d41; }
+.live-empty {
+    color: #6c757d;
+    padding: 10px 14px;
+    background: #f8f9fa;
+    border-radius: 6px;
+}
+.queue-chips {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.queue-chip {
+    border: 1px solid #e9ecef;
+    background: #fff;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 0.9em;
+}
+.queue-chip.has-waiting {
+    border-color: #f5c6cb;
+    background: #fff8f8;
+}
+.queue-chip.paused {
+    background: #f8f9fa;
+    color: #6c757d;
+}
+.live-footer {
+    color: #6c757d;
+    font-size: 0.85em;
+}
+.live-error {
+    background: #f8d7da;
+    color: #721c24;
+    padding: 10px 14px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+}
+@media (max-width: 700px) {
+    .live-row {
+        grid-template-columns: minmax(0, 1fr) 70px;
+    }
+    .live-row .col-mid,
+    .live-row .col-extra {
+        grid-column: 1 / -1;
+    }
+}
+{% endblock %}
+
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-bottom: 16px;">
+    <h2 style="margin: 0;">Live calls</h2>
+    <span class="live-footer" id="liveUpdated">Loading…</span>
+</div>
+
+<div class="live-error" id="liveError" style="display: none;"></div>
+
+<div class="live-summary">
+    <div class="live-stat"><div class="num" id="statTalking">–</div><div class="label">on a call</div></div>
+    <div class="live-stat" id="statWaitingBox"><div class="num" id="statWaiting">–</div><div class="label">waiting in a queue</div></div>
+    <div class="live-stat" id="statLongestBox"><div class="num" id="statLongest">–</div><div class="label">longest wait</div></div>
+    <div class="live-stat"><div class="num" id="statStarting">–</div><div class="label">at the menu / ringing</div></div>
+</div>
+
+<div class="live-section">
+    <h3>Waiting <span class="count" id="countWaiting"></span></h3>
+    <div id="listWaiting"></div>
+</div>
+
+<div class="live-section">
+    <h3>On a call <span class="count" id="countTalking"></span></h3>
+    <div id="listTalking"></div>
+</div>
+
+<div class="live-section">
+    <h3>At the menu or ringing <span class="count" id="countStarting"></span></h3>
+    <p class="live-footer" style="margin: -4px 0 8px 0;">Hearing the greeting, choosing an extension, or ringing someone's phone — not answered yet.</p>
+    <div id="listStarting"></div>
+</div>
+
+<div class="live-section">
+    <h3>Queues</h3>
+    <div class="queue-chips" id="listQueues"></div>
+</div>
+
+<p class="live-footer" id="liveTwilio"></p>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function () {
+    const REFRESH_MS = 5000;
+    const LONG_WAIT = 60;
+
+    function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[c]));
+    }
+    function dur(secs) {
+        if (secs == null) return '–';
+        const h = Math.floor(secs / 3600), m = Math.floor(secs / 60) % 60, s = secs % 60;
+        const mm = h ? String(m).padStart(2, '0') : String(m);
+        return (h ? h + ':' : '') + mm + ':' + String(s).padStart(2, '0');
+    }
+    function empty(text) {
+        return `<div class="live-empty">${esc(text)}</div>`;
+    }
+
+    let snap = null;
+    let fetchedAt = 0;
+
+    function render() {
+        if (!snap) return;
+        // Tick durations forward between polls
+        const drift = Math.floor((Date.now() - fetchedAt) / 1000);
+        const t = s => (s == null ? null : s + drift);
+
+        const err = document.getElementById('liveError');
+        err.style.display = snap.error ? 'block' : 'none';
+        err.textContent = snap.error || '';
+
+        const talking = snap.talking || [], waiting = snap.waiting || [], starting = snap.starting || [];
+        const longest = waiting.length ? Math.max(...waiting.map(w => t(w.seconds) || 0)) : 0;
+
+        document.getElementById('statTalking').textContent = talking.length;
+        document.getElementById('statWaiting').textContent = waiting.length;
+        document.getElementById('statLongest').textContent = waiting.length ? dur(longest) : '–';
+        document.getElementById('statStarting').textContent = starting.length;
+        document.getElementById('statWaitingBox').classList.toggle('alert', waiting.length > 0);
+        document.getElementById('statLongestBox').classList.toggle('alert', longest > LONG_WAIT);
+
+        document.getElementById('countWaiting').textContent = `(${waiting.length})`;
+        document.getElementById('countTalking').textContent = `(${talking.length})`;
+        document.getElementById('countStarting').textContent = `(${starting.length})`;
+
+        document.getElementById('listWaiting').innerHTML = waiting.length ? waiting.map(w => `
+            <div class="live-row">
+                <div><div class="who">${esc(w.customer || 'Unknown caller')}</div><div class="sub">${esc(w.number)}</div></div>
+                <div class="col-mid">${esc(w.queue || '')}</div>
+                <div class="col-extra">${w.priority === 'high' ? '<span class="state on-hold">high priority</span>' : ''}</div>
+                <div class="time ${t(w.seconds) > LONG_WAIT ? 'long' : ''}">${dur(t(w.seconds))}</div>
+            </div>`).join('') : empty('Nobody is waiting.');
+
+        document.getElementById('listTalking').innerHTML = talking.length ? talking.map(c => {
+            const cls = c.state === 'on hold' ? 'on-hold' : c.state;
+            const where = c.kind === 'outbound' ? 'Outgoing call' : ('Incoming' + (c.queue ? ' · ' + c.queue : ''));
+            return `
+            <div class="live-row">
+                <div><div class="who">${esc(c.staff)}</div><div class="sub">${esc(where)}</div></div>
+                <div class="col-mid"><div>${esc(c.customer || 'Unknown')}</div>${c.number && c.number !== c.customer ? `<div class="sub">${esc(c.number)}</div>` : ''}</div>
+                <div class="col-extra"><span class="state ${esc(cls)}">${esc(c.state)}</span></div>
+                <div class="time">${dur(t(c.seconds))}</div>
+            </div>`;
+        }).join('') : empty('Nobody is on a call.');
+
+        document.getElementById('listStarting').innerHTML = starting.length ? starting.map(c => `
+            <div class="live-row">
+                <div><div class="who">${esc(c.customer || 'Unknown caller')}</div><div class="sub">${esc(c.number)}</div></div>
+                <div class="col-mid sub">${c.called ? 'Called ' + esc(c.called) : ''}</div>
+                <div class="col-extra"></div>
+                <div class="time">${dur(t(c.seconds))}</div>
+            </div>`).join('') : empty('No one.');
+
+        const queues = snap.queues || [];
+        document.getElementById('listQueues').innerHTML = queues.length ? queues.map(q => `
+            <div class="queue-chip ${q.waiting ? 'has-waiting' : ''} ${q.paused ? 'paused' : ''}">
+                <strong>${esc(q.name)}</strong> ·
+                ${q.paused ? 'paused' : (q.waiting ? `${q.waiting} waiting, longest ${dur(q.longest_seconds + drift)}` : 'nobody waiting')}
+            </div>`).join('') : empty('No queues set up.');
+
+        const tw = document.getElementById('liveTwilio');
+        if (snap.twilio_live == null) {
+            tw.textContent = '';
+        } else if (snap.twilio_live === 0) {
+            tw.textContent = 'Twilio shows no calls at all right now — a safe moment to deploy.';
+        } else {
+            tw.textContent = `Twilio is carrying ${snap.twilio_live} call leg${snap.twilio_live === 1 ? '' : 's'} right now `
+                + '(each conversation is two or more legs, plus phones that are ringing).';
+        }
+    }
+
+    async function refresh() {
+        try {
+            const r = await fetch('{{ url_for("web.live_calls_data") }}', { credentials: 'same-origin' });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            snap = await r.json();
+            fetchedAt = Date.now();
+            document.getElementById('liveUpdated').textContent =
+                'Updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+        } catch (e) {
+            document.getElementById('liveUpdated').textContent = "Couldn't refresh — retrying…";
+        }
+        render();
+    }
+
+    refresh();
+    setInterval(refresh, REFRESH_MS);
+    setInterval(render, 1000);
+})();
+</script>
+{% endblock %}
