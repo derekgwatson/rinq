@@ -279,10 +279,16 @@ def lookup_customer():
     # number, so two independent lookups can disagree. Reusing the queue
     # result keeps the panel in sync with the in-call participant card.
     cached = enrichment.enrich_from_active_call(phone)
-    if cached is not None:
-        return jsonify(cached)
+    result = dict(cached) if cached is not None else dict(enrichment.enrich_caller(phone) or {})
 
-    result = enrichment.enrich_caller(phone)
+    # "Suzette's customer" — who rang them recently (callback_routes.py)
+    try:
+        from rinq.api.callback_routes import last_called_by
+        user = get_current_user()
+        result['last_called_by'] = last_called_by(phone, get_db(), user.email if user else None)
+    except Exception as e:
+        logger.warning(f"last_called_by lookup failed for {phone}: {e}")
+        result['last_called_by'] = None
     return jsonify(result)
 
 
@@ -5770,6 +5776,17 @@ def get_queued_callers():
                 caller['order_info'] = json.loads(caller['order_data'])
             except json.JSONDecodeError:
                 caller['order_info'] = None
+
+    # "Suzette's customer" on each waiting caller (callback_routes.py)
+    if callers:
+        from rinq.api.callback_routes import last_called_by
+        viewer = user.email if user else None
+        for caller in callers:
+            try:
+                caller['last_called_by'] = last_called_by(caller.get('caller_number'), db, viewer)
+            except Exception as e:
+                logger.warning(f"last_called_by failed for queued caller {caller.get('call_sid')}: {e}")
+                caller['last_called_by'] = None
 
     return jsonify({
         "callers": callers,

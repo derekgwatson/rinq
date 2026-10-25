@@ -148,6 +148,27 @@
     color: #f39c12;
 }
 
+/* "Suzette's customer" — who rang this caller recently */
+.caller-detail.caller-owner,
+.customer-owner,
+.incoming-owner {
+    color: #1f6feb;
+    font-weight: 600;
+}
+
+.customer-owner {
+    margin-top: 6px;
+    font-size: 0.9em;
+}
+
+.incoming-owner:empty {
+    display: none;
+}
+
+.incoming-owner {
+    margin-top: 4px;
+}
+
 .caller-wait-time {
     text-align: center;
     padding: 0 20px;
@@ -2379,6 +2400,7 @@
                         <div class="customer-name" id="contextName">-</div>
                         <div class="customer-email" id="contextEmail"></div>
                         <div class="customer-phone" id="contextPhone"></div>
+                        <div class="customer-owner" id="contextOwner" style="display: none;"></div>
                     </div>
 
                     <!-- Priority section (hidden if no priority) -->
@@ -2451,6 +2473,7 @@
         <div class="incoming-call" id="incomingCall">
             <h3>Incoming Call</h3>
             <div class="call-number" id="incomingNumber">Unknown</div>
+            <div class="incoming-owner" id="incomingOwner"></div>
             <div class="incoming-buttons">
                 <button class="btn-answer" onclick="answerCall()">Answer</button>
                 <button class="btn-reject" onclick="rejectCall()">Reject</button>
@@ -3241,6 +3264,8 @@ async function initPhone() {
             const internalName = callerName || resolveInternalCaller(callerIdentity || from);
             let displayFrom = internalName || from;
             incomingNumber.textContent = displayFrom;
+            const incomingOwner = document.getElementById('incomingOwner');
+            if (incomingOwner) incomingOwner.textContent = '';
             incomingCall.classList.add('active');
             playRingtone();
 
@@ -3288,6 +3313,11 @@ async function initPhone() {
             // Fetch customer context for incoming call (skip for internal calls)
             if (from !== 'Unknown' && !from.startsWith('client:')) {
                 await fetchCustomerContext(from);
+                // Show whose customer it is while it's still ringing
+                if (incomingOwner && currentCall === call && customerContext
+                        && customerContextNumber === _ctxDigits(from) && customerContext.last_called_by) {
+                    incomingOwner.textContent = customerContext.last_called_by.label;
+                }
             }
 
             call.on('cancel', () => {
@@ -3562,6 +3592,14 @@ function renderCustomerContext(displayPhone) {
     contextName.textContent = customerContext.customer_name || 'Unknown Customer';
     contextEmail.textContent = customerContext.customer_email || '';
     contextPhone.textContent = displayPhone || '';
+
+    // "Suzette's customer · called 3 days ago"
+    const owner = customerContext.last_called_by;
+    const contextOwner = document.getElementById('contextOwner');
+    if (contextOwner) {
+        contextOwner.textContent = owner ? [owner.label, owner.when].filter(Boolean).join(' · ') : '';
+        contextOwner.style.display = owner ? 'block' : 'none';
+    }
 
     // Priority
     if (customerContext.priority && customerContext.priority !== 'unknown' && customerContext.priority !== 'normal') {
@@ -5904,6 +5942,10 @@ function renderQueueCallers(callers) {
             details.push(`<span class="caller-detail">📞 ${escapeHtml(caller.queue_name)}</span>`);
         }
 
+        if (caller.last_called_by) {
+            details.push(`<span class="caller-detail caller-owner" title="${escapeHtml(caller.last_called_by.when)}">👤 ${escapeHtml(caller.last_called_by.label)}</span>`);
+        }
+
         return `
             <div class="queue-caller priority-${caller.priority || 'unknown'}">
                 <div class="caller-info">
@@ -6211,6 +6253,10 @@ function renderQueueCallers(callers) {
 
         if (caller.queue_name) {
             details.push(`<span class="caller-detail">📞 ${escapeHtml(caller.queue_name)}</span>`);
+        }
+
+        if (caller.last_called_by) {
+            details.push(`<span class="caller-detail caller-owner" title="${escapeHtml(caller.last_called_by.when)}">👤 ${escapeHtml(caller.last_called_by.label)}</span>`);
         }
 
         return `

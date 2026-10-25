@@ -110,6 +110,43 @@ def find_callback_person(from_number: str, db) -> dict | None:
     return {'email': email, 'name': _first_name(email, db)}
 
 
+def last_called_by(number: str, db, viewer_email: str | None = None) -> dict | None:
+    """Who rang this number recently, for the phone screen.
+
+    Whoever answers a callback (often not the person offered — they may have
+    been busy, or the caller didn't press 1) sees whose customer it is.
+    Shown whether or not the offer was made. Same window as the offer.
+
+    Returns {'email', 'name', 'label', 'when'} or None, e.g.
+    label "Suzette's customer" / "Your customer", when "called 3 days ago".
+    """
+    from datetime import datetime
+    import pytz
+    from rinq.database.db import _parse_dt
+    from rinq.services.phone import to_e164
+
+    call = db.get_recent_outbound_call(to_e164(number or ''), days=CALLBACK_WINDOW_DAYS)
+    if not call:
+        return None
+
+    email = call['agent_email']
+    name = _first_name(email, db) or email.split('@')[0]
+    if viewer_email and viewer_email.lower() == email.lower():
+        label = 'Your customer'
+    else:
+        label = f"{name}'s customer"
+
+    when = ''
+    try:
+        tz = pytz.timezone('Australia/Sydney')
+        days = (datetime.now(tz).date() - _parse_dt(call['started_at']).astimezone(tz).date()).days
+        when = 'called today' if days <= 0 else 'called yesterday' if days == 1 else f'called {days} days ago'
+    except Exception as e:
+        logger.debug(f"last_called_by: couldn't date {call.get('started_at')}: {e}")
+
+    return {'email': email, 'name': name, 'label': label, 'when': when}
+
+
 def offer_twiml(person: dict, called_number: str, from_number: str) -> Response:
     """The "press 1" offer. No key falls through to the normal flow."""
     choice_url = (

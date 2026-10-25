@@ -115,17 +115,22 @@ class CallLogMixin:
             return cursor.lastrowid
 
     def get_recent_outbound_caller(self, number: str, days: int = 14) -> str | None:
-        """Email of the staff member who most recently rang this number.
+        """Email of the staff member who most recently rang this number."""
+        call = self.get_recent_outbound_call(number, days)
+        return call['agent_email'] if call else None
+
+    def get_recent_outbound_call(self, number: str, days: int = 14) -> dict | None:
+        """{agent_email, started_at} of the most recent staff call to this number.
 
         Only the staff leg of an outbound call carries an email in agent_email
         (the customer's leg has none; a few old rows hold 'sip:<user>'), so
-        that filter also picks one row per call.
+        that filter also picks one row per call. `number` must be E.164.
         """
         if not number:
             return None
         with self._get_conn() as conn:
             row = conn.execute("""
-                SELECT agent_email FROM call_log
+                SELECT agent_email, started_at FROM call_log
                 WHERE direction = 'outbound'
                   AND to_number = ?
                   AND agent_email LIKE '%@%'
@@ -133,7 +138,7 @@ class CallLogMixin:
                 ORDER BY started_at DESC
                 LIMIT 1
             """, (number, f'-{int(days)} days')).fetchone()
-            return row['agent_email'] if row else None
+            return dict(row) if row else None
 
     _CALL_LOG_FIELDS = {
         'status', 'direction', 'call_type', 'from_number', 'to_number',
