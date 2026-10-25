@@ -97,6 +97,13 @@ def _notify_ai_receptionist_call_ended(call_sid: str, call_status: str):
     """Notify the AI receptionist that a call has ended."""
     from rinq.integrations import get_ai_receptionist
     ai = get_ai_receptionist()
+    import os
+    if not ai and os.environ.get('WATSON_ROSIE_URL'):
+        # Tenant runs without the watson integrations, but Rosie is reachable
+        # (the AI test extension, ai_test_routes.py, hands calls to it) —
+        # without this Rosie never hears the call ended and writes no summary
+        from rinq.integrations.watson import WatsonAIReceptionist
+        ai = WatsonAIReceptionist()
     if ai:
         if ai.notify_call_ended(call_sid, call_status):
             logger.info(f"Notified AI receptionist of call end: {call_sid} -> {call_status}")
@@ -3934,6 +3941,13 @@ def voice_extension_dial():
 
     db = get_db()
 
+    # AI receptionist test line (ai_test_routes.py) — not a person
+    from rinq.api.ai_test_routes import AI_TEST_EXTENSION, prompt_twiml
+    if digits == AI_TEST_EXTENSION:
+        db.log_activity(action="ai_test_extension", target=called_number,
+                        details=f"From: {from_number}", performed_by="twilio")
+        return prompt_twiml(called_number, from_number)
+
     # Look up the extension
     ext_record = db.get_staff_extension_by_ext(digits)
 
@@ -6285,6 +6299,12 @@ _register_tina_says_routes(api_bp)
 # =============================================================================
 from rinq.api.cross_check_routes import register as _register_cross_check_routes
 _register_cross_check_routes(api_bp)
+
+# =============================================================================
+# AI receptionist test line — extension 9000 (ai_test_routes.py)
+# =============================================================================
+from rinq.api.ai_test_routes import register as _register_ai_test_routes
+_register_ai_test_routes(api_bp)
 
 # =============================================================================
 # Callbacks — "press 1 for the person who called you" (callback_routes.py)
