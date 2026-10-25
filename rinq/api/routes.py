@@ -972,18 +972,41 @@ def voice_incoming():
     schedule = routing.get('schedule')
     queue = routing.get('queue')
 
-    # Log the inbound call immediately - captures ALL inbound calls
-    db.log_call({
-        'call_sid': call_sid,
-        'direction': 'inbound',
-        'from_number': from_number,
-        'to_number': called_number,
-        'phone_number_id': phone.get('sid'),
-        'call_flow_id': call_flow.get('id') if call_flow else None,
-        'queue_id': queue.get('id') if queue else None,
-        'queue_name': queue.get('name') if queue else None,
-        'status': 'ringing',
-    })
+    # ?callback=done: back here after the callback offer (callback_routes.py),
+    # so the call is already logged and the offer has been made.
+    callback_done = request.args.get('callback') == 'done'
+
+    if not callback_done:
+        # Log the inbound call immediately - captures ALL inbound calls
+        db.log_call({
+            'call_sid': call_sid,
+            'direction': 'inbound',
+            'from_number': from_number,
+            'to_number': called_number,
+            'phone_number_id': phone.get('sid'),
+            'call_flow_id': call_flow.get('id') if call_flow else None,
+            'queue_id': queue.get('id') if queue else None,
+            'queue_name': queue.get('name') if queue else None,
+            'status': 'ringing',
+        })
+
+        # A staff member rang this caller recently and can take the call:
+        # offer "press 1 for <name>" before the number's normal flow.
+        # Open hours only; any failure here just means no offer.
+        try:
+            if _check_business_status(schedule)['is_open']:
+                from rinq.api.callback_routes import find_callback_person, offer_twiml
+                person = find_callback_person(from_number, db)
+                if person:
+                    db.log_activity(
+                        action="callback_offered",
+                        target=called_number,
+                        details=f"From: {from_number}, Offered: {person['email']}",
+                        performed_by="twilio"
+                    )
+                    return offer_twiml(person, called_number, from_number)
+        except Exception as e:
+            logger.exception(f"Callback offer check failed for {from_number}: {e}")
 
     # Start building TwiML response
     response_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>']
@@ -6245,3 +6268,9 @@ _register_tina_says_routes(api_bp)
 # =============================================================================
 from rinq.api.cross_check_routes import register as _register_cross_check_routes
 _register_cross_check_routes(api_bp)
+
+# =============================================================================
+# Callbacks — "press 1 for the person who called you" (callback_routes.py)
+# =============================================================================
+from rinq.api.callback_routes import register as _register_callback_routes
+_register_callback_routes(api_bp)
