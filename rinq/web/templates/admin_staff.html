@@ -20,6 +20,9 @@
     background: #d4edda;
     color: #155724;
 }
+body:not(.show-not-using) tr.staff-not-using {
+    display: none;
+}
 .signal.strong {
     background: #cce5ff;
     color: #004085;
@@ -32,8 +35,9 @@
         <div>
             <h2 style="margin: 0;">Staff Extensions</h2>
             <p class="text-muted" style="margin: 5px 0 0 0;">
-                Staff are switched on automatically when they have call history, queue membership, or a phone assignment.
-                Anyone who has left is switched off and kept off{% if uses_peter %} &mdash; that comes from Peter, so to switch someone off, finish them in Peter{% endif %}.
+                <strong>Using {{ product_name }}?</strong> doesn't change whether anyone's phone works &mdash; "not yet" staff can still make and take calls.
+                It decides who counts as current staff: the staff lists and dropdowns, managers' team reports, the leaderboard{% if uses_peter %}, and Peter's phone list (central number + extension){% endif %}.
+                It sets itself: on once someone makes or takes a call, joins a queue or gets a number; "left" once they've gone{% if uses_peter %} &mdash; that comes from Peter, so to switch someone off, finish them in Peter{% endif %}.
             </p>
         </div>
         <div style="display: flex; gap: 10px; align-items: center;">
@@ -45,6 +49,13 @@
     </div>
 
     {% if extensions %}
+    {% set not_using = extensions | rejectattr('is_active') | list | length %}
+    {% if not_using %}
+    <label style="display: inline-flex; align-items: center; gap: 6px; margin-bottom: 12px; cursor: pointer;">
+        <input type="checkbox" id="showNotUsing">
+        Show the {{ not_using }} not using {{ product_name }} ("not yet" and "left")
+    </label>
+    {% endif %}
     <table>
         <thead>
             <tr>
@@ -55,13 +66,13 @@
                 <th>Usage Signals</th>
                 <th>Directory</th>
                 <th>Audio</th>
-                <th>Status</th>
+                <th>Using {{ product_name }}?</th>
             </tr>
         </thead>
         <tbody>
             {% for ext in extensions %}
             {% set sig = signals.get(ext.email, {}) %}
-            <tr style="{% if not ext.is_active %}opacity: 0.6;{% endif %}">
+            <tr class="{% if not ext.is_active %}staff-not-using{% endif %}" style="{% if not ext.is_active %}opacity: 0.6;{% endif %}">
                 <td>
                     {{ ext.email.split('@')[0] | replace('.', ' ') | title }}
                     <div class="text-muted" style="font-size: 0.8em;">{{ ext.email }}</div>
@@ -138,11 +149,11 @@
                 </td>
                 <td>
                     {% if ext.is_active %}
-                        <span class="badge badge-success">active</span>
+                        <span class="badge badge-success" title="Has made or taken a call, is in a queue, or has a number assigned">using {{ product_name }}</span>
                     {% elif ext.is_active_locked %}
                         <span class="badge" style="background: #f8d7da; color: #721c24;" title="{% if uses_peter %}Not a current staff member in Peter{% else %}Offboarded{% endif %}">left</span>
                     {% else %}
-                        <span class="badge" style="background: #e9ecef; color: #666;" title="Not using the phones yet">inactive</span>
+                        <span class="badge" style="background: #e9ecef; color: #666;" title="Has an extension but hasn't used the phones yet. Their phone still works.">not yet</span>
                     {% endif %}
                 </td>
             </tr>
@@ -153,4 +164,23 @@
     <p class="text-muted">No staff have logged into {{ product_name }} yet.</p>
     {% endif %}
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Hide staff not using Tina unless asked; remember the choice on this browser.
+(function () {
+    const box = document.getElementById('showNotUsing');
+    if (!box) return;
+    let show = false;
+    try { show = localStorage.getItem('adminStaffShowNotUsing') === '1'; } catch (e) {}
+    const apply = () => document.body.classList.toggle('show-not-using', box.checked);
+    box.checked = show;
+    apply();
+    box.addEventListener('change', () => {
+        apply();
+        try { localStorage.setItem('adminStaffShowNotUsing', box.checked ? '1' : '0'); } catch (e) {}
+    });
+})();
+</script>
 {% endblock %}

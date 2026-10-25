@@ -279,10 +279,16 @@ def lookup_customer():
     # number, so two independent lookups can disagree. Reusing the queue
     # result keeps the panel in sync with the in-call participant card.
     cached = enrichment.enrich_from_active_call(phone)
-    if cached is not None:
-        return jsonify(cached)
+    result = dict(cached) if cached is not None else dict(enrichment.enrich_caller(phone) or {})
 
-    result = enrichment.enrich_caller(phone)
+    # "Suzette's customer" — who rang them recently (callback_routes.py)
+    try:
+        from rinq.api.callback_routes import last_called_by
+        user = get_current_user()
+        result['last_called_by'] = last_called_by(phone, get_db(), user.email if user else None)
+    except Exception as e:
+        logger.warning(f"last_called_by lookup failed for {phone}: {e}")
+        result['last_called_by'] = None
     return jsonify(result)
 
 
@@ -972,18 +978,41 @@ def voice_incoming():
     schedule = routing.get('schedule')
     queue = routing.get('queue')
 
-    # Log the inbound call immediately - captures ALL inbound calls
-    db.log_call({
-        'call_sid': call_sid,
-        'direction': 'inbound',
-        'from_number': from_number,
-        'to_number': called_number,
-        'phone_number_id': phone.get('sid'),
-        'call_flow_id': call_flow.get('id') if call_flow else None,
-        'queue_id': queue.get('id') if queue else None,
-        'queue_name': queue.get('name') if queue else None,
-        'status': 'ringing',
-    })
+    # ?callback=done: back here after the callback offer (callback_routes.py),
+    # so the call is already logged and the offer has been made.
+    callback_done = request.args.get('callback') == 'done'
+
+    if not callback_done:
+        # Log the inbound call immediately - captures ALL inbound calls
+        db.log_call({
+            'call_sid': call_sid,
+            'direction': 'inbound',
+            'from_number': from_number,
+            'to_number': called_number,
+            'phone_number_id': phone.get('sid'),
+            'call_flow_id': call_flow.get('id') if call_flow else None,
+            'queue_id': queue.get('id') if queue else None,
+            'queue_name': queue.get('name') if queue else None,
+            'status': 'ringing',
+        })
+
+        # A staff member rang this caller recently and can take the call:
+        # offer "press 1 for <name>" before the number's normal flow.
+        # Open hours only; any failure here just means no offer.
+        try:
+            if _check_business_status(schedule)['is_open']:
+                from rinq.api.callback_routes import find_callback_person, offer_twiml
+                person = find_callback_person(from_number, db)
+                if person:
+                    db.log_activity(
+                        action="callback_offered",
+                        target=called_number,
+                        details=f"From: {from_number}, Offered: {person['email']}",
+                        performed_by="twilio"
+                    )
+                    return offer_twiml(person, called_number, from_number)
+        except Exception as e:
+            logger.exception(f"Callback offer check failed for {from_number}: {e}")
 
     # Start building TwiML response
     response_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>']
@@ -5748,6 +5777,17 @@ def get_queued_callers():
             except json.JSONDecodeError:
                 caller['order_info'] = None
 
+    # "Suzette's customer" on each waiting caller (callback_routes.py)
+    if callers:
+        from rinq.api.callback_routes import last_called_by
+        viewer = user.email if user else None
+        for caller in callers:
+            try:
+                caller['last_called_by'] = last_called_by(caller.get('caller_number'), db, viewer)
+            except Exception as e:
+                logger.warning(f"last_called_by failed for queued caller {caller.get('call_sid')}: {e}")
+                caller['last_called_by'] = None
+
     return jsonify({
         "callers": callers,
         "count": len(callers),
@@ -6245,3 +6285,9 @@ _register_tina_says_routes(api_bp)
 # =============================================================================
 from rinq.api.cross_check_routes import register as _register_cross_check_routes
 _register_cross_check_routes(api_bp)
+
+# =============================================================================
+# Callbacks — "press 1 for the person who called you" (callback_routes.py)
+# =============================================================================
+from rinq.api.callback_routes import register as _register_callback_routes
+_register_callback_routes(api_bp)
