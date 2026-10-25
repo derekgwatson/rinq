@@ -32,8 +32,9 @@
         <div>
             <h2 style="margin: 0;">Staff Extensions</h2>
             <p class="text-muted" style="margin: 5px 0 0 0;">
-                Staff are switched on automatically when they have call history, queue membership, or a phone assignment.
-                Anyone who has left is switched off and kept off{% if uses_peter %} &mdash; that comes from Peter, so to switch someone off, finish them in Peter{% endif %}.
+                <strong>Using {{ product_name }}?</strong> doesn't change whether anyone's phone works &mdash; "not yet" staff can still make and take calls.
+                It decides who counts as current staff: the staff lists and dropdowns, managers' team reports, the leaderboard{% if uses_peter %}, and Peter's phone list (central number + extension){% endif %}.
+                It sets itself: on once someone makes or takes a call, joins a queue or gets a number; "left" once they've gone{% if uses_peter %} &mdash; that comes from Peter, so to switch someone off, finish them in Peter{% endif %}.
             </p>
         </div>
         <div style="display: flex; gap: 10px; align-items: center;">
@@ -55,7 +56,7 @@
                 <th>Usage Signals</th>
                 <th>Directory</th>
                 <th>Audio</th>
-                <th>Status</th>
+                <th>Using {{ product_name }}?</th>
             </tr>
         </thead>
         <tbody>
@@ -138,11 +139,11 @@
                 </td>
                 <td>
                     {% if ext.is_active %}
-                        <span class="badge badge-success">active</span>
+                        <span class="badge badge-success" title="Has made or taken a call, is in a queue, or has a number assigned">using {{ product_name }}</span>
                     {% elif ext.is_active_locked %}
                         <span class="badge" style="background: #f8d7da; color: #721c24;" title="{% if uses_peter %}Not a current staff member in Peter{% else %}Offboarded{% endif %}">left</span>
                     {% else %}
-                        <span class="badge" style="background: #e9ecef; color: #666;" title="Not using the phones yet">inactive</span>
+                        <span class="badge" style="background: #e9ecef; color: #666;" title="Has an extension but hasn't used the phones yet. Their phone still works.">not yet</span>
                     {% endif %}
                 </td>
             </tr>
