@@ -65,8 +65,12 @@ def run(db, twilio_client, start: date, end: date) -> dict:
               'status': 'ok', 'ran_at': datetime.now(LOCAL_TZ).strftime('%Y-%m-%d %H:%M')}
 
     def add(name, ok, summary, examples=None):
+        examples = examples or []
+        shown = examples[:MAX_EXAMPLES]
+        if len(examples) > MAX_EXAMPLES:
+            shown.append(f"…and {len(examples) - MAX_EXAMPLES} more")
         result['checks'].append({'name': name, 'ok': ok, 'summary': summary,
-                                 'examples': (examples or [])[:MAX_EXAMPLES]})
+                                 'examples': shown})
         if ok is False and result['status'] == 'ok':
             result['status'] = 'problems'
 
