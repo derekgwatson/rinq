@@ -441,8 +441,12 @@ def admin_staff():
                     if result.get('success'):
                         updated += 1
 
-                # Set mobile forwarding for sync-created staff who don't have it yet
-                if existing and existing.get('created_by') == 'system:sync' and peter_mobile and not existing.get('forward_to'):
+                # Set mobile forwarding for sync-created staff who don't have it yet.
+                # Never once a person has edited the row: a blank forward_to may be
+                # a deliberate Remove, and refilling it from Peter undoes that.
+                human_edited = ((existing or {}).get('updated_by') or '').startswith('session:')
+                if existing and existing.get('created_by') == 'system:sync' and peter_mobile \
+                        and not existing.get('forward_to') and not human_edited:
                     db.update_staff_extension(email, {
                         'forward_to': peter_mobile,
                         'forward_mode': 'always',
@@ -507,11 +511,14 @@ def admin_staff():
 
     extensions = db.get_all_staff_extensions()
     signals = db.get_staff_usage_signals()
+    # Whose mobile is each forwarding number? Flags a forward to someone else's phone
+    mobile_owners = {e['mobile_e164']: e for e in db.get_address_book() if e.get('mobile_e164')}
 
     from rinq.services.staff_status import tenant_uses_peter
     return render_template('admin_staff.html',
                          extensions=extensions,
                          signals=signals,
+                         mobile_owners=mobile_owners,
                          uses_peter=tenant_uses_peter(getattr(g, 'tenant', None)),
                          current_user=user)
 
@@ -599,6 +606,43 @@ def update_staff_extension(email):
         flash(f'{email.split("@")[0]} extension updated to {new_ext}.', 'success')
     else:
         flash(result.get('error', 'Failed to update extension.'), 'error')
+    return redirect(url_for('web.admin_staff'))
+
+
+@web_bp.route('/admin/staff/<email>/forwarding', methods=['POST'])
+@admin_required
+def update_staff_forwarding(email):
+    """Set or clear the mobile a staff member's calls forward to."""
+    from rinq.services.phone import normalize_au_mobile, is_valid_au_mobile
+
+    user = get_current_user()
+    db = get_db()
+    ext = db.get_staff_extension(email)
+    if not ext:
+        flash('Staff extension not found.', 'error')
+        return redirect(url_for('web.admin_staff'))
+
+    name = email.split('@')[0].replace('.', ' ').title()
+    raw = request.form.get('forward_to', '').strip()
+    forward_to = None
+    if raw:
+        forward_to = normalize_au_mobile(raw)
+        if not forward_to or not is_valid_au_mobile(forward_to):
+            flash('Invalid mobile number. Must be an Australian mobile (04XX XXX XXX).', 'error')
+            return redirect(url_for('web.admin_staff'))
+
+    old = ext.get('forward_to')
+    if forward_to == old:
+        return redirect(url_for('web.admin_staff'))
+
+    db.update_staff_extension(email, {'forward_to': forward_to}, f'session:{user.email}')
+    db.log_activity('staff_forwarding_updated', email.lower(),
+                    f'Forward to: {old or "none"} -> {forward_to or "none"}',
+                    f'session:{user.email}')
+    if forward_to:
+        flash(f'{name} now forwards to {raw}.', 'success')
+    else:
+        flash(f'{name} no longer forwards to a mobile.', 'success')
     return redirect(url_for('web.admin_staff'))
 
 

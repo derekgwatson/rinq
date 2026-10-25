@@ -50,6 +50,7 @@
             <tr>
                 <th>Name</th>
                 <th>Extension</th>
+                <th>Forwards To</th>
                 <th>Reports To</th>
                 <th>Usage Signals</th>
                 <th>Directory</th>
@@ -70,6 +71,16 @@
                         <input type="text" name="extension" value="{{ ext.extension }}" style="width: 60px; padding: 2px 6px; font-weight: 600; text-align: center; border: 1px solid #ddd; border-radius: 4px; font-size: 0.95em;" maxlength="6">
                         <button type="submit" class="btn btn-secondary" style="padding: 2px 8px; font-size: 0.8em;">Set</button>
                     </form>
+                </td>
+                <td>
+                    {% set owner = mobile_owners.get(ext.forward_to) if ext.forward_to else None %}
+                    <form method="post" action="{{ url_for('web.update_staff_forwarding', email=ext.email) }}" style="margin: 0; display: inline-flex; align-items: center; gap: 4px;">
+                        <input type="tel" name="forward_to" value="{{ ext.forward_to | replace('+61', '0') if ext.forward_to else '' }}" placeholder="none" style="width: 110px; padding: 2px 6px; border: 1px solid {% if owner and owner.email and owner.email | lower != ext.email | lower %}#dc3545{% else %}#ddd{% endif %}; border-radius: 4px; font-size: 0.85em;" maxlength="14" title="{% if ext.forward_to %}{% if ext.forward_mode == 'no_answer' %}If no answer (20s){% else %}Always{% endif %} &mdash; leave blank to stop forwarding{% else %}No forwarding{% endif %}">
+                        <button type="submit" class="btn btn-secondary" style="padding: 2px 8px; font-size: 0.8em;">Set</button>
+                    </form>
+                    {% if owner and owner.email and owner.email | lower != ext.email | lower %}
+                        <div style="font-size: 0.75em; color: #dc3545; margin-top: 2px;">&#9888; {{ owner.name }}'s mobile</div>
+                    {% endif %}
                 </td>
                 <td>
                     <form method="post" action="{{ url_for('web.update_staff_reports_to', email=ext.email) }}" style="margin: 0; display: inline-flex; align-items: center; gap: 4px;">
