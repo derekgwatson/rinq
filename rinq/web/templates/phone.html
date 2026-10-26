@@ -201,6 +201,8 @@
     line-height: 1.4;
 }
 .ai-line { margin: 4px 0; }
+.ai-transcript-actions { padding: 0 12px 10px; }
+.ai-transcript-actions:has(#aiTakeBtn[style*="none"]) { display: none; }
 .ai-line .who { font-weight: 600; margin-right: 6px; }
 .ai-line.caller .who { color: #1f6feb; }
 .ai-line.receptionist .who { color: #57606a; }
@@ -2522,6 +2524,9 @@
                 <span class="ai-transcript-reason" id="aiTranscriptReason"></span>
             </div>
             <div class="ai-transcript-lines" id="aiTranscriptLines"></div>
+            <div class="ai-transcript-actions">
+                <button class="btn-answer" id="aiTakeBtn" style="display:none;">Take this call</button>
+            </div>
         </div>
 
         <div class="call-info" id="callInfo">
@@ -3254,53 +3259,120 @@ async function initPhone() {
 
         // ---- Stuart (AI receptionist) live transcript ------------------------
         // When Stuart answers a caller first and rings you meanwhile, show what
-        // he and the caller are saying, so you can pick up where he left off.
-        // Polls only while this call is the current one; hides itself after.
+        // he and the caller are saying. It stays up after the ringing stops, for
+        // as long as the caller is still with Stuart, with a "Take this call"
+        // button - so you can step in at any time, not just while it rings.
+        let aiFollowToken = 0;
+
+        function hideAiTranscript() {
+            document.getElementById('aiTranscript').classList.remove('active');
+            document.getElementById('aiTranscriptLines').textContent = '';
+            document.getElementById('aiTranscriptReason').textContent = '';
+            document.getElementById('aiTakeBtn').style.display = 'none';
+        }
+
         function startAiTranscript(call, callSid) {
             if (!callSid) return;
+            const token = ++aiFollowToken;
             const box = document.getElementById('aiTranscript');
             const lines = document.getElementById('aiTranscriptLines');
             const reason = document.getElementById('aiTranscriptReason');
             const title = document.getElementById('aiTranscriptTitle');
-            let shown = 0;
+            const takeBtn = document.getElementById('aiTakeBtn');
+            let shown = 0, wasAnswered = false, customerSid = null, callerNumber = null;
+            let notAi = 0;
+
+            const render = (data) => {
+                reason.textContent = data.reason ? `About: ${data.reason}` : '';
+                const entries = data.transcript || [];
+                for (; shown < entries.length; shown++) {
+                    const e = entries[shown];
+                    const div = document.createElement('div');
+                    div.className = `ai-line ${e.role === 'caller' ? 'caller' : 'receptionist'}`;
+                    const who = document.createElement('span');
+                    who.className = 'who';
+                    who.textContent = e.role === 'caller' ? 'Caller:' : 'Stuart:';
+                    div.appendChild(who);
+                    div.appendChild(document.createTextNode(e.text || ''));
+                    lines.appendChild(div);
+                }
+                lines.scrollTop = lines.scrollHeight;
+            };
+
+            takeBtn.onclick = async () => {
+                if (!customerSid) return;
+                takeBtn.disabled = true;
+                takeBtn.textContent = 'Ringing you…';
+                try {
+                    const r = await fetch('/api/ai-takeover/claim', {
+                        method: 'POST', credentials: 'same-origin',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({customer: customerSid, caller_number: callerNumber}),
+                    });
+                    if (!r.ok) {
+                        const d = await r.json().catch(() => ({}));
+                        takeBtn.textContent = d.error || "Couldn't take the call";
+                    }
+                } catch (err) {
+                    takeBtn.textContent = "Couldn't take the call";
+                }
+            };
+
             const tick = async () => {
-                if (currentCall !== call) {
-                    box.classList.remove('active');
-                    lines.textContent = '';
-                    reason.textContent = '';
+                if (token !== aiFollowToken) return;  // a newer call took over the panel
+                const ringing = currentCall === call;
+                if (ringing && call.status && call.status() === 'open') wasAnswered = true;
+                if (!ringing && (wasAnswered || !customerSid)) {
+                    // Answered then finished, or never an AI call: nothing to follow
+                    hideAiTranscript();
                     return;
                 }
+                const url = ringing
+                    ? `/api/ai-transcript?call_sid=${encodeURIComponent(callSid)}`
+                    : `/api/ai-transcript?customer=${encodeURIComponent(customerSid)}`;
                 try {
-                    const r = await fetch(`/api/ai-transcript?call_sid=${encodeURIComponent(callSid)}`,
-                                          {credentials: 'same-origin'});
+                    const r = await fetch(url, {credentials: 'same-origin'});
                     const data = r.ok ? await r.json() : null;
-                    if (data && data.found && currentCall === call) {
+                    if (token !== aiFollowToken) return;
+                    if (data && data.found) {
+                        customerSid = data.customer_sid || customerSid;
+                        callerNumber = data.caller_number || callerNumber;
                         box.classList.add('active');
-                        const answered = call.status && call.status() === 'open';
-                        title.textContent = answered ? "What Stuart (AI) and the caller said"
-                                                     : 'Stuart (AI) is talking with them';
-                        reason.textContent = data.reason ? `About: ${data.reason}` : '';
-                        const entries = data.transcript || [];
-                        for (; shown < entries.length; shown++) {
-                            const e = entries[shown];
-                            const div = document.createElement('div');
-                            div.className = `ai-line ${e.role === 'caller' ? 'caller' : 'receptionist'}`;
-                            const who = document.createElement('span');
-                            who.className = 'who';
-                            who.textContent = e.role === 'caller' ? 'Caller:' : 'Stuart:';
-                            div.appendChild(who);
-                            div.appendChild(document.createTextNode(e.text || ''));
-                            lines.appendChild(div);
+                        if (wasAnswered) {
+                            title.textContent = 'What Stuart (AI) and the caller said';
+                        } else {
+                            title.textContent = 'Stuart (AI) is talking with them';
                         }
-                        lines.scrollTop = lines.scrollHeight;
+                        render(data);
+                        const followable = !ringing && data.takeable;
+                        if (followable) {
+                            takeBtn.style.display = '';
+                            if (!takeBtn.disabled) takeBtn.textContent = 'Take this call';
+                        } else {
+                            takeBtn.style.display = 'none';
+                            takeBtn.disabled = false;
+                        }
+                        if (!ringing && !data.takeable) {
+                            // Stuart finished, or someone else took it: keep the
+                            // last lines up briefly, then clear
+                            title.textContent = 'Stuart (AI) has finished with this caller';
+                            setTimeout(() => { if (token === aiFollowToken) hideAiTranscript(); }, 15000);
+                            return;
+                        }
+                    } else if (!ringing) {
+                        hideAiTranscript();
+                        return;
+                    } else if ((!data || data.ai === false) && !customerSid && ++notAi >= 2) {
+                        // An ordinary call (asked twice, in case the AI ring
+                        // was still being recorded): stop asking
+                        return;
                     }
                 } catch (err) {
                     console.warn('AI transcript fetch failed:', err);
                 }
                 setTimeout(tick, 2000);
             };
-            lines.textContent = '';
-            reason.textContent = '';
+            hideAiTranscript();
             tick();
         }
 
@@ -3364,7 +3436,8 @@ async function initPhone() {
             if (incomingOwner) incomingOwner.textContent = '';
             incomingCall.classList.add('active');
             playRingtone();
-            startAiTranscript(call, callSid);
+            // Never let the AI transcript get in the way of a normal call
+            try { startAiTranscript(call, callSid); } catch (err) { console.warn('AI transcript:', err); }
 
             // Check transfer context before showing notification — avoids
             // flashing "Incoming Call" then replacing with "Incoming Transfer"
