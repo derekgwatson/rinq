@@ -94,18 +94,33 @@ def _is_on_a_call(email: str, db) -> bool:
         return True
 
 
-def find_callback_person(from_number: str, db) -> dict | None:
+def find_callback_person(from_number: str, db, first_offer_only: bool = True) -> dict | None:
     """The staff member this caller is probably calling back, if they can answer.
 
     Returns {'email', 'name'} or None. None means "don't offer", which is
     always safe — the caller just gets the number's normal flow.
+
+    One offer per staff call: once the caller has heard it (pressed 1 or
+    not), they aren't offered again until a staff member rings them again.
+    The press-1 step passes first_offer_only=False, since the offer it is
+    answering has just been logged.
     """
     # Withheld / anonymous / SIP callers have nothing to match on
     if not from_number or not from_number.startswith('+'):
         return None
 
-    email = db.get_recent_outbound_caller(from_number, days=CALLBACK_WINDOW_DAYS)
-    if not email:
+    call = db.get_recent_outbound_call(from_number, days=CALLBACK_WINDOW_DAYS)
+    if not call:
+        return None
+    email = call['agent_email']
+
+    # A staff member who rang their own mobile isn't calling themselves back
+    own = db.get_address_book_by_mobile(from_number)
+    if own and (own.get('email') or '').lower() == email.lower():
+        return None
+
+    if first_offer_only and db.callback_offered_since(from_number, call['started_at']):
+        logger.info(f"Callback from {from_number}: already offered {email} since their call — not offering")
         return None
 
     # Same import the ring path uses; lazy because routes.py imports this module
@@ -165,11 +180,11 @@ def offer_twiml(person: dict, called_number: str, from_number: str) -> Response:
     )
     name = person['name']
     if name:
-        offer = (f'Hi, it looks like {name} from Watson Blinds tried to call you. '
-                 f'To speak with {name}, press 1. Otherwise, please stay on the line.')
+        offer = (f'Hi, {name} from Watson Blinds tried to call you. '
+                 f'Press 1 to speak to {name}, or stay on the line.')
     else:
-        offer = ('Hi, it looks like someone from Watson Blinds tried to call you. '
-                 'To speak with them, press 1. Otherwise, please stay on the line.')
+        offer = ('Hi, someone from Watson Blinds tried to call you. '
+                 'Press 1 to speak to them, or stay on the line.')
     return _twiml(
         '    <Pause length="1"/>',
         f'    <Gather numDigits="1" action="{xml_escape(choice_url)}" method="POST" timeout="{OFFER_TIMEOUT_SECONDS}">',
@@ -208,7 +223,7 @@ def register(bp):
                             performed_by="twilio")
             return _to_normal_flow()
 
-        person = find_callback_person(from_number, db)
+        person = find_callback_person(from_number, db, first_offer_only=False)
         if not person:
             # They became unavailable while the offer was playing
             return _to_normal_flow(_unavailable(''))
