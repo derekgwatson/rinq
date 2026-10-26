@@ -148,6 +148,21 @@ class CallLogMixin:
             """, (number, f'-{int(days)} days')).fetchone()
             return dict(row) if row else None
 
+    def callback_offered_since(self, number: str, since: str) -> bool:
+        """Has this caller already heard the "press 1" offer since `since`
+        (a call_log started_at)? Pressed 1 or not, one offer per staff call."""
+        if not number or not since:
+            return False
+        with self._get_conn() as conn:
+            row = conn.execute("""
+                SELECT 1 FROM activity_log
+                WHERE action = 'callback_offered'
+                  AND details LIKE ?
+                  AND datetime(performed_at) > datetime(?)
+                LIMIT 1
+            """, (f'From: {number},%', since)).fetchone()
+            return row is not None
+
     _CALL_LOG_FIELDS = {
         'status', 'direction', 'call_type', 'from_number', 'to_number',
         'customer_name', 'customer_email', 'conference_name', 'answered_by',
