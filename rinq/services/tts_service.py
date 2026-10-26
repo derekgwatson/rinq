@@ -427,3 +427,59 @@ def generate_staff_name_audio(email: str, name: str, extension: str, actor: str)
     except Exception as e:
         logger.warning(f"Failed to generate name audio for {email} ({name}): {e}")
         return {'success': False, 'error': str(e)}
+
+
+# Phrases spoken mid-call that vary (e.g. a staff name) can't be pre-recorded
+# in Admin -> Audio, so they're generated in the tenant's default voice on
+# first use and cached on disk by text + voice.
+PHRASE_WAIT_SECONDS = 4
+_phrase_pool = None
+
+
+def phrase_audio_url(text: str) -> str | None:
+    """Relative /audio/... URL of `text` spoken in the tenant's default voice,
+    or None (caller falls back to <Say>) when no voice is set up or it isn't
+    ready within PHRASE_WAIT_SECONDS. A slow first generation keeps running and
+    lands in the cache for the next caller."""
+    import hashlib
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+    from rinq.config import config
+    from rinq.database.db import get_db
+
+    global _phrase_pool
+    try:
+        settings = get_db().get_tts_settings()
+    except Exception as e:
+        logger.warning(f"phrase_audio_url: no TTS settings: {e}")
+        return None
+    provider = settings.get('default_provider', 'elevenlabs')
+    voice = settings.get('default_voice', '')
+    tts = get_tts_service()
+    if not voice or provider != 'elevenlabs' or not tts.elevenlabs_available:
+        return None
+
+    key = hashlib.sha1(f"{provider}|{voice}|{text}".encode('utf-8')).hexdigest()[:20]
+    filename = f"phrase_{key}.mp3"
+    folder = config.base_dir / 'audio'
+    path = folder / filename
+    if path.exists():
+        return f"/audio/{filename}"
+
+    def _generate():
+        folder.mkdir(exist_ok=True)
+        audio = tts.generate_elevenlabs(text, voice_id=voice, stability=0.7)
+        tmp = path.with_suffix('.tmp')
+        tmp.write_bytes(audio)
+        tmp.replace(path)
+
+    if _phrase_pool is None:
+        _phrase_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix='tts-phrase')
+    future = _phrase_pool.submit(_generate)
+    try:
+        future.result(timeout=PHRASE_WAIT_SECONDS)
+        return f"/audio/{filename}"
+    except FutureTimeout:
+        logger.warning(f"phrase_audio_url: '{text[:40]}' not ready in {PHRASE_WAIT_SECONDS}s - using <Say> this time")
+    except Exception as e:
+        logger.warning(f"phrase_audio_url: generation failed for '{text[:40]}': {e}")
+    return None
