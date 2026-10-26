@@ -69,6 +69,21 @@ def rosie_answer_url() -> str | None:
     return f"{base}/api/voice/answer" if base else None
 
 
+def rosie_is_up() -> bool:
+    """Is Stuart answering? Checked just before a call is handed to him - a
+    redirect to a Rosie that is restarting (every bot-team deploy) gives the
+    caller Twilio's "application error". Two-second budget."""
+    answer = rosie_answer_url()
+    if not answer:
+        return False
+    try:
+        import requests
+        return requests.get(answer.rsplit('/api/', 1)[0] + '/health', timeout=2).ok
+    except Exception as e:
+        logger.warning(f"AI receptionist health check failed: {e}")
+        return False
+
+
 def prompt_twiml(called_number: str, from_number: str) -> Response:
     """Ask for the caller ID to pretend to be. Called from voice_extension_dial."""
     start_url = (
@@ -159,6 +174,11 @@ def register(bp):
             return _twiml(f'    <Say voice="{VOICE}">The AI receptionist isn\'t set up on this system.</Say>',
                           '    <Hangup/>')
 
+        if not rosie_is_up():
+            logger.error("AI test: Rosie is not answering - not handing the call over")
+            return _twiml(f'    <Say voice="{VOICE}">The AI receptionist is restarting. '
+                          f'Please try again in a minute.</Say>', '    <Hangup/>')
+
         db = get_db()
 
         # Look the pretend caller up exactly as a real inbound call would be
@@ -175,10 +195,8 @@ def register(bp):
             'queue_name': AI_TEST_STORE,
             'test': '1',
         }
-        for key in ('customer_id', 'customer_name', 'customer_email', 'order_data',
-                    'priority', 'priority_reason'):
-            if caller_info.get(key):
-                params[key] = caller_info[key]
+        # No customer name/email/orders in the URL - it lands in web server
+        # and Twilio request logs. Rosie looks the caller up itself (Clara).
 
         # Answer-first: Stuart says the store's own welcome, and the person
         # testing (found by the number they rang from) is rung as the store
@@ -220,6 +238,48 @@ def register(bp):
             f'    <Say voice="{VOICE}">{xml_escape(say)}</Say>',
             f'    <Redirect method="POST">{xml_escape(answer_url + "?" + urlencode(params))}</Redirect>',
         )
+
+    @bp.route('/voice/ai-relay-ended', methods=['POST'])
+    def voice_ai_relay_ended():
+        """Twilio asks what next when Stuart's live connection ends.
+
+        Normally Rosie answers (hang up after a goodbye, or carry on turn by
+        turn), so Tina just passes the question on. But if Rosie is down - a
+        restart mid-call is what drops the connection in the first place -
+        the caller must not hear Twilio's "application error": they go to the
+        store's voicemail instead (a test call just ends politely).
+
+        No auth required - Twilio calls this directly.
+        """
+        form = request.form.to_dict()
+        call_sid = form.get('CallSid', '')
+        try:
+            from rinq.integrations.watson.ai_receptionist import WatsonAIReceptionist
+            resp = WatsonAIReceptionist().client.post('/api/voice/relay-ended', data=form, timeout=8)
+            if resp.ok and '<Response' in resp.text:
+                return Response(resp.text, mimetype='application/xml')
+            logger.error(f"AI relay ended for {call_sid}: Rosie answered HTTP {resp.status_code}")
+        except Exception as e:
+            logger.error(f"AI relay ended for {call_sid}: Rosie unreachable ({e})")
+
+        if form.get('SessionStatus') == 'completed':
+            return _twiml('    <Hangup/>')  # the caller hung up - nothing to rescue
+        if request.args.get('test') == '1':
+            return _twiml(f'    <Say voice="{VOICE}">Sorry, the AI receptionist test line lost its '
+                          f'connection. Goodbye.</Say>', '    <Hangup/>')
+
+        from rinq.api.routes import _go_to_voicemail
+        db = get_db()
+        called, caller = form.get('To', ''), form.get('From', '')
+        routing = db.get_call_routing(called) or {}
+        db.update_call_log(call_sid, {'status': 'voicemail'})
+        db.log_activity(action="ai_relay_fallback", target=called,
+                        details=f"From: {caller}, Rosie unavailable - sent to voicemail",
+                        performed_by="twilio")
+        parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>',
+                 f'    <Say voice="{VOICE}">Sorry, I\'ve lost the connection to our assistant.</Say>']
+        return _go_to_voicemail(parts, routing.get('call_flow'), called, caller, call_sid, db,
+                                routing, reason='no_answer')
 
     @bp.route('/voice/ai-takeover/answer', methods=['POST'])
     def voice_ai_takeover_answer():
