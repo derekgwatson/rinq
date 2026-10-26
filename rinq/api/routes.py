@@ -650,7 +650,7 @@ def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: s
                             call = service.client.calls.create(
                                 to=target.to,
                                 from_=customer_caller_id,
-                                url=answer_url,
+                                url=f"{answer_url}&agent_email={quote(user_email, safe='')}",
                                 timeout=30,
                                 status_callback=sip_status_callback_url,
                                 status_callback_event=['initiated', 'ringing', 'answered', 'completed']

@@ -66,6 +66,15 @@ def normalize_staff_identifier(identifier: str) -> tuple[str | None, str | None]
             username = sip_part.split('@')[0]
             try:
                 db = get_db()
+                # The one answer for "who is this SIP login right now" — a shared
+                # desk phone is whoever is logged in to it (migration 083). The
+                # name-pattern guess below predates shared phones and never
+                # matches them, so a call answered on one was credited to the
+                # handset ("Sip:Desk_Yealink_9B571C") instead of the person.
+                staff_email = db.get_staff_email_for_sip_username(username)
+                if staff_email:
+                    name = staff_email.split('@')[0].replace('_', ' ').replace('.', ' ').title()
+                    return staff_email, name
                 users = db.get_users()
                 for user in users:
                     staff_email = user.get('staff_email', '')

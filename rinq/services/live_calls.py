@@ -53,11 +53,39 @@ def _display_number(number: str) -> str:
 def _staff_name(email: str, db, cache: dict) -> str:
     if not email:
         return ''
+    if email.startswith('sip:'):
+        return 'Desk phone ' + email[4:].split('@')[0]
     if email not in cache:
         user = db.get_user_by_email(email)
         cache[email] = (user.get('friendly_name') if user else None) or \
             email.split('@')[0].replace('.', ' ').title()
     return cache[email]
+
+
+# Customer names by number, so a call that's been running for ten minutes
+# isn't looked up in Clara on every refresh. {e164: (looked_up_at, name)}
+_NAME_TTL = 600
+_names = {}
+
+
+def _customer_name(number: str, known: str | None) -> str:
+    """Best name for a customer number: what the call already knows, else a
+    (cached) Clara lookup — same lookup the phone screen uses. '' if unknown."""
+    if known:
+        return known
+    if not number or not number.startswith('+'):
+        return ''
+    hit = _names.get(number)
+    if hit and time.time() - hit[0] < _NAME_TTL:
+        return hit[1]
+    name = ''
+    try:
+        from rinq.services.caller_enrichment import get_enrichment_service
+        name = (get_enrichment_service().enrich_caller(number) or {}).get('customer_name') or ''
+    except Exception as e:
+        logger.debug(f"Live calls: name lookup failed for {number}: {e}")
+    _names[number] = (time.time(), name)
+    return name
 
 
 def _live_twilio_legs(client) -> list:
@@ -108,8 +136,25 @@ def _call_log_rows(db, sids: list[str]) -> dict:
         d = dict(r)
         if d.pop('resolved_email', None):
             d['agent_email'] = r['resolved_email']
+        agent = d.get('agent_email') or ''
+        if agent.startswith('sip:'):
+            # A raw SIP address (e.g. a shared desk phone): show whoever is
+            # logged in to it rather than the handset's name
+            username = agent[4:].split('@')[0]
+            d['agent_email'] = db.get_staff_email_for_sip_username(username) or agent
         out[d['call_sid']] = d
     return out
+
+
+def _queued_names(db, sids: list[str]) -> dict:
+    """queued_calls rows (any status) for these live call SIDs only."""
+    if not sids:
+        return {}
+    with db._get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT call_sid, customer_name FROM queued_calls WHERE call_sid IN ({','.join('?' * len(sids))})",
+            sids).fetchall()
+    return {r['call_sid']: dict(r) for r in rows}
 
 
 def build_snapshot(db, client) -> dict:
@@ -125,6 +170,7 @@ def build_snapshot(db, client) -> dict:
         held = set()
 
     waiting_sids = {q['call_sid']: q for q in db.get_queued_calls(status='waiting')}
+    answered_queue = _queued_names(db, list(leg_status))
     names = {}
     talking, starting, waiting = [], [], []
 
@@ -145,7 +191,7 @@ def build_snapshot(db, client) -> dict:
             talking.append({
                 'kind': 'outbound',
                 'staff': _staff_name(agent, db, names),
-                'customer': row.get('customer_name') or _display_number(customer_number),
+                'customer': _customer_name(customer_number, row.get('customer_name')) or _display_number(customer_number),
                 'number': _display_number(customer_number),
                 'queue': None,
                 'state': 'on hold' if on_hold else ('talking' if answered else 'dialling'),
@@ -156,10 +202,13 @@ def build_snapshot(db, client) -> dict:
         # Inbound (customer's leg)
         customer_number = row.get('from_number')
         if '@' in agent and row.get('status') in ('answered', 'transferred'):
+            # The queue record carries the name the waiting list showed
+            queued_name = (answered_queue.get(sid) or {}).get('customer_name')
             talking.append({
                 'kind': 'inbound',
                 'staff': _staff_name(agent, db, names),
-                'customer': row.get('customer_name') or _display_number(customer_number),
+                'customer': _customer_name(customer_number, row.get('customer_name') or queued_name)
+                            or _display_number(customer_number),
                 'number': _display_number(customer_number),
                 'queue': row.get('queue_name'),
                 'state': 'on hold' if on_hold else 'talking',
