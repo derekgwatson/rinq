@@ -169,6 +169,42 @@
     margin-top: 4px;
 }
 
+/* Stuart (AI receptionist) live transcript - shown while a call he's
+   answering rings you, and after you take it over */
+.ai-transcript {
+    display: none;
+    margin: 12px 0;
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    background: #f6f8fa;
+    max-width: 640px;
+}
+.ai-transcript.active { display: block; }
+.ai-transcript-head {
+    padding: 8px 12px;
+    border-bottom: 1px solid #d0d7de;
+    font-weight: 600;
+    font-size: 0.9em;
+}
+.ai-transcript-reason {
+    display: block;
+    font-weight: 400;
+    color: #57606a;
+    margin-top: 2px;
+}
+.ai-transcript-reason:empty { display: none; }
+.ai-transcript-lines {
+    max-height: 240px;
+    overflow-y: auto;
+    padding: 8px 12px;
+    font-size: 0.9em;
+    line-height: 1.4;
+}
+.ai-line { margin: 4px 0; }
+.ai-line .who { font-weight: 600; margin-right: 6px; }
+.ai-line.caller .who { color: #1f6feb; }
+.ai-line.receptionist .who { color: #57606a; }
+
 .caller-wait-time {
     text-align: center;
     padding: 0 20px;
@@ -2480,6 +2516,14 @@
             </div>
         </div>
 
+        <div class="ai-transcript" id="aiTranscript" aria-live="polite">
+            <div class="ai-transcript-head">
+                <span id="aiTranscriptTitle">Stuart (AI) is talking with them</span>
+                <span class="ai-transcript-reason" id="aiTranscriptReason"></span>
+            </div>
+            <div class="ai-transcript-lines" id="aiTranscriptLines"></div>
+        </div>
+
         <div class="call-info" id="callInfo">
             <div class="mute-warning" id="muteWarning" style="display:none;">🔇 You are muted — the caller cannot hear you</div>
             <div class="hold-warning" id="holdWarning" style="display:none;">⏸ Caller on hold — they're hearing music</div>
@@ -3208,6 +3252,58 @@ async function initPhone() {
             setStatus('Error: ' + (error.message || error), 'offline');
         });
 
+        // ---- Stuart (AI receptionist) live transcript ------------------------
+        // When Stuart answers a caller first and rings you meanwhile, show what
+        // he and the caller are saying, so you can pick up where he left off.
+        // Polls only while this call is the current one; hides itself after.
+        function startAiTranscript(call, callSid) {
+            if (!callSid) return;
+            const box = document.getElementById('aiTranscript');
+            const lines = document.getElementById('aiTranscriptLines');
+            const reason = document.getElementById('aiTranscriptReason');
+            const title = document.getElementById('aiTranscriptTitle');
+            let shown = 0;
+            const tick = async () => {
+                if (currentCall !== call) {
+                    box.classList.remove('active');
+                    lines.textContent = '';
+                    reason.textContent = '';
+                    return;
+                }
+                try {
+                    const r = await fetch(`/api/ai-transcript?call_sid=${encodeURIComponent(callSid)}`,
+                                          {credentials: 'same-origin'});
+                    const data = r.ok ? await r.json() : null;
+                    if (data && data.found && currentCall === call) {
+                        box.classList.add('active');
+                        const answered = call.status && call.status() === 'open';
+                        title.textContent = answered ? "What Stuart (AI) and the caller said"
+                                                     : 'Stuart (AI) is talking with them';
+                        reason.textContent = data.reason ? `About: ${data.reason}` : '';
+                        const entries = data.transcript || [];
+                        for (; shown < entries.length; shown++) {
+                            const e = entries[shown];
+                            const div = document.createElement('div');
+                            div.className = `ai-line ${e.role === 'caller' ? 'caller' : 'receptionist'}`;
+                            const who = document.createElement('span');
+                            who.className = 'who';
+                            who.textContent = e.role === 'caller' ? 'Caller:' : 'Stuart:';
+                            div.appendChild(who);
+                            div.appendChild(document.createTextNode(e.text || ''));
+                            lines.appendChild(div);
+                        }
+                        lines.scrollTop = lines.scrollHeight;
+                    }
+                } catch (err) {
+                    console.warn('AI transcript fetch failed:', err);
+                }
+                setTimeout(tick, 2000);
+            };
+            lines.textContent = '';
+            reason.textContent = '';
+            tick();
+        }
+
         device.on('incoming', async (call) => {
             // If DND is enabled, reject silently
             if (isDndEnabled) {
@@ -3268,6 +3364,7 @@ async function initPhone() {
             if (incomingOwner) incomingOwner.textContent = '';
             incomingCall.classList.add('active');
             playRingtone();
+            startAiTranscript(call, callSid);
 
             // Check transfer context before showing notification — avoids
             // flashing "Incoming Call" then replacing with "Incoming Transfer"
