@@ -50,6 +50,12 @@ RING_SECONDS = 30
 
 TAKEOVER_PREFIX = 'aitake_'
 
+# Stuart's own voice (ElevenLabs, recorded 2026-10-27): "Sorry about that, I'm
+# having a bit of trouble on my end. Please leave your name and number after
+# the tone, and someone from the team will call you back." Static audio is
+# not in git (gotcha 4) - it lives in rinq/static on the server.
+STUART_TROUBLE_CLIP = 'stuart_lost_connection.mp3'
+
 
 def _twiml(*lines: str) -> Response:
     body = '\n'.join(['<?xml version="1.0" encoding="UTF-8"?>', '<Response>', *lines, '</Response>'])
@@ -276,10 +282,13 @@ def register(bp):
         db.log_activity(action="ai_relay_fallback", target=called,
                         details=f"From: {caller}, Rosie unavailable - sent to voicemail",
                         performed_by="twilio")
+        # One message, in Stuart's own voice, then the tone - no switch to
+        # another voice and no second greeting
+        clip = f"{config.webhook_base_url}/static/{STUART_TROUBLE_CLIP}"
         parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>',
-                 f'    <Say voice="{VOICE}">Sorry, I\'ve lost the connection to our assistant.</Say>']
+                 f'    <Play>{xml_escape(clip)}</Play>']
         return _go_to_voicemail(parts, routing.get('call_flow'), called, caller, call_sid, db,
-                                routing, reason='no_answer')
+                                routing, reason='no_answer', prompt_given=True)
 
     @bp.route('/voice/ai-takeover/answer', methods=['POST'])
     def voice_ai_takeover_answer():
