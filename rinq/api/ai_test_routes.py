@@ -31,7 +31,7 @@ AI_TEST_EXTENSION = '9000'
 # The store Rosie plays on a test call (Shoalhaven is the pilot candidate)
 AI_TEST_STORE = 'Shoalhaven'
 
-VOICE = 'Polly.Nicole'
+VOICE = 'Polly.Olivia-Neural'
 
 
 def _twiml(*lines: str) -> Response:

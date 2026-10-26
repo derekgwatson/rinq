@@ -54,14 +54,14 @@ def say_or_play(audio_type: str, fallback_text: str, indent: str = '    ') -> st
     audio_url = get_audio_url_by_type(audio_type)
     if audio_url:
         return f'{indent}<Play>{xml_escape(audio_url)}</Play>'
-    return f'{indent}<Say voice="Polly.Nicole">{fallback_text}</Say>'
+    return f'{indent}<Say voice="Polly.Olivia-Neural">{fallback_text}</Say>'
 
 
 def build_reopen_twiml(next_open: dict, indent: str = '    ') -> list[str]:
     """Build TwiML snippets announcing when the business reopens.
 
     Uses recorded audio snippets if available (reopen_prefix, reopen_day_*,
-    reopen_time_*), falling back to Polly.Nicole TTS for any missing pieces.
+    reopen_time_*), falling back to Polly.Olivia-Neural TTS for any missing pieces.
     """
     if not next_open:
         return []
@@ -84,7 +84,7 @@ def build_reopen_twiml(next_open: dict, indent: str = '    ') -> list[str]:
         parts.append(f'{indent}<Play>{xml_escape(day_url)}</Play>')
         parts.append(f'{indent}<Play>{xml_escape(time_url)}</Play>')
     else:
-        parts.append(f'{indent}<Say voice="Polly.Nicole">We reopen {day_label} at {time_spoken}.</Say>')
+        parts.append(f'{indent}<Say voice="Polly.Olivia-Neural">We reopen {day_label} at {time_spoken}.</Say>')
 
     return parts
 
@@ -129,7 +129,7 @@ def build_closed_message_twiml(message_parts: list, next_open: dict | None,
             if time_url:
                 twiml_parts.append(f'{indent}<Play>{xml_escape(time_url)}</Play>')
             elif time_spoken:
-                twiml_parts.append(f'{indent}<Say voice="Polly.Nicole">{time_spoken}</Say>')
+                twiml_parts.append(f'{indent}<Say voice="Polly.Olivia-Neural">{time_spoken}</Say>')
 
         elif part_type == 'openday' and next_open:
             if day_label == 'later today':
@@ -138,6 +138,6 @@ def build_closed_message_twiml(message_parts: list, next_open: dict | None,
             if day_url:
                 twiml_parts.append(f'{indent}<Play>{xml_escape(day_url)}</Play>')
             elif day_label:
-                twiml_parts.append(f'{indent}<Say voice="Polly.Nicole">{day_label}</Say>')
+                twiml_parts.append(f'{indent}<Say voice="Polly.Olivia-Neural">{day_label}</Say>')
 
     return twiml_parts

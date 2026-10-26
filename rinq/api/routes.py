@@ -1108,7 +1108,7 @@ def voice_incoming():
 
             response_parts.append('    </Gather>')
             # No input fallback
-            response_parts.append('    <Say voice="Polly.Nicole">No extension entered. Goodbye.</Say>')
+            response_parts.append('    <Say voice="Polly.Olivia-Neural">No extension entered. Goodbye.</Say>')
             response_parts.append('    <Hangup/>')
 
             db.log_activity(
@@ -1561,7 +1561,7 @@ def _handle_incoming_call_internal(called_number: str, from_number: str, call_si
                 response_parts.append(_say_or_play('ext_prompt', 'Please enter the extension of the person you are trying to reach.', indent='        '))
 
             response_parts.append('    </Gather>')
-            response_parts.append('    <Say voice="Polly.Nicole">No extension entered. Goodbye.</Say>')
+            response_parts.append('    <Say voice="Polly.Olivia-Neural">No extension entered. Goodbye.</Say>')
             response_parts.append('    <Hangup/>')
 
             db.log_activity(
@@ -1655,7 +1655,7 @@ def _go_to_voicemail(response_parts, call_flow, called_number, from_number, call
 
     if not vm_dest and not audio_type:
         # No voicemail configured and no fallback audio — can't record
-        response_parts.append('    <Say voice="Polly.Nicole">Please try again later. Goodbye.</Say>')
+        response_parts.append('    <Say voice="Polly.Olivia-Neural">Please try again later. Goodbye.</Say>')
         response_parts.append('    <Hangup/>')
         response_parts.append('</Response>')
         return Response('\n'.join(response_parts), mimetype='application/xml')
@@ -3007,9 +3007,9 @@ def mobile_screen():
     twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Gather input="dtmf" numDigits="1" timeout="4" action="{xml_escape(accept_url)}" method="POST">
-        <Say voice="Polly.Nicole">{xml_escape(label)}. Press 1 to answer.</Say>
+        <Say voice="Polly.Olivia-Neural">{xml_escape(label)}. Press 1 to answer.</Say>
         <Pause length="1"/>
-        <Say voice="Polly.Nicole">Press 1 to answer.</Say>
+        <Say voice="Polly.Olivia-Neural">Press 1 to answer.</Say>
     </Gather>
     <Hangup/>
 </Response>'''
@@ -3054,7 +3054,7 @@ def inbound_screened_answer():
     if not won:
         twiml = '''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Nicole">Sorry, this call has already been answered or the caller has hung up.</Say>
+    <Say voice="Polly.Olivia-Neural">Sorry, this call has already been answered or the caller has hung up.</Say>
     <Hangup/>
 </Response>'''
         return Response(twiml, mimetype='application/xml')
@@ -3627,7 +3627,7 @@ def queue_wait(queue_id):
         # Queue not found - play default hold music from static/ (safe from admin deletion)
         twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Nicole">Please hold, we will be with you shortly.</Say>
+    <Say voice="Polly.Olivia-Neural">Please hold, we will be with you shortly.</Say>
     <Play>{config.webhook_base_url}/static/clockwork_waltz_60s.mp3</Play>
 </Response>'''
         return Response(twiml, mimetype='application/xml')
@@ -3725,14 +3725,14 @@ def queue_wait(queue_id):
 
         # Announce position periodically
         if is_first_entry or queue_time_int % announcement_interval < 10:
-            response_parts.append(f'    <Say voice="Polly.Nicole">You are caller number {queue_position} in the queue.</Say>')
+            response_parts.append(f'    <Say voice="Polly.Olivia-Neural">You are caller number {queue_position} in the queue.</Say>')
 
             # Estimated wait (if enabled and we have data)
             if queue.get('estimated_wait_announcement'):
                 # Simple estimate: 2 minutes per caller ahead
                 est_minutes = queue_position_int * 2
                 if est_minutes > 0:
-                    response_parts.append(f'    <Say voice="Polly.Nicole">Estimated wait time is approximately {est_minutes} minutes.</Say>')
+                    response_parts.append(f'    <Say voice="Polly.Olivia-Neural">Estimated wait time is approximately {est_minutes} minutes.</Say>')
 
     # Voicemail/callback escape announcements
     # Both settings are in music plays (waitUrl cycles). Each cycle ≈ hold music duration.
@@ -3771,7 +3771,7 @@ def queue_wait(queue_id):
             audio_url = _get_full_audio_url(type_audio[0]['file_url'])
             response_parts.append(f'    <Play>{xml_escape(audio_url)}</Play>')
         else:
-            response_parts.append(f'    <Say voice="Polly.Nicole">{fallback_say}</Say>')
+            response_parts.append(f'    <Say voice="Polly.Olivia-Neural">{fallback_say}</Say>')
 
     # Note: callback_reminder audio type is still supported for the reference table
     # but repeating escape announcements now cover the reminder functionality
@@ -3974,7 +3974,7 @@ def voice_extension_dial():
             if invalid_audio and invalid_audio.get('file_url'):
                 response_parts.append(f'    <Play>{xml_escape(_get_full_audio_url(invalid_audio["file_url"]))}</Play>')
             else:
-                response_parts.append('    <Say voice="Polly.Nicole">That extension is not valid. Please try again.</Say>')
+                response_parts.append('    <Say voice="Polly.Olivia-Neural">That extension is not valid. Please try again.</Say>')
 
             response_parts.append(f'    <Gather numDigits="4" action="{xml_escape(gather_url)}" method="POST" timeout="10">')
 
@@ -3989,7 +3989,7 @@ def voice_extension_dial():
                 response_parts.append(_say_or_play('ext_prompt', 'Please enter the extension of the person you are trying to reach.', indent='        '))
 
             response_parts.append('    </Gather>')
-            response_parts.append('    <Say voice="Polly.Nicole">No extension entered. Goodbye.</Say>')
+            response_parts.append('    <Say voice="Polly.Olivia-Neural">No extension entered. Goodbye.</Say>')
             response_parts.append('    <Hangup/>')
             response_parts.append('</Response>')
             return Response('\n'.join(response_parts), mimetype='application/xml')
@@ -4060,7 +4060,7 @@ def voice_extension_dial():
         response_parts.append(f'    <Play>{xml_escape(prefix_url)}</Play>')
         response_parts.append(f'    <Play>{xml_escape(name_url)}</Play>')
     else:
-        response_parts.append(f'    <Say voice="Polly.Nicole">Connecting you to {xml_escape(staff_name)}.</Say>')
+        response_parts.append(f'    <Say voice="Polly.Olivia-Neural">Connecting you to {xml_escape(staff_name)}.</Say>')
     response_parts.append('    <Dial>')
     response_parts.append(f'        <Conference startConferenceOnEnter="false" endConferenceOnExit="true" beep="false" waitUrl="{xml_escape(ringback_url)}" waitMethod="POST">{xml_escape(conference_name)}</Conference>')
     response_parts.append('    </Dial>')
@@ -4140,7 +4140,7 @@ def _extension_fallback(flow_id, called_number, from_number, call_sid, db, say_f
     response_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>']
 
     if say_first:
-        response_parts.append(f'    <Say voice="Polly.Nicole">{xml_escape(say_first)}</Say>')
+        response_parts.append(f'    <Say voice="Polly.Olivia-Neural">{xml_escape(say_first)}</Say>')
 
     if fallback_action == 'ai_receptionist':
         routing = {'call_flow': call_flow} if call_flow else {}
@@ -4157,7 +4157,7 @@ def _extension_fallback(flow_id, called_number, from_number, call_sid, db, say_f
             wait_url = f"{config.webhook_base_url}/api/voice/queue/{queue_id}/wait"
             leave_url = f"{config.webhook_base_url}/api/voice/queue/{queue_id}/leave"
             if not say_first:
-                response_parts.append(f'    <Say voice="Polly.Nicole">That extension is not available. Transferring you now.</Say>')
+                response_parts.append(f'    <Say voice="Polly.Olivia-Neural">That extension is not available. Transferring you now.</Say>')
             response_parts.append(f'    <Enqueue waitUrl="{xml_escape(wait_url)}" waitUrlMethod="POST" action="{xml_escape(leave_url)}">{xml_escape(queue_name)}</Enqueue>')
             response_parts.append('</Response>')
             return Response('\n'.join(response_parts), mimetype='application/xml')
@@ -4165,7 +4165,7 @@ def _extension_fallback(flow_id, called_number, from_number, call_sid, db, say_f
     # Default: voicemail (let _go_to_voicemail handle the prompt based on config)
     routing = {'call_flow': call_flow} if call_flow else {}
     if not say_first:
-        response_parts.append('    <Say voice="Polly.Nicole">That extension is not available.</Say>')
+        response_parts.append('    <Say voice="Polly.Olivia-Neural">That extension is not available.</Say>')
     return _go_to_voicemail(response_parts, call_flow, called_number, from_number, call_sid, db, routing)
 
 
@@ -4869,7 +4869,7 @@ def _empty_shared_phone_caller_id(from_identity: str, db) -> str | None:
 def _say_and_hangup(text: str) -> Response:
     twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Nicole">{xml_escape(text)}</Say>
+    <Say voice="Polly.Olivia-Neural">{xml_escape(text)}</Say>
     <Hangup/>
 </Response>'''
     return Response(twiml, mimetype='application/xml')
@@ -4989,7 +4989,7 @@ def _handle_internal_extension_call(extension: str, from_identity: str, staff_em
     if not ext_record:
         twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Nicole">Extension {" ".join(extension)} is not valid.</Say>
+    <Say voice="Polly.Olivia-Neural">Extension {" ".join(extension)} is not valid.</Say>
     <Hangup/>
 </Response>'''
         return Response(twiml, mimetype='application/xml')
@@ -5001,7 +5001,7 @@ def _handle_internal_extension_call(extension: str, from_identity: str, staff_em
     if not recipient_email:
         twiml = '''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Nicole">That extension is not configured.</Say>
+    <Say voice="Polly.Olivia-Neural">That extension is not configured.</Say>
     <Hangup/>
 </Response>'''
         return Response(twiml, mimetype='application/xml')
@@ -5010,7 +5010,7 @@ def _handle_internal_extension_call(extension: str, from_identity: str, staff_em
     if ext_record.get('dnd_enabled'):
         twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Nicole">{xml_escape(recipient_name)} is currently unavailable.</Say>
+    <Say voice="Polly.Olivia-Neural">{xml_escape(recipient_name)} is currently unavailable.</Say>
     <Hangup/>
 </Response>'''
 
@@ -5033,7 +5033,7 @@ def _handle_internal_extension_call(extension: str, from_identity: str, staff_em
     if not dial_targets:
         twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Nicole">{xml_escape(recipient_name)} has no devices available.</Say>
+    <Say voice="Polly.Olivia-Neural">{xml_escape(recipient_name)} has no devices available.</Say>
     <Hangup/>
 </Response>'''
         return Response(twiml, mimetype='application/xml')
@@ -5116,7 +5116,7 @@ def extension_dial_status():
     # Not answered — the conference ended without anyone joining
     twiml = '''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Nicole">The call was not answered.</Say>
+    <Say voice="Polly.Olivia-Neural">The call was not answered.</Say>
 </Response>'''
     return Response(twiml, mimetype='application/xml')
 
@@ -5352,7 +5352,7 @@ def voice_outbound():
             spoken_ext = f" for extension {ext_number}" if ext_number else ""
             twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Nicole">This call cannot be placed because no outbound caller I D is set{xml_escape(spoken_ext)}. Please ask your administrator to set one in Rinq, under Caller I D overview.</Say>
+    <Say voice="Polly.Olivia-Neural">This call cannot be placed because no outbound caller I D is set{xml_escape(spoken_ext)}. Please ask your administrator to set one in Rinq, under Caller I D overview.</Say>
     <Hangup/>
 </Response>'''
             return Response(twiml, mimetype='application/xml')
@@ -5405,7 +5405,7 @@ def voice_outbound():
         logger.error(f"Failed to dial customer {to_e164}: {e}")
         twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Nicole">Sorry, we could not place that call.</Say>
+    <Say voice="Polly.Olivia-Neural">Sorry, we could not place that call.</Say>
     <Hangup/>
 </Response>'''
         return Response(twiml, mimetype='application/xml')
