@@ -1633,7 +1633,7 @@ def _handle_incoming_call_internal(called_number: str, from_number: str, call_si
 
 
 def _go_to_voicemail(response_parts, call_flow, called_number, from_number, call_sid, db, routing,
-                     reason='closed', audio_type=None):
+                     reason='closed', audio_type=None, prompt_given=False):
     """Helper to route a call to voicemail.
 
     This is the single path all voicemail recordings go through.
@@ -1642,6 +1642,9 @@ def _go_to_voicemail(response_parts, call_flow, called_number, from_number, call
         reason: 'closed' (after hours) or 'no_answer' (open hours, no one available)
         audio_type: Override audio type for _say_or_play (e.g. 'queue_no_agents', 'voicemail_escape').
                     If None, uses call_flow-configured audio.
+        prompt_given: the caller has already been asked to leave a message
+                    (e.g. Stuart's own "trouble on my end" clip) - go
+                    straight to the tone instead of a second greeting.
     """
     # Check if the call_flow has a voicemail destination configured
     vm_dest = None
@@ -1659,7 +1662,7 @@ def _go_to_voicemail(response_parts, call_flow, called_number, from_number, call
         return Response('\n'.join(response_parts), mimetype='application/xml')
 
     # Play appropriate prompt
-    prompt_added = False
+    prompt_added = prompt_given
     if reason == 'closed' and call_flow and call_flow.get('closed_audio_id'):
         audio = db.get_audio_file(call_flow['closed_audio_id'])
         if audio and audio.get('file_url'):
