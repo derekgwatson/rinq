@@ -282,18 +282,54 @@ def register(bp):
 
         ?call_sid= is the staff member's own leg (the browser's CallSid).
         """
-        room = takeover_room_for(request.args.get('call_sid', ''), get_db())
-        if not room:
-            return jsonify({'found': False})
+        db = get_db()
+        customer = request.args.get('customer', '')
+        if customer:
+            # Following a call after its ring stopped - only an AI-answered call
+            if db.get_call_log_field(customer, 'call_type') != 'ai_receptionist':
+                return jsonify({'found': False})
+        else:
+            room = takeover_room_for(request.args.get('call_sid', ''), db)
+            if not room:
+                # Not an AI call: the phone page stops asking (ai=False)
+                return jsonify({'found': False, 'ai': False})
+            customer = room[len(TAKEOVER_PREFIX):]
         try:
             from rinq.integrations.watson.ai_receptionist import WatsonAIReceptionist
             resp = WatsonAIReceptionist().client.get(
-                f"/api/conversations/by-call/{quote(room[len(TAKEOVER_PREFIX):], safe='')}", timeout=4)
+                f"/api/conversations/by-call/{quote(customer, safe='')}", timeout=4)
             if resp.ok:
-                return jsonify(resp.json())
+                data = resp.json()
+                data['customer_sid'] = customer
+                # Still with Stuart = still takeable (not answered, not over)
+                data['takeable'] = bool(data.get('found')) and \
+                    db.get_call_log_field(customer, 'status') == 'ai_answered'
+                return jsonify(data)
         except Exception as e:
             logger.debug(f"AI transcript fetch failed: {e}")
         return jsonify({'found': False})
+
+    @bp.route('/ai-takeover/claim', methods=['POST'])
+    @_session_or_api
+    def ai_takeover_claim():
+        """'Take this call' after the ring has stopped: ring the person asking
+        again, straight away, so they can pick up where Stuart is."""
+        from rinq.services.auth import get_current_user
+        data = request.get_json(silent=True) or {}
+        customer = data.get('customer', '')
+        db = get_db()
+        if db.get_call_log_field(customer, 'call_type') != 'ai_receptionist' or \
+                db.get_call_log_field(customer, 'status') != 'ai_answered':
+            return jsonify({'success': False, 'error': 'That caller is no longer with Stuart.'}), 409
+        user = get_current_user()
+        if not user or not getattr(user, 'email', None):
+            return jsonify({'success': False, 'error': 'Not signed in'}), 401
+        staff = {'email': user.email, 'name': getattr(user, 'name', None) or ''}
+        show_as = data.get('caller_number') or db.get_call_log_field(customer, 'from_number') or ''
+        ring_for_takeover(staff, customer, show_as, db)
+        db.log_activity(action="ai_takeover_claim", target=customer,
+                        details=f"{user.email} asked to take over", performed_by=user.email)
+        return jsonify({'success': True})
 
 
 def _tell_rosie_handover(call_sid: str, name: str) -> None:
