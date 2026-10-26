@@ -158,7 +158,7 @@
                 <label for="connecting_prefix">"Connecting you to" audio:</label>
                 {% set current_prefix = settings.get('connecting_prefix_audio_path', {}).get('value') or '' %}
                 <select id="connecting_prefix" name="connecting_prefix_audio_path" style="font-family: inherit;">
-                    <option value="">None (use Polly.Nicole voice)</option>
+                    <option value="">None (use Polly.Olivia-Neural voice)</option>
                     {% for audio in audio_files %}
                     <option value="{{ audio.file_url }}" {% if audio.file_url == current_prefix %}selected{% endif %}>
                         {{ audio.name }}{% if audio.file_type %} ({{ audio.file_type }}){% endif %}

@@ -41,7 +41,7 @@ CALLBACK_WINDOW_DAYS = 14
 # Seconds the caller has to press 1 once the offer finishes.
 OFFER_TIMEOUT_SECONDS = 4
 
-VOICE = 'Polly.Nicole'
+VOICE = 'Polly.Olivia-Neural'
 
 
 def _twiml(*lines: str) -> Response:

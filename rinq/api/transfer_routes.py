@@ -161,7 +161,7 @@ def register(bp):
         leave_url = f"{base_url}/api/voice/queue/{queue['id']}/leave"
         twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Nicole">Please hold while we transfer your call.</Say>
+    <Say voice="Polly.Olivia-Neural">Please hold while we transfer your call.</Say>
     <Enqueue waitUrl="{xml_escape(wait_url)}" waitUrlMethod="POST" action="{xml_escape(leave_url)}">{xml_escape(queue_name)}</Enqueue>
 </Response>'''
 
@@ -466,17 +466,17 @@ def register(bp):
 
             twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Nicole">The transfer was not successful. Reconnecting you.</Say>
+    <Say voice="Polly.Olivia-Neural">The transfer was not successful. Reconnecting you.</Say>
     <Dial callerId="{xml_escape(caller_id)}" timeout="15">
         <Client>{xml_escape(agent_identity)}</Client>
     </Dial>
-    <Say voice="Polly.Nicole">Sorry, we were unable to reconnect your call. Goodbye.</Say>
+    <Say voice="Polly.Olivia-Neural">Sorry, we were unable to reconnect your call. Goodbye.</Say>
 </Response>'''
             return Response(twiml, mimetype='application/xml')
 
         return Response('''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Nicole">Sorry, we were unable to connect your call. Please try again later. Goodbye.</Say>
+    <Say voice="Polly.Olivia-Neural">Sorry, we were unable to connect your call. Please try again later. Goodbye.</Say>
 </Response>''', mimetype='application/xml')
 
     @bp.route('/voice/transfer/callback-status', methods=['POST'])
@@ -536,7 +536,7 @@ def register(bp):
 
         return Response('''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Nicole">Sorry, we were unable to connect your call. Please try again later. Goodbye.</Say>
+    <Say voice="Polly.Olivia-Neural">Sorry, we were unable to connect your call. Please try again later. Goodbye.</Say>
     <Hangup/>
 </Response>''', mimetype='application/xml')
 
@@ -593,7 +593,7 @@ def register(bp):
             logger.info(f"Transfer screened answer lost: {leg_sid} ({group_key})")
             twiml = '''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Nicole">Sorry, this call has already been answered or the caller has hung up.</Say>
+    <Say voice="Polly.Olivia-Neural">Sorry, this call has already been answered or the caller has hung up.</Say>
     <Hangup/>
 </Response>'''
             return Response(twiml, mimetype='application/xml')
