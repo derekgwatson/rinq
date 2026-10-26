@@ -49,6 +49,16 @@ def _twiml(*lines: str) -> Response:
     return Response(body, mimetype='application/xml')
 
 
+def _speak(text: str, indent: str = '    ') -> str:
+    """Tina's own voice (Admin -> Audio default), else the stock voice."""
+    from rinq.services.tts_service import phrase_audio_url
+    from rinq.api.twiml import get_full_audio_url
+    url = phrase_audio_url(text)
+    if url:
+        return f'{indent}<Play>{xml_escape(get_full_audio_url(url))}</Play>'
+    return f'{indent}<Say voice="{VOICE}">{xml_escape(text)}</Say>'
+
+
 def _normal_flow_url() -> str:
     """voice_incoming again, skipping the offer. Twilio's <Redirect> re-posts
     To/From/CallSid, so the normal flow sees the call exactly as before."""
@@ -58,7 +68,7 @@ def _normal_flow_url() -> str:
 def _to_normal_flow(say: str | None = None) -> Response:
     lines = []
     if say:
-        lines.append(f'    <Say voice="{VOICE}">{xml_escape(say)}</Say>')
+        lines.append(_speak(say))
     lines.append(f'    <Redirect method="POST">{xml_escape(_normal_flow_url())}</Redirect>')
     return _twiml(*lines)
 
@@ -153,7 +163,7 @@ def offer_twiml(person: dict, called_number: str, from_number: str) -> Response:
         f"{config.webhook_base_url}/api/voice/callback/choice"
         f"?called={quote(called_number, safe='')}&from={quote(from_number, safe='')}"
     )
-    name = xml_escape(person['name'])
+    name = person['name']
     if name:
         offer = (f'Hi, it looks like {name} from Watson Blinds tried to call you. '
                  f'To speak with {name}, press 1. Otherwise, please stay on the line.')
@@ -163,7 +173,7 @@ def offer_twiml(person: dict, called_number: str, from_number: str) -> Response:
     return _twiml(
         '    <Pause length="1"/>',
         f'    <Gather numDigits="1" action="{xml_escape(choice_url)}" method="POST" timeout="{OFFER_TIMEOUT_SECONDS}">',
-        f'        <Say voice="{VOICE}">{offer}</Say>',
+        _speak(offer, '        '),
         '    </Gather>',
         f'    <Redirect method="POST">{xml_escape(_normal_flow_url())}</Redirect>',
     )
@@ -220,7 +230,7 @@ def register(bp):
             f"?name={quote(name, safe='')}"
         )
         ringback_url = f"{config.webhook_base_url}/api/voice/ringback"
-        connecting = f"Connecting you to {xml_escape(name)}." if name else "Connecting you now."
+        connecting = f"Connecting you to {name}." if name else "Connecting you now."
 
         db.log_activity(action="callback_ringing", target=called_number,
                         details=f"From: {from_number}, User: {email}, Targets: {len(dial_targets)}, "
@@ -228,7 +238,7 @@ def register(bp):
                         performed_by="twilio")
 
         return _twiml(
-            f'    <Say voice="{VOICE}">{connecting}</Say>',
+            _speak(connecting),
             '    <Dial>',
             f'        <Conference startConferenceOnEnter="false" endConferenceOnExit="true" beep="false" '
             f'waitUrl="{xml_escape(ringback_url)}" waitMethod="POST">{xml_escape(conference_name)}</Conference>',
