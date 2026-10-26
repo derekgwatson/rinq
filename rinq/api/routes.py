@@ -124,7 +124,17 @@ def _redirect_to_ai_receptionist(response_parts, called_number, from_number, cal
         call_flow = routing.get('call_flow') if routing else None
         return _go_to_voicemail(response_parts, call_flow, called_number, from_number, call_sid, db, routing)
 
-    # Enrich caller data if not already done
+    # Rosie restarting (any bot-team deploy) would give the caller Twilio's
+    # "application error" - voicemail instead
+    from rinq.api.ai_test_routes import rosie_is_up
+    if not rosie_is_up():
+        logger.error(f"AI receptionist not answering - sending {call_sid} to voicemail")
+        call_flow = routing.get('call_flow') if routing else None
+        return _go_to_voicemail(response_parts, call_flow, called_number, from_number, call_sid, db,
+                                routing, reason='no_answer')
+
+    # Enrich caller data if not already done (for the activity log; Rosie
+    # looks the caller up itself, so none of it goes in the URL)
     from rinq.services.caller_enrichment import get_enrichment_service
     enrichment = get_enrichment_service()
     caller_info = enrichment.enrich_caller(from_number)
@@ -140,18 +150,6 @@ def _redirect_to_ai_receptionist(response_parts, called_number, from_number, cal
     if queue:
         params['queue_id'] = queue.get('id', '')
         params['queue_name'] = queue.get('name', '')
-    if caller_info.get('customer_id'):
-        params['customer_id'] = caller_info['customer_id']
-    if caller_info.get('customer_name'):
-        params['customer_name'] = caller_info['customer_name']
-    if caller_info.get('customer_email'):
-        params['customer_email'] = caller_info['customer_email']
-    if caller_info.get('order_data'):
-        params['order_data'] = caller_info['order_data']
-    if caller_info.get('priority'):
-        params['priority'] = caller_info['priority']
-    if caller_info.get('priority_reason'):
-        params['priority_reason'] = caller_info['priority_reason']
 
     redirect_url = f"{_ai_url}?{urlencode(params)}"
 
