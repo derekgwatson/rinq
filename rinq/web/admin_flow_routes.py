@@ -37,7 +37,7 @@ def register(bp):
         greeting_audio_id = request.form.get('greeting_audio_id')
         closed_audio_id = request.form.get('closed_audio_id')
         closed_action = request.form.get('closed_action', 'ai_receptionist')
-        open_no_answer_action = request.form.get('open_no_answer_action', 'ai_receptionist')
+        open_no_answer_action = request.form.get('open_no_answer_action', 'voicemail')
         voicemail_destination_id = request.form.get('voicemail_destination_id', '').strip()
         closed_forward_number = request.form.get('closed_forward_number', '').strip()
         open_forward_number = request.form.get('open_forward_number', '').strip()
@@ -127,7 +127,7 @@ def register(bp):
         open_action = request.form.get('open_action', 'queue')
         open_queue_id = request.form.get('open_queue_id')
         closed_action = request.form.get('closed_action', 'ai_receptionist')
-        open_no_answer_action = request.form.get('open_no_answer_action', 'ai_receptionist')
+        open_no_answer_action = request.form.get('open_no_answer_action', 'voicemail')
         closed_audio_id = request.form.get('closed_audio_id')
         closed_forward_number = request.form.get('closed_forward_number', '').strip()
         open_forward_number = request.form.get('open_forward_number', '').strip()
@@ -195,7 +195,7 @@ def register(bp):
                 'open_queue_id': source.get('open_queue_id'),
                 'open_forward_number': source.get('open_forward_number'),
                 'open_audio_id': source.get('open_audio_id'),
-                'open_no_answer_action': source.get('open_no_answer_action', 'ai_receptionist'),
+                'open_no_answer_action': source.get('open_no_answer_action') or 'voicemail',
                 'closed_action': source.get('closed_action', 'message'),
                 'closed_audio_id': source.get('closed_audio_id'),
                 'closed_forward_number': source.get('closed_forward_number'),

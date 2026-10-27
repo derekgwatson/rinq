@@ -71,6 +71,12 @@ def rosie_answer_url() -> str | None:
     url = ai.get_answer_url() if ai else None
     if url:
         return url
+    # The env URL is Watson's own receptionist (bot-team's Rosie) - never hand
+    # another tenant's callers to it (gotcha 1: no global config for tenant
+    # things)
+    from rinq.tenant.context import get_current_tenant
+    if (get_current_tenant() or {}).get('id') != 'watson':
+        return None
     base = (os.environ.get('ROSIE_WEBHOOK_URL') or os.environ.get('WATSON_ROSIE_URL') or '').rstrip('/')
     return f"{base}/api/voice/answer" if base else None
 

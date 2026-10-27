@@ -1158,7 +1158,7 @@ def voice_incoming():
                 )
             else:
                 # No active devices - check call flow no-answer action
-                no_answer = call_flow.get('open_no_answer_action', 'ai_receptionist') if call_flow else 'ai_receptionist'
+                no_answer = (call_flow.get('open_no_answer_action') or 'voicemail') if call_flow else 'voicemail'
                 logger.warning(f"No dial targets for queue {queue.get('name')} - action: {no_answer}")
                 if no_answer == 'ai_receptionist':
                     return _redirect_to_ai_receptionist(
@@ -1204,7 +1204,7 @@ def voice_incoming():
                 response_parts.append(f'    <Enqueue waitUrl="{xml_escape(wait_url)}" waitUrlMethod="POST" action="{xml_escape(leave_url)}">{xml_escape(queue_name)}</Enqueue>')
             else:
                 # No active members on duty - check call flow no-answer action
-                no_answer = call_flow.get('open_no_answer_action', 'ai_receptionist') if call_flow else 'ai_receptionist'
+                no_answer = (call_flow.get('open_no_answer_action') or 'voicemail') if call_flow else 'voicemail'
                 logger.warning(f"No active queue members for queue {queue.get('name')} - action: {no_answer}")
                 db.log_activity(
                     action="call_no_agents",
@@ -1603,7 +1603,7 @@ def _handle_incoming_call_internal(called_number: str, from_number: str, call_si
                     performed_by="twilio"
                 )
             else:
-                no_answer = call_flow.get('open_no_answer_action', 'ai_receptionist') if call_flow else 'ai_receptionist'
+                no_answer = (call_flow.get('open_no_answer_action') or 'voicemail') if call_flow else 'voicemail'
                 logger.warning(f"No active queue members for queue {queue.get('name')} - action: {no_answer}")
                 if no_answer == 'ai_receptionist':
                     return _redirect_to_ai_receptionist(
@@ -1969,7 +1969,10 @@ def queue_no_answer(queue_id):
         else:
             # No agents on duty - check call flow no-answer action
             # Look up the call flow that uses this queue
-            no_answer_action = 'ai_receptionist'  # default
+            # Stuart only when a call flow explicitly says so (2026-10-27:
+            # the handover started actually working, so a default of
+            # 'ai_receptionist' would have switched him on unasked)
+            no_answer_action = 'voicemail'
             try:
                 with db._get_conn() as conn:
                     row = conn.execute(
@@ -1977,9 +1980,9 @@ def queue_no_answer(queue_id):
                         (queue_id,)
                     ).fetchone()
                     if row:
-                        no_answer_action = row['open_no_answer_action'] or 'ai_receptionist'
+                        no_answer_action = row['open_no_answer_action'] or 'voicemail'
             except Exception as e:
-                logger.warning(f"Could not look up call flow for queue {queue_id}, using default ai_receptionist: {e}")
+                logger.warning(f"Could not look up call flow for queue {queue_id}, using default voicemail: {e}")
 
             logger.warning(f"No active agents in queue {queue.get('name')} - action: {no_answer_action}")
 
