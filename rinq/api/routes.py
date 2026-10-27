@@ -118,7 +118,12 @@ def _redirect_to_ai_receptionist(response_parts, called_number, from_number, cal
     Passes caller context as query params for enrichment data.
     Falls back to voicemail if the AI receptionist is not configured.
     """
-    _ai_url = _get_ai_receptionist_url()
+    # Same lookup as the 9000 test line: the watson tenant runs with
+    # RINQ_INTEGRATIONS=none, so the integration alone finds no URL and every
+    # call silently went to voicemail instead (found before the Shoalhaven
+    # pilot, 2026-10-27)
+    from rinq.api.ai_test_routes import rosie_answer_url
+    _ai_url = _get_ai_receptionist_url() or rosie_answer_url()
     if not _ai_url:
         logger.warning("AI receptionist not configured (AI_RECEPTIONIST_URL not set) - falling back to voicemail")
         call_flow = routing.get('call_flow') if routing else None
@@ -161,6 +166,14 @@ def _redirect_to_ai_receptionist(response_parts, called_number, from_number, cal
         'call_type': 'ai_receptionist',
         'status': 'ai_answered',
     })
+
+    # Rosie has no Twilio account of its own - record from here, as the test
+    # line does (a Stuart call isn't a conference, so nothing else records it)
+    try:
+        from rinq.services.recording_service import recording_service
+        recording_service.start_recording(call_sid)
+    except Exception as e:
+        logger.warning(f"AI receptionist: couldn't start recording for {call_sid}: {e}")
 
     db.log_activity(
         action="call_to_ai_receptionist",
