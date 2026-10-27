@@ -2557,7 +2557,8 @@ class Database(StatsMixin, CallLogMixin):
                        cf.open_action, cf.open_queue_id, cf.open_forward_number,
                        cf.open_no_answer_action, cf.no_answer_audio_id,
                        cf.closed_action, cf.closed_audio_id, cf.closed_forward_number,
-                       cf.voicemail_email, cf.voicemail_destination_id,
+                       cf.voicemail_email,
+                       cf.voicemail_destination_id AS flow_voicemail_destination_id,
                        cf.extension_prompt_audio_id, cf.extension_no_answer_action,
                        ga.file_url as greeting_url
                 FROM phone_numbers pn
@@ -2627,7 +2628,14 @@ class Database(StatsMixin, CallLogMixin):
                 'closed_audio_id': phone_row['closed_audio_id'],
                 'closed_forward_number': phone_row['closed_forward_number'],
                 'voicemail_email': phone_row['voicemail_email'],
-                'voicemail_destination_id': phone_row['voicemail_destination_id'],
+                # NOT phone_row['voicemail_destination_id']: since migration
+                # 074 phone_numbers has a column of that name too, pn.* comes
+                # first, and sqlite3.Row returns the FIRST match - so every
+                # store's flow read the number's (empty) box and an open-hours
+                # "nobody on duty" call heard "Please try again later.
+                # Goodbye." instead of voicemail (72 calls May-Oct 2026, found
+                # by the first test run 2026-10-28)
+                'voicemail_destination_id': phone_row['flow_voicemail_destination_id'],
                 'extension_prompt_audio_id': phone_row['extension_prompt_audio_id'],
                 'extension_no_answer_action': phone_row['extension_no_answer_action'],
             }
