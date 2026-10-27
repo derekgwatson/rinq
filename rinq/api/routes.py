@@ -586,6 +586,21 @@ def _is_queue_paused(queue: dict) -> bool:
     return True
 
 
+def _members_not_on_a_call(members: list, db) -> list:
+    """The queue members who aren't on a call right now - same Twilio ground
+    truth as the queue re-ring (call_log agent + call_participants checked
+    against live SIDs). Never raises: if we can't tell, everyone counts as
+    free, which is the old behaviour (ring them)."""
+    try:
+        busy = {c['agent_email'].lower() for c in _get_active_calls_from_twilio()
+                if c.get('agent_email')}
+        busy.update(db.get_active_agent_emails(active_sids=_get_active_call_sids()))
+    except Exception as e:
+        logger.warning(f"Busy-agent lookup failed, treating everyone as free: {e}")
+        return members
+    return [m for m in members if (m.get('user_email') or '').lower() not in busy]
+
+
 def _ring_agents_for_queue(queue_id: int, queue_name: str, customer_caller_id: str, our_caller_id: str, customer_call_sid: str, base_url: str = None, skip_emails: set = None, voicemail_on_empty: bool = True):
     """Initiate outbound calls to all agents when a caller enters the queue.
 
@@ -1185,6 +1200,27 @@ def voice_incoming():
                         continue
                     if settings.get('ring_browser', True) or settings.get('ring_sip', True):
                         available_members.append(m)
+
+            # Stuart stores only: when everyone who could answer is already on
+            # a call, ringing them for the queue's max wait wins nothing - go
+            # straight to Stuart. Voicemail stores keep the hold, because there
+            # a colleague often frees up (Canberra: 9 a month answered after a
+            # minute+ wait). Derek, 2026-10-28.
+            no_answer = (call_flow.get('open_no_answer_action') or 'voicemail') if call_flow else 'voicemail'
+            if available_members and no_answer == 'ai_receptionist':
+                free = _members_not_on_a_call(available_members, db)
+                if not free:
+                    logger.info(f"Everyone in queue {queue.get('name')} is on a call - straight to the AI receptionist")
+                    db.log_activity(
+                        action="call_all_agents_busy",
+                        target=called_number,
+                        details=f"From: {from_number}, Queue: {queue.get('name')}: everyone on a call",
+                        performed_by="twilio"
+                    )
+                    return _redirect_to_ai_receptionist(
+                        response_parts, called_number, from_number, call_sid, db, routing,
+                        reason="all_agents_busy"
+                    )
 
             if available_members:
                 # Agents are on duty - put caller in queue for them to pick up
@@ -5312,6 +5348,15 @@ def voice_outbound():
     # an empty phone on a shop counter must still be able to ring out.
     empty_shared_phone = (not staff_email
                           and bool(_shared_desk_phone_username(from_identity, db)))
+
+    # The AI receptionist test line, dialled straight from Tina or a desk
+    # phone - same prompt as via the extension directory, minus "your own
+    # number" (a browser or desk phone has none to pretend with)
+    from rinq.api.ai_test_routes import AI_TEST_EXTENSION, prompt_twiml
+    if stripped == AI_TEST_EXTENSION:
+        db.log_activity(action="ai_test_extension", target="internal",
+                        details=f"From: {staff_email or from_identity}", performed_by="twilio")
+        return prompt_twiml('', '', internal=True)
 
     # Check if this is a 4-digit extension (internal call)
     if stripped.isdigit() and len(stripped) == 4:
