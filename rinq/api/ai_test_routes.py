@@ -96,16 +96,19 @@ def rosie_is_up() -> bool:
         return False
 
 
-def prompt_twiml(called_number: str, from_number: str) -> Response:
-    """Ask for the caller ID to pretend to be. Called from voice_extension_dial."""
+def prompt_twiml(called_number: str, from_number: str, internal: bool = False) -> Response:
+    """Ask for the caller ID to pretend to be. Called from voice_extension_dial,
+    and from voice_outbound when 9000 is dialled from Tina or a desk phone
+    (internal=True: no own number to fall back on, and nobody to ring)."""
     start_url = (
         f"{config.webhook_base_url}/api/voice/ai-test/start"
         f"?called={quote(called_number, safe='')}&from={quote(from_number, safe='')}"
     )
+    own = "" if internal else " Or just press hash to use your own number."
     return _twiml(
         f'    <Gather numDigits="12" finishOnKey="#" timeout="15" action="{xml_escape(start_url)}" method="POST">',
         f'        <Say voice="{VOICE}">AI receptionist test. Enter the phone number you want to pretend '
-        f'to be calling from, then press hash. Or just press hash to use your own number.</Say>',
+        f'to be calling from, then press hash.{own}</Say>',
         '    </Gather>',
         # No input at all: carry on with their own number
         f'    <Redirect method="POST">{xml_escape(start_url)}</Redirect>',

@@ -5313,6 +5313,15 @@ def voice_outbound():
     empty_shared_phone = (not staff_email
                           and bool(_shared_desk_phone_username(from_identity, db)))
 
+    # The AI receptionist test line, dialled straight from Tina or a desk
+    # phone - same prompt as via the extension directory, minus "your own
+    # number" (a browser or desk phone has none to pretend with)
+    from rinq.api.ai_test_routes import AI_TEST_EXTENSION, prompt_twiml
+    if stripped == AI_TEST_EXTENSION:
+        db.log_activity(action="ai_test_extension", target="internal",
+                        details=f"From: {staff_email or from_identity}", performed_by="twilio")
+        return prompt_twiml('', '', internal=True)
+
     # Check if this is a 4-digit extension (internal call)
     if stripped.isdigit() and len(stripped) == 4:
         return _handle_internal_extension_call(stripped, from_identity, staff_email, call_sid, db)
