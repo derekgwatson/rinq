@@ -42,6 +42,8 @@ from rinq.tenant.context import get_tenant_db  # noqa: E402
 ROSIE_ANSWER_URL = 'https://rosie.test/api/voice/answer'
 OPEN_ALL_WEEK = json.dumps({d: {'open': '00:00', 'close': '23:59'}
                             for d in ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun')})
+# A store's real hours (Shoalhaven's in Tina): weekdays 9-4:30
+STORE_HOURS = {d: {'open': '09:00', 'close': '16:30'} for d in ('mon', 'tue', 'wed', 'thu', 'fri')}
 # A Wednesday, mid-morning in Sydney
 FROZEN_NOW = _real_datetime(2026, 10, 28, 10, 30)
 
@@ -69,15 +71,21 @@ def client(app):
 
 @pytest.fixture(autouse=True)
 def frozen_clock(monkeypatch):
-    """Opening hours are decided by the clock - pin it to Wed 10:30 Sydney."""
+    """Opening hours are decided by the clock - pinned to Wed 10:30 Sydney.
+
+    A test can move it: `frozen_clock.set(datetime(2026, 10, 28, 16, 45))`
+    (naive = Sydney local time)."""
     import rinq.api.schedule as schedule
+    clock = SimpleNamespace(now=FROZEN_NOW)
+    clock.set = lambda when: setattr(clock, 'now', when)
 
     class FrozenDatetime(_real_datetime):
         @classmethod
         def now(cls, tz=None):
-            return tz.localize(FROZEN_NOW) if tz is not None else FROZEN_NOW
+            return tz.localize(clock.now) if tz is not None else clock.now
 
     monkeypatch.setattr(schedule, 'datetime', FrozenDatetime)
+    return clock
 
 
 @pytest.fixture(autouse=True)
@@ -154,14 +162,17 @@ def make_store(app):
     """
     contexts = []
 
-    def build(no_answer='voicemail', open=True, name='Shoalhaven', tenant_id='watson'):
+    def build(no_answer='voicemail', open=True, name='Shoalhaven', tenant_id='watson',
+              hours=None, closed_action='voicemail', tenant_default_caller_id=True):
         # 'watson' by default: Stuart (WATSON_ROSIE_URL) is only ever handed
-        # the watson tenant's callers
+        # the watson tenant's callers. `hours` = a business_hours dict (e.g.
+        # STORE_HOURS); default open all week, or never with open=False.
+        # tenant_default_caller_id=False leaves the tenant with no default.
         number = f"+6124418{next(_tenant_ids):04d}"
         master = get_master_db()
         master.create_tenant(tenant_id, f"Test {tenant_id}",
                              twilio_account_sid=f"AC{tenant_id}",
-                             twilio_default_caller_id=number)
+                             twilio_default_caller_id=number if tenant_default_caller_id else None)
         master.register_phone_number(number, tenant_id)
 
         ctx = app.test_request_context()
@@ -171,14 +182,15 @@ def make_store(app):
         g.tenant = master.get_tenant(tenant_id)
         db = get_tenant_db()
 
+        business_hours = json.dumps(hours) if hours is not None else (OPEN_ALL_WEEK if open else '{}')
         schedule_id = db.create_schedule(
-            {'name': f'{name} hours', 'business_hours': OPEN_ALL_WEEK if open else '{}'}, 'test')
+            {'name': f'{name} hours', 'business_hours': business_hours}, 'test')
         queue_id = db.create_queue({'name': name}, 'test')
         vm_id = db.create_voicemail_destination(
             {'name': f'{name} voicemail', 'email': 'store@example.com'}, 'test')
         flow_id = db.create_call_flow({'name': name, 'schedule_id': schedule_id,
                                        'open_action': 'queue', 'open_queue_id': queue_id,
-                                       'closed_action': 'voicemail',
+                                       'closed_action': closed_action,
                                        'voicemail_destination_id': vm_id}, 'test')
         db.update_call_flow(flow_id, {'open_no_answer_action': no_answer}, 'test')
         sid = f"PN{tenant_id}"
@@ -188,6 +200,7 @@ def make_store(app):
 
         store = Store(db, number)
         store.queue_id, store.flow_id = queue_id, flow_id
+        store.schedule_id, store.vm_id, store.phone_sid = schedule_id, vm_id, sid
         return store
 
     yield build
