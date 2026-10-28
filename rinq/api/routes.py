@@ -111,6 +111,17 @@ def _notify_ai_receptionist_call_ended(call_sid: str, call_status: str):
             logger.warning(f"Failed to notify AI receptionist of call end {call_sid}")
 
 
+def _ai_call_flow_for_queue(db, queue_id):
+    """The call flow that sends this queue's unanswered callers to Stuart, or None."""
+    with db._get_conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM call_flows WHERE open_queue_id = ? "
+            "AND open_no_answer_action = 'ai_receptionist'",
+            (queue_id,)
+        ).fetchone()
+    return db.get_call_flow(row['id']) if row else None
+
+
 def _redirect_to_ai_receptionist(response_parts, called_number, from_number, call_sid,
                         db, routing, reason="no_answer", extra_params=None):
     """Build TwiML that redirects the caller to AI receptionist (AI receptionist).
@@ -2185,15 +2196,7 @@ def queue_leave(queue_id):
                 # until 2026-10-28, so the Shoalhaven pilot's real callers
                 # never reached him.
                 queue = db.get_queue(queue_id)
-                call_flow = None
-                with db._get_conn() as conn:
-                    row = conn.execute(
-                        "SELECT id FROM call_flows WHERE open_queue_id = ? "
-                        "AND open_no_answer_action = 'ai_receptionist'",
-                        (queue_id,)
-                    ).fetchone()
-                if row:
-                    call_flow = db.get_call_flow(row['id'])
+                call_flow = _ai_call_flow_for_queue(db, queue_id)
                 if call_flow:
                     called_number = (queued_call or {}).get('called_number') or request.form.get('To', '')
                     db.log_activity(
@@ -2820,6 +2823,20 @@ def queue_rejected_voicemail(queue_id):
     """
     call_sid = request.form.get('CallSid', '')
     from_number = request.form.get('From', '')
+    db = get_db()
+    # Whole team rang out or rejected: a Stuart store gets Stuart, same as when
+    # the hold runs out (this path sent Shoalhaven callers to voicemail until
+    # 2026-10-28)
+    call_flow = _ai_call_flow_for_queue(db, queue_id)
+    if call_flow:
+        queued_call = db.get_queued_call_by_sid(call_sid)
+        called_number = (queued_call or {}).get('called_number') or request.form.get('To', '')
+        logger.info(f"Queue {queue_id}: no one answered {call_sid} - sending to AI receptionist")
+        response_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>']
+        return _redirect_to_ai_receptionist(
+            response_parts, called_number, from_number, call_sid, db,
+            {'queue': db.get_queue(queue_id), 'call_flow': call_flow}, reason="no_answer"
+        )
     logger.info(f"Playing rejection voicemail TwiML for queue {queue_id}")
     return _build_voicemail_twiml(queue_id, call_sid, from_number=from_number)
 

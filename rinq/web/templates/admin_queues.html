@@ -254,22 +254,23 @@
                         <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                             <input type="checkbox" name="voicemail_on_no_answer" value="1"
                                    {% if queue.voicemail_on_no_answer %}checked{% endif %}>
-                            <span style="font-weight: 600; font-size: 0.9em;">Send to voicemail if no one answers</span>
+                            <span style="font-weight: 600; font-size: 0.9em;">Send to {{ 'Stuart' if queue.hands_to_ai else 'voicemail' }} if no one answers</span>
                         </label>
                         <p class="text-muted" style="margin: 5px 0 0 22px; font-size: 0.85em;">
-                            When the team's phones ring out with no answer, send the caller straight to voicemail instead of holding them in the queue.
+                            When the team's phones ring out with no answer, send the caller straight to {{ 'Stuart, the AI receptionist,' if queue.hands_to_ai else 'voicemail' }} instead of holding them in the queue.
                             Use this for desk-phone teams who don't watch the dashboard. Leave off for teams who pick up held callers from the dashboard.
                         </p>
                     </div>
                     <div style="margin-bottom: 15px;">
-                        <label style="font-size: 0.85em; color: #666;">Send to voicemail after
+                        <label style="font-size: 0.85em; color: #666;">Send to {{ 'Stuart' if queue.hands_to_ai else 'voicemail' }} after
                             <input type="number" name="max_wait_plays" value="{{ queue.max_wait_time if queue.max_wait_time else '' }}"
                                    min="1" max="30" placeholder="—"
                                    style="width: 60px; padding: 4px 6px; border: 1px solid #ddd; border-radius: 4px;">
                             music plays
                         </label>
                         <p class="text-muted" style="margin: 5px 0 0 0; font-size: 0.85em;">
-                            Caller is sent to voicemail after the hold music has played this many times. Leave blank for no limit.
+                            Caller is sent to {{ 'Stuart, the AI receptionist,' if queue.hands_to_ai else 'voicemail' }} after the hold music has played this many times (about a minute each). Leave blank for no limit.
+                            {% if queue.hands_to_ai %}If Stuart is down, they get voicemail.{% endif %}
                         </p>
                     </div>
                     <div style="margin-bottom: 15px;">
