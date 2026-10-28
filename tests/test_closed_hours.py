@@ -65,6 +65,36 @@ def test_after_hours_to_stuart_skips_the_leave_a_message_recording(client, make_
     assert 'closed_leave_msg' not in twiml
 
 
+def test_after_hours_stuart_says_the_store_welcome_himself(client, make_store, frozen_clock):
+    """Derek 2026-10-29: Tina's recorded welcome then Stuart's voice is
+    jarring - when the call goes straight to him, he says the welcome."""
+    store = make_store(hours=STORE_HOURS, no_answer='ai_receptionist',
+                       closed_action='ai_receptionist').with_staff(PHIL)
+    welcome_id = store.db.create_audio_file({
+        'name': 'Welcome Shoalhaven', 'file_type': 'greeting',
+        'file_url': '/audio/welcome_shoal.mp3',
+        'tts_text': 'Welcome to Watson Blinds and Awnings Shoalhaven.'}, 'test')
+    store.db.update_call_flow(store.flow_id, {'greeting_audio_id': welcome_id}, 'test')
+    frozen_clock.set(datetime(2026, 10, 28, 17, 15))
+    twiml = ring(client, store)
+    assert ROSIE_ANSWER_URL in twiml
+    assert 'welcome_shoal' not in twiml
+    assert 'welcome=Welcome+to+Watson+Blinds+and+Awnings+Shoalhaven' in twiml
+
+
+def test_a_recorded_welcome_with_no_words_still_plays_before_stuart(client, make_store, frozen_clock):
+    store = make_store(hours=STORE_HOURS, no_answer='ai_receptionist',
+                       closed_action='ai_receptionist').with_staff(PHIL)
+    welcome_id = store.db.create_audio_file({
+        'name': 'Welcome (uploaded)', 'file_type': 'greeting',
+        'file_url': '/audio/welcome_upload.mp3'}, 'test')
+    store.db.update_call_flow(store.flow_id, {'greeting_audio_id': welcome_id}, 'test')
+    frozen_clock.set(datetime(2026, 10, 28, 17, 15))
+    twiml = ring(client, store)
+    assert 'welcome_upload' in twiml
+    assert 'welcome=' not in twiml
+
+
 def test_closed_action_message_plays_and_hangs_up(client, make_store):
     store = make_store(open=False, closed_action='message').with_staff(PHIL)
     twiml = ring(client, store)

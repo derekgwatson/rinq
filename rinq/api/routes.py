@@ -1076,11 +1076,25 @@ def voice_incoming():
     response_parts.append('    <Pause length="1"/>')
 
     # Play greeting if configured
+    greeting_play = None
+    greeting_text = ''
     if call_flow and call_flow.get('greeting_audio_id'):
         greeting = db.get_audio_file(call_flow['greeting_audio_id'])
         if greeting and greeting.get('file_url'):
             audio_url = _get_full_audio_url(greeting['file_url'])
-            response_parts.append(f'    <Play>{xml_escape(audio_url)}</Play>')
+            greeting_play = f'    <Play>{xml_escape(audio_url)}</Play>'
+            response_parts.append(greeting_play)
+            greeting_text = (greeting.get('tts_text') or '').strip()
+
+    def _welcome_for_stuart():
+        """A call going straight to Stuart: take the recorded welcome back out
+        and have him say it, so the caller doesn't hear one voice and then
+        another (Derek, 2026-10-29). Only a typed (text-to-speech) welcome -
+        an uploaded recording has no words to hand him, so it still plays."""
+        if greeting_play and greeting_text and greeting_play in response_parts:
+            response_parts.remove(greeting_play)
+            return {'welcome': greeting_text}
+        return None
 
     # Check business status (includes holiday detection)
     status = _check_business_status(schedule)
@@ -1241,7 +1255,7 @@ def voice_incoming():
                     )
                     return _redirect_to_ai_receptionist(
                         response_parts, called_number, from_number, call_sid, db, routing,
-                        reason="all_agents_busy"
+                        reason="all_agents_busy", extra_params=_welcome_for_stuart()
                     )
 
             if available_members:
@@ -1352,13 +1366,17 @@ def voice_incoming():
         elif action == 'ai_receptionist':
             # Stuart says the store's closed himself: the closed recording asks
             # for a message, which he'd then talk over. A holiday's own audio
-            # still plays (it says why, and when we reopen).
+            # still plays (it says why, and when we reopen) - after the
+            # recorded welcome, so then Tina's voice keeps both.
+            welcome = None
             if matched_holiday and matched_holiday.get('audio_id'):
                 response_parts.extend(_build_closed_sequence() or [])
+            else:
+                welcome = _welcome_for_stuart()
 
             return _redirect_to_ai_receptionist(
                 response_parts, called_number, from_number, call_sid, db, routing,
-                reason="closed"
+                reason="closed", extra_params=welcome
             )
 
         elif action == 'voicemail':
