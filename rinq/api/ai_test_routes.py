@@ -50,6 +50,19 @@ RING_SECONDS = 30
 
 TAKEOVER_PREFIX = 'aitake_'
 
+# Per-tenant bot_settings flag: an unanswered extension goes to Stuart, who
+# takes a message for that person. Default OFF (Derek 2026-10-28: "have it
+# ready, just not switched on"). Toggled at /admin/settings.
+EXTENSION_AI_KEY = 'extension_no_answer_ai'
+
+
+def extension_ai_enabled(db) -> bool:
+    try:
+        return db.get_bot_setting(EXTENSION_AI_KEY, '0') == '1'
+    except Exception as e:
+        logger.warning(f"Could not read {EXTENSION_AI_KEY} - treating as off: {e}")
+        return False
+
 # Stuart's own voice (ElevenLabs, recorded 2026-10-27): "Sorry about that, I'm
 # having a bit of trouble on my end. Please leave your name and number after
 # the tone, and someone from the team will call you back." Static audio is

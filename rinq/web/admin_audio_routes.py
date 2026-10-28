@@ -378,11 +378,35 @@ def register(bp):
         audio_files = db.get_audio_files()
 
         from rinq.services.transfer_service import TRANSFER_RING_ALL_KEY
+        from rinq.api.ai_test_routes import extension_ai_enabled
         return render_template('admin_settings.html',
                                settings=settings,
                                audio_files=audio_files,
                                transfer_ring_all=db.get_bot_setting(TRANSFER_RING_ALL_KEY, '0') == '1',
+                               extension_ai=extension_ai_enabled(db),
                                current_user=user)
+
+    @bp.route('/admin/settings/extension-ai', methods=['POST'])
+    @admin_required
+    def admin_settings_set_extension_ai():
+        """Turn "an unanswered extension goes to Stuart" on or off (per tenant)."""
+        from rinq.api.ai_test_routes import EXTENSION_AI_KEY
+
+        enable = request.form.get('extension_ai') == '1'
+        user = get_current_user()
+        db = get_db()
+        db.set_bot_setting(EXTENSION_AI_KEY, '1' if enable else '0', f'session:{user.email}')
+        db.log_activity(
+            'extension_ai_changed',
+            'on' if enable else 'off',
+            f"Unanswered extensions go to Stuart: turned {'on' if enable else 'off'}",
+            user.email,
+        )
+        if enable:
+            flash('Unanswered extensions now go to Stuart, who takes a message for the person.', 'success')
+        else:
+            flash('Unanswered extensions are back to how they were before.', 'success')
+        return redirect(url_for('web.admin_settings'))
 
     @bp.route('/admin/settings/transfer-ring-all', methods=['POST'])
     @admin_required
