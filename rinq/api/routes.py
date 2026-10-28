@@ -112,11 +112,17 @@ def _notify_ai_receptionist_call_ended(call_sid: str, call_status: str):
 
 
 def _redirect_to_ai_receptionist(response_parts, called_number, from_number, call_sid,
-                        db, routing, reason="no_answer"):
+                        db, routing, reason="no_answer", extra_params=None):
     """Build TwiML that redirects the caller to AI receptionist (AI receptionist).
 
     Passes caller context as query params for enrichment data.
     Falls back to voicemail if the AI receptionist is not configured.
+
+    extra_params: more query params for Rosie - for an unanswered extension,
+    for_email/for_name (who the call was for) and, ONLY for a call placed
+    from a logged-in Tina browser or SIP login, staff_email/staff_name.
+    Rosie trusts staff_* because Tina built the URL and Twilio signs it -
+    never set them from caller ID.
     """
     # Same lookup as the 9000 test line: the watson tenant runs with
     # RINQ_INTEGRATIONS=none, so the integration alone finds no URL and every
@@ -155,6 +161,9 @@ def _redirect_to_ai_receptionist(response_parts, called_number, from_number, cal
     if queue:
         params['queue_id'] = queue.get('id', '')
         params['queue_name'] = queue.get('name', '')
+    for key, value in (extra_params or {}).items():
+        if value:
+            params[key] = value
 
     redirect_url = f"{_ai_url}?{urlencode(params)}"
 
@@ -4081,7 +4090,8 @@ def voice_extension_dial():
             performed_by="twilio"
         )
         return _extension_fallback(flow_id, called_number, from_number, call_sid, db,
-                                   say_first=f"{staff_name} is currently unavailable.")
+                                   say_first=f"{staff_name} is currently unavailable.",
+                                   for_email=user_email, for_name=staff_name)
 
     # Build routing dict for _build_dial_targets
     ring_settings = db.get_user_ring_settings(user_email)
@@ -4093,7 +4103,8 @@ def voice_extension_dial():
 
     if not dial_targets:
         logger.warning(f"No dial targets for extension {digits} ({user_email})")
-        return _extension_fallback(flow_id, called_number, from_number, call_sid, db)
+        return _extension_fallback(flow_id, called_number, from_number, call_sid, db,
+                                   for_email=user_email, for_name=staff_name)
 
     # Conference-first: caller joins conference, ring target devices via REST API
     conference_name = f"call_{call_sid}"
@@ -4101,7 +4112,7 @@ def voice_extension_dial():
 
     _ring_targets_into_conference(dial_targets, conference_name, from_number, call_sid, base_url=config.webhook_base_url, db=db)
 
-    no_answer_url = f"{config.webhook_base_url}/api/voice/extension-no-answer?called={quote(called_number, safe='')}&from={quote(from_number, safe='')}&flow_id={flow_id}"
+    no_answer_url = f"{config.webhook_base_url}/api/voice/extension-no-answer?called={quote(called_number, safe='')}&from={quote(from_number, safe='')}&flow_id={flow_id}&ext={digits}"
     ringback_url = f"{config.webhook_base_url}/api/voice/ringback"
     response_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>']
     # Use pre-generated audio if available, otherwise fall back to <Say>
@@ -4166,7 +4177,9 @@ def voice_extension_no_answer():
                 return Response(twiml, mimetype='application/xml')
 
         # Not answered - execute fallback
-        return _extension_fallback(flow_id, called_number, from_number, call_sid, db)
+        for_email, for_name = _extension_person(request.args.get('ext', ''), db)
+        return _extension_fallback(flow_id, called_number, from_number, call_sid, db,
+                                   for_email=for_email, for_name=for_name)
     except Exception as e:
         logger.exception(f"Error in extension-no-answer: {e}")
         ext_msg = _say_or_play('ext_unavailable', 'Sorry, that extension is not available right now. Please try again later.')
@@ -4178,15 +4191,34 @@ def voice_extension_no_answer():
         return Response(twiml, mimetype='application/xml')
 
 
-def _extension_fallback(flow_id, called_number, from_number, call_sid, db, say_first=None):
+def _extension_person(extension: str, db) -> tuple:
+    """(email, friendly name) of whoever owns this extension, or (None, None)."""
+    if not extension:
+        return None, None
+    ext_record = db.get_staff_extension_by_ext(extension)
+    email = (ext_record or {}).get('email')
+    if not email:
+        return None, None
+    user = db.get_user_by_email(email)
+    return email, (user.get('friendly_name') if user else None) or email
+
+
+def _extension_fallback(flow_id, called_number, from_number, call_sid, db, say_first=None,
+                        for_email=None, for_name=None):
     """Execute the configured fallback action for extension directory.
 
     Args:
         say_first: Optional message to say before the fallback action (e.g. DND message).
+        for_email/for_name: whose extension it was - with the "unanswered
+            extensions go to Stuart" switch on, Stuart takes a message for them.
+            This caller came in from outside, so never as staff.
     """
     call_flow = db.get_call_flow(int(flow_id)) if flow_id and flow_id != 'None' else None
     fallback_action = (call_flow.get('extension_no_answer_action', 'voicemail')
                        if call_flow else 'voicemail')
+    from rinq.api.ai_test_routes import extension_ai_enabled
+    if for_email and extension_ai_enabled(db):
+        fallback_action = 'ai_receptionist'
 
     logger.info(f"Extension fallback: action={fallback_action}, flow_id={flow_id}")
 
@@ -4199,7 +4231,8 @@ def _extension_fallback(flow_id, called_number, from_number, call_sid, db, say_f
         routing = {'call_flow': call_flow} if call_flow else {}
         return _redirect_to_ai_receptionist(
             response_parts, called_number, from_number, call_sid, db, routing,
-            reason="extension_no_answer"
+            reason="extension_no_answer",
+            extra_params={'for_email': for_email, 'for_name': for_name}
         )
     elif fallback_action == 'queue' and call_flow and call_flow.get('open_queue_id'):
         # Route to the configured queue
@@ -5059,8 +5092,14 @@ def _handle_internal_extension_call(extension: str, from_identity: str, staff_em
 </Response>'''
         return Response(twiml, mimetype='application/xml')
 
+    from rinq.api.ai_test_routes import extension_ai_enabled
+    stuart = extension_ai_enabled(db)
+
     # Check DND
     if ext_record.get('dnd_enabled'):
+        if stuart:
+            return _internal_call_to_stuart(call_sid, staff_email, recipient_email, recipient_name, db,
+                                            say_first=f"{recipient_name} is currently unavailable.")
         twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Olivia-Neural">{xml_escape(recipient_name)} is currently unavailable.</Say>
@@ -5084,6 +5123,9 @@ def _handle_internal_extension_call(extension: str, from_identity: str, staff_em
     dial_targets = _build_dial_targets(routing)
 
     if not dial_targets:
+        if stuart:
+            return _internal_call_to_stuart(call_sid, staff_email, recipient_email, recipient_name, db,
+                                            say_first=f"{recipient_name} isn't available.")
         twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Olivia-Neural">{xml_escape(recipient_name)} has no devices available.</Say>
@@ -5132,7 +5174,10 @@ def _handle_internal_extension_call(extension: str, from_identity: str, staff_em
 
     # Caller joins conference — hears ringback until recipient answers
     ringback_url = f"{config.webhook_base_url}/api/voice/ringback"
-    dial_action_url = f"{config.webhook_base_url}/api/voice/extension-dial-status"
+    # ext + caller ride along for "unanswered extensions go to Stuart": the
+    # caller is the logged-in person resolved above, never a caller ID
+    dial_action_url = (f"{config.webhook_base_url}/api/voice/extension-dial-status?"
+                       + urlencode({'ext': extension, 'caller': staff_email or ''}))
     twiml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Dial action="{xml_escape(dial_action_url)}">
@@ -5167,11 +5212,35 @@ def extension_dial_status():
         return Response('<?xml version="1.0" encoding="UTF-8"?><Response/>', mimetype='application/xml')
 
     # Not answered — the conference ended without anyone joining
+    from rinq.api.ai_test_routes import extension_ai_enabled
+    for_email, for_name = _extension_person(request.args.get('ext', ''), db)
+    if for_email and extension_ai_enabled(db):
+        return _internal_call_to_stuart(call_sid, request.args.get('caller') or None,
+                                        for_email, for_name, db)
     twiml = '''<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say voice="Polly.Olivia-Neural">The call was not answered.</Say>
 </Response>'''
     return Response(twiml, mimetype='application/xml')
+
+
+def _internal_call_to_stuart(call_sid, staff_email, for_email, for_name, db, say_first=None):
+    """A colleague's call to an extension that wasn't answered: Stuart takes a
+    message for the person. The caller is verified staff - Tina resolved them
+    from their Tina login or SIP credential, not from a caller ID."""
+    response_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>']
+    if say_first:
+        response_parts.append(f'    <Say voice="Polly.Olivia-Neural">{xml_escape(say_first)}</Say>')
+    staff_name = None
+    if staff_email:
+        user = db.get_user_by_email(staff_email)
+        staff_name = (user.get('friendly_name') if user else None) or staff_email
+    return _redirect_to_ai_receptionist(
+        response_parts, '', '', call_sid, db, {},
+        reason="internal_extension_no_answer",
+        extra_params={'for_email': for_email, 'for_name': for_name,
+                      'staff_email': staff_email, 'staff_name': staff_name},
+    )
 
 
 @api_bp.route('/voice/outbound', methods=['POST'])
