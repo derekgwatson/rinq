@@ -107,3 +107,60 @@ def test_a_fresh_install_builds_both_databases(make_store):
     store = make_store()
     assert get_master_db().get_tenant('watson')
     assert store.db.get_call_routing(store.number)
+
+
+def _starts_waiting(client, store, sid='CAcustomer1', caller='+61400111222'):
+    """First hold-music cycle - this is where Tina records the waiting caller."""
+    r = client.post(f'/api/voice/queue/{store.queue_id}/wait',
+                    data={'CallSid': sid, 'QueueTime': '0', 'QueuePosition': '1',
+                          'From': caller, 'To': store.number})
+    assert r.status_code == 200, r.get_data(as_text=True)
+
+
+def _hold_runs_out(client, store, sid='CAcustomer1', caller='+61400111222'):
+    """Staff phones rang out and the max wait passed - Twilio's queue action."""
+    r = client.post(f'/api/voice/queue/{store.queue_id}/leave',
+                    data={'CallSid': sid, 'QueueResult': 'redirected', 'QueueTime': '68',
+                          'From': caller, 'To': store.number})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    return r.get_data(as_text=True)
+
+
+def test_hold_running_out_at_a_stuart_store_goes_to_stuart(client, make_store):
+    """The usual open-hours miss - staff on duty, nobody picks up. Shoalhaven's
+    first two pilot callers went to voicemail this way (2026-10-28)."""
+    store = make_store(no_answer='ai_receptionist').with_staff(PHIL)
+    assert '<Enqueue' in ring(client, store)
+    _starts_waiting(client, store)
+    twiml = _hold_runs_out(client, store)
+    assert ROSIE_ANSWER_URL in twiml
+    assert '<Record' not in twiml
+
+
+def test_hold_running_out_at_a_voicemail_store_stays_voicemail(client, make_store):
+    store = make_store(no_answer='voicemail').with_staff(PHIL)
+    ring(client, store)
+    _starts_waiting(client, store)
+    twiml = _hold_runs_out(client, store)
+    assert ROSIE_ANSWER_URL not in twiml
+    assert '<Record' in twiml
+
+
+def test_caller_who_asked_for_voicemail_gets_voicemail(client, make_store):
+    store = make_store(no_answer='ai_receptionist').with_staff(PHIL)
+    ring(client, store)
+    _starts_waiting(client, store)
+    store.db.update_queued_call_status('CAcustomer1', 'voicemail')
+    twiml = _hold_runs_out(client, store)
+    assert ROSIE_ANSWER_URL not in twiml
+    assert '<Record' in twiml
+
+
+def test_hold_running_out_with_rosie_down_is_voicemail(client, make_store, outside):
+    store = make_store(no_answer='ai_receptionist').with_staff(PHIL)
+    ring(client, store)
+    _starts_waiting(client, store)
+    outside.rosie_up = False
+    twiml = _hold_runs_out(client, store)
+    assert ROSIE_ANSWER_URL not in twiml
+    assert '<Record' in twiml
