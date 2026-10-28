@@ -164,3 +164,45 @@ def test_hold_running_out_with_rosie_down_is_voicemail(client, make_store, outsi
     twiml = _hold_runs_out(client, store)
     assert ROSIE_ANSWER_URL not in twiml
     assert '<Record' in twiml
+
+
+def _whole_team_rang_out(client, store, sid='CAcustomer1', caller='+61400111222'):
+    """Every phone rang out (queue set to give up on no answer) - Tina redirects
+    the caller here."""
+    r = client.post(f'/api/voice/queue/{store.queue_id}/rejected-voicemail',
+                    data={'CallSid': sid, 'From': caller, 'To': store.number})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    return r.get_data(as_text=True)
+
+
+def test_team_ringing_out_at_a_stuart_store_goes_to_stuart(client, make_store):
+    """Shoalhaven's queue gives up when every phone rings out - that sent 318
+    callers to voicemail before the pilot, and would have kept doing it."""
+    store = make_store(no_answer='ai_receptionist').with_staff(PHIL)
+    ring(client, store)
+    _starts_waiting(client, store)
+    twiml = _whole_team_rang_out(client, store)
+    assert ROSIE_ANSWER_URL in twiml
+    assert '<Record' not in twiml
+
+
+def test_team_ringing_out_at_a_voicemail_store_stays_voicemail(client, make_store):
+    store = make_store(no_answer='voicemail').with_staff(PHIL)
+    ring(client, store)
+    _starts_waiting(client, store)
+    twiml = _whole_team_rang_out(client, store)
+    assert ROSIE_ANSWER_URL not in twiml
+    assert '<Record' in twiml
+
+
+def test_stuart_queue_says_it_hands_over_to_stuart(make_store):
+    """Drives the Queues admin labels - 'Send to Stuart' vs 'Send to voicemail'."""
+    from rinq.api.routes import _ai_call_flow_for_queue
+    store = make_store(no_answer='ai_receptionist')
+    assert _ai_call_flow_for_queue(store.db, store.queue_id) is not None
+
+
+def test_voicemail_queue_says_voicemail(make_store):
+    from rinq.api.routes import _ai_call_flow_for_queue
+    store = make_store(no_answer='voicemail')
+    assert _ai_call_flow_for_queue(store.db, store.queue_id) is None

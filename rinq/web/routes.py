@@ -1259,6 +1259,7 @@ def admin_queues():
     import pytz
     from datetime import datetime as _dt
     from rinq.web.admin_queue_routes import _utc_to_local
+    from rinq.api.routes import _ai_call_flow_for_queue
 
     user = get_current_user()
     db = get_db()
@@ -1269,6 +1270,8 @@ def admin_queues():
     for queue in queues:
         queue['members'] = db.get_queue_members(queue['id'])
         queue['managers'] = db.get_queue_managers(queue['id'])
+        # Where an unanswered caller ends up, so the labels say Stuart, not voicemail
+        queue['hands_to_ai'] = _ai_call_flow_for_queue(db, queue['id']) is not None
         queue['paused_from_local'] = _utc_to_local(queue.get('paused_from'))
         queue['paused_until_local'] = _utc_to_local(queue.get('paused_until'))
         pf, pu = queue.get('paused_from'), queue.get('paused_until')
