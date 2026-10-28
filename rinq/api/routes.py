@@ -168,6 +168,8 @@ def _redirect_to_ai_receptionist(response_parts, called_number, from_number, cal
         'call_sid': call_sid,
         'caller_number': from_number,
         'called_number': called_number,
+        # Why Stuart has the call - 'closed' changes what he says
+        'reason': reason,
     }
     if queue:
         params['queue_id'] = queue.get('id', '')
@@ -1348,10 +1350,11 @@ def voice_incoming():
             response_parts.append('    </Dial>')
 
         elif action == 'ai_receptionist':
-            # Play closed message, then redirect to AI receptionist
-            closed_seq = _build_closed_sequence()
-            if closed_seq:
-                response_parts.extend(closed_seq)
+            # Stuart says the store's closed himself: the closed recording asks
+            # for a message, which he'd then talk over. A holiday's own audio
+            # still plays (it says why, and when we reopen).
+            if matched_holiday and matched_holiday.get('audio_id'):
+                response_parts.extend(_build_closed_sequence() or [])
 
             return _redirect_to_ai_receptionist(
                 response_parts, called_number, from_number, call_sid, db, routing,
@@ -1875,10 +1878,10 @@ def _handle_closed_call(response_parts, call_flow, schedule, matched_holiday,
         return Response('\n'.join(response_parts), mimetype='application/xml')
 
     if closure_action == 'ai_receptionist' and not is_test:
-        # Play closed message first, then redirect to AI receptionist
-        closed_seq = _build_closed_sequence()
-        if closed_seq:
-            response_parts.extend(closed_seq)
+        # Stuart says the store's closed himself (see voice_incoming); only a
+        # holiday/schedule closure's own audio plays first
+        if has_override_audio:
+            response_parts.extend(_build_closed_sequence())
 
         details = f"From: {from_number}, Status: CLOSED, Action: ai_receptionist"
         if matched_holiday:

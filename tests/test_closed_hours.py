@@ -48,6 +48,23 @@ def test_after_hours_never_reaches_stuart_even_on_a_stuart_store(client, make_st
     assert '<Record' in twiml
 
 
+def test_after_hours_to_stuart_skips_the_leave_a_message_recording(client, make_store, frozen_clock):
+    """Derek 2026-10-28: after-hours callers at a Stuart store go to Stuart.
+    He says the store's closed himself - the closed recording asks for a
+    message, so it must not play first - and Tina tells him why (reason=closed)."""
+    store = make_store(hours=STORE_HOURS, no_answer='ai_receptionist',
+                       closed_action='ai_receptionist').with_staff(PHIL)
+    audio_id = store.db.create_audio_file({'name': 'Closed, leave a message', 'file_type': 'closed',
+                                           'file_url': '/audio/closed_leave_msg.mp3'}, 'test')
+    store.db.update_call_flow(store.flow_id, {'closed_audio_id': audio_id}, 'test')
+    frozen_clock.set(datetime(2026, 10, 28, 17, 15))
+    twiml = ring(client, store)
+    assert ROSIE_ANSWER_URL in twiml
+    assert 'reason=closed' in twiml
+    assert '<Record' not in twiml
+    assert 'closed_leave_msg' not in twiml
+
+
 def test_closed_action_message_plays_and_hangs_up(client, make_store):
     store = make_store(open=False, closed_action='message').with_staff(PHIL)
     twiml = ring(client, store)
