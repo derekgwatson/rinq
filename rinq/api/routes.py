@@ -2179,6 +2179,34 @@ def queue_leave(queue_id):
             else:
                 logger.info(f"Queue {queue_id} max wait timeout for {call_sid} after {queue_time}s")
                 db.update_queued_call_status(call_sid, 'timeout')
+                # A store whose call flow says AI Receptionist gets Stuart when
+                # the hold runs out - this is the usual open-hours miss (staff
+                # on duty, nobody picks up). It went to voicemail regardless
+                # until 2026-10-28, so the Shoalhaven pilot's real callers
+                # never reached him.
+                queue = db.get_queue(queue_id)
+                call_flow = None
+                with db._get_conn() as conn:
+                    row = conn.execute(
+                        "SELECT id FROM call_flows WHERE open_queue_id = ? "
+                        "AND open_no_answer_action = 'ai_receptionist'",
+                        (queue_id,)
+                    ).fetchone()
+                if row:
+                    call_flow = db.get_call_flow(row['id'])
+                if call_flow:
+                    called_number = (queued_call or {}).get('called_number') or request.form.get('To', '')
+                    db.log_activity(
+                        action="call_queue_timeout",
+                        target=f"queue_{queue_id}",
+                        details=f"Max wait exceeded after {queue_time}s — sending to AI receptionist",
+                        performed_by="twilio"
+                    )
+                    response_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>']
+                    return _redirect_to_ai_receptionist(
+                        response_parts, called_number, request.form.get('From', ''), call_sid, db,
+                        {'queue': queue, 'call_flow': call_flow}, reason="no_answer"
+                    )
                 _queue_call_log_update(db, call_sid, {
                     'status': 'voicemail',
                     'ring_seconds': ring_seconds,
