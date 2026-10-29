@@ -33,6 +33,7 @@ def test_feed_leaves_out_voicemail_and_says_whose_store(client, recordings, monk
     assert [x['recording_sid'] for x in rows] == ['RE1', 'RE3']
     assert rows[0]['queue_name'] == 'Shoalhaven' and rows[0]['is_stuart'] == 1
     assert rows[0]['has_audio'] == 1 and rows[1]['has_audio'] == 0
+    assert rows[0]['call_to'] == '+61244181100' and rows[0]['call_from'] == '+61400111222'
 
     after = client.get(f'/api/recordings/feed?tenant={recordings.tenant_id}&after_id={rows[0]["id"]}',
                        headers={**PROXIED, 'X-API-Key': KEY}).get_json()
