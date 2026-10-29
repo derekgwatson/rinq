@@ -104,3 +104,11 @@ def test_a_manager_sees_customer_and_staff_on_the_page(client, make_store):
     assert '<th>Customer</th>' in html and '<th>Staff</th>' in html
     row = html[html.index('class="rec-row"'):html.index('class="detail-row"')]
     assert 'Kay Burman' in row and '+61400111222' in row and 'Phil Rivera' in row
+
+
+def test_our_own_store_line_is_never_named_as_a_customer(make_store, monkeypatch):
+    store = make_store()
+    clara = _Clara({store.number: 'Alan Sheridan'})
+    monkeypatch.setattr(integrations, '_customer_lookup', clara)
+    assert rs.customer_name_for_number(store.db, store.number) is None
+    assert clara.asked == []
