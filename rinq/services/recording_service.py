@@ -98,6 +98,44 @@ def customer_leg_for_conference(conference_name: str, joining_call_sid: str,
     return None
 
 
+def is_just_a_number(name) -> bool:
+    """A 'name' that is really a phone number ('+61262583371') - outbound
+    recordings were logged with the number in caller_name."""
+    return not name or not any(c.isalpha() for c in str(name))
+
+
+def customer_display(rec: dict) -> dict:
+    """The customer side of a recording for the list: their number (the
+    other end from the staff member) and their name, if we know one."""
+    number = rec.get('to_number') if rec.get('call_type') == 'outbound' else rec.get('from_number')
+    name = rec.get('caller_name')
+    return {'customer_number': number or None,
+            'customer_name': None if is_just_a_number(name) else name}
+
+
+def customer_name_for_number(db, number: str) -> str | None:
+    """Who a customer number belongs to: Clara first, then Tina's own
+    address book. None when nobody knows - never the number itself."""
+    from rinq.services.phone import is_lookupable_number, normalize_au_mobile
+    if not number or not is_lookupable_number(number):
+        return None
+    from rinq.integrations import get_customer_lookup
+    lookup = get_customer_lookup()
+    if lookup:
+        try:
+            found = lookup.find_by_phone(number)
+            if found and found.get('name'):
+                return found['name']
+        except Exception as e:
+            logger.warning(f"Customer lookup failed for {number}: {e}")
+    mobile = normalize_au_mobile(number)
+    if mobile:
+        entry = db.get_address_book_by_mobile(mobile)
+        if entry and entry.get('name'):
+            return entry['name']
+    return None
+
+
 def get_retention_days(db) -> int:
     """Read the tenant's local-cache retention window in days.
 

@@ -95,7 +95,8 @@ def register(bp):
         Downloads recording, emails to Google Group, and logs it.
         No auth required — Twilio calls this directly.
         """
-        from rinq.services.recording_service import recording_service
+        from rinq.services.recording_service import (
+            recording_service, is_just_a_number, customer_name_for_number)
         from rinq.services.twilio_service import get_twilio_service
 
         recording_sid = request.form.get('RecordingSid')
@@ -221,6 +222,13 @@ def register(bp):
                 if not staff_email and from_number and from_number.startswith('client:'):
                     staff_email, staff_name = _normalize_staff_identifier(from_number)
                     call_type = 'outbound'
+
+        # The customer's name for the recordings list. Inbound calls usually
+        # carry it from the queue; outbound ones only ever had the number
+        # (Derek 2026-10-30: "I only see the agent")
+        if call_type in ('inbound', 'outbound') and is_just_a_number(caller_name):
+            customer_number = to_number if call_type == 'outbound' else from_number
+            caller_name = customer_name_for_number(db, customer_number) or caller_name
 
         result = recording_service.process_completed_recording(
             recording_sid=recording_sid,

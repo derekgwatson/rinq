@@ -147,6 +147,25 @@ input:checked + .toggle-slider:before {
     text-decoration: underline;
 }
 
+.customer-cell {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.customer-cell .customer-name {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.customer-cell .customer-number {
+    display: block;
+    font-size: 0.8em;
+    color: var(--text-muted, #6c757d);
+}
+
 .staff-cell {
     max-width: 150px;
     overflow: hidden;
@@ -299,7 +318,8 @@ input:checked + .toggle-slider:before {
             <tr>
                 <th>Time</th>
                 <th>Type</th>
-                <th>Who</th>
+                <th>Customer</th>
+                <th>Staff</th>
                 <th>Duration</th>
                 <th></th>
             </tr>
@@ -321,14 +341,17 @@ input:checked + .toggle-slider:before {
                     <span class="call-type-badge unknown">{{ rec.call_type or 'Unknown' }}</span>
                     {% endif %}
                 </td>
-                <td style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                    {% if can_filter_staff and filter_staff != 'mine' %}
-                        {{ rec.staff_name or (rec.staff_email.split('@')[0] if rec.staff_email else ('Stuart' if rec.is_stuart else '-')) }}
-                    {% elif rec.call_type == 'outbound' %}
-                        {{ rec.caller_name or rec.to_number or '-' }}
+                {# Customer and staff side by side - managers used to see only the staff member #}
+                <td class="customer-cell">
+                    {% if rec.customer_name %}
+                        <span class="customer-name">{{ rec.customer_name }}</span>
+                        {% if rec.customer_number %}<span class="customer-number">{{ rec.customer_number }}</span>{% endif %}
                     {% else %}
-                        {{ rec.caller_name or rec.from_number or '-' }}
+                        {{ rec.customer_number or '-' }}
                     {% endif %}
+                </td>
+                <td class="staff-cell">
+                    {{ rec.staff_name or (rec.staff_email.split('@')[0] if rec.staff_email else ('Stuart' if rec.is_stuart else '-')) }}
                 </td>
                 <td class="duration-cell">
                     {% set mins = (rec.duration_seconds // 60)|int %}
@@ -349,7 +372,7 @@ input:checked + .toggle-slider:before {
             </tr>
             <!-- Detail row (hidden by default) -->
             <tr class="detail-row" id="detail-{{ rec.recording_sid }}" style="display: none;">
-                <td colspan="5">
+                <td colspan="6">
                     <div class="detail-grid">
                         {% if rec.caller_name %}
                         <span class="detail-label">Caller</span>
@@ -366,7 +389,7 @@ input:checked + .toggle-slider:before {
             </tr>
             <!-- Audio player row (hidden by default) -->
             <tr class="audio-player-row" id="player-row-{{ rec.recording_sid }}" style="display: none;">
-                <td colspan="5">
+                <td colspan="6">
                     <div class="audio-player-container">
                         <audio id="audio-{{ rec.recording_sid }}" controls preload="none">
                             <source src="/api/recordings/{{ rec.recording_sid }}/audio" type="audio/mpeg">
