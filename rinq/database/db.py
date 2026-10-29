@@ -955,7 +955,10 @@ class Database(StatsMixin, CallLogMixin):
 
         Voicemails are left out (they are already transcribed onto a ticket).
         Joined to call_log for the store (queue_name) and customer, which the
-        recording row doesn't carry. has_audio: a playable copy exists (the
+        recording row doesn't carry. call_from / call_to are the call's own
+        numbers: on an outbound call recording_log.from_number is the staff
+        member's client identity, and call_from is the caller ID the customer
+        saw - the only clue to the store, since outbound calls have no queue. has_audio: a playable copy exists (the
         local cache or Drive) - the Google Groups archive can't be played.
         """
         with self._get_conn() as conn:
@@ -967,7 +970,8 @@ class Database(StatsMixin, CallLogMixin):
                        (recording_log.drive_file_id IS NOT NULL AND recording_log.drive_file_id != ''
                         OR recording_log.local_file_path IS NOT NULL AND recording_log.local_file_path != '') AS has_audio,
                        cl.queue_name, cl.direction, cl.status AS call_status,
-                       cl.customer_name, cl.agent_email
+                       cl.customer_name, cl.agent_email,
+                       cl.from_number AS call_from, cl.to_number AS call_to
                 FROM recording_log
                 LEFT JOIN call_log cl ON cl.call_sid = recording_log.call_sid
                 WHERE recording_log.id > ? AND (recording_log.call_type IS NULL OR recording_log.call_type != 'voicemail')
