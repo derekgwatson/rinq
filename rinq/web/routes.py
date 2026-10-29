@@ -1849,7 +1849,7 @@ def recordings():
     # Get user's recording preference. When the tenant records everything the
     # personal preference no longer decides anything, so the page says so
     # rather than showing a switch that does nothing.
-    from rinq.services.recording_service import record_all_enabled
+    from rinq.services.recording_service import record_all_enabled, customer_display
     tenant_records_all = record_all_enabled(db)
     recording_enabled = db.get_user_recording_default(user.email)
 
@@ -1880,6 +1880,8 @@ def recordings():
         staff_emails=staff_emails,
         phone_number=filter_phone or None,
     )
+    for rec in recordings_list:
+        rec.update(customer_display(rec))
 
     return render_template('recordings.html',
                          recordings=recordings_list,
