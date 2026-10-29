@@ -172,6 +172,47 @@ def last_called_by(number: str, db, viewer_email: str | None = None) -> dict | N
     return {'email': email, 'name': name, 'label': label, 'when': when}
 
 
+def called_by_for_stuart(from_number: str, db) -> dict:
+    """Who from the team rang this caller recently, as query params for Stuart.
+
+    About 1 in 8 Shoalhaven callers open with "I had a missed call from you"
+    (call scan, 2026-10-29), and Stuart could only say he didn't know. Same
+    record and window as the press-1 offer. Tina builds Stuart's URL and
+    Twilio signs it, so Rosie can trust these like staff_*. {} when nobody did.
+    """
+    from datetime import datetime
+    import pytz
+    from rinq.database.db import _parse_dt
+
+    if not from_number or not from_number.startswith('+'):
+        return {}
+    call = db.get_recent_outbound_call(from_number, days=CALLBACK_WINDOW_DAYS)
+    if not call:
+        return {}
+    email = call['agent_email']
+    # A staff member who rang their own mobile isn't calling themselves back
+    own = db.get_address_book_by_mobile(from_number)
+    if own and (own.get('email') or '').lower() == email.lower():
+        return {}
+
+    when = ''
+    try:
+        tz = pytz.timezone('Australia/Sydney')
+        at = _parse_dt(call['started_at']).astimezone(tz)
+        days = (datetime.now(tz).date() - at.date()).days
+        h = at.hour % 12 or 12
+        clock = f"{h}:{at.minute:02d}{'am' if at.hour < 12 else 'pm'}"
+        day = ('today' if days <= 0 else 'yesterday' if days == 1
+               else f"on {at:%A} {at.day} {at:%B}")
+        when = f"{day} at {clock}"
+    except Exception as e:
+        logger.debug(f"called_by_for_stuart: couldn't date {call.get('started_at')}: {e}")
+
+    return {'called_by_email': email,
+            'called_by_name': _first_name(email, db) or email.split('@')[0].split('.')[0].title(),
+            'called_by_when': when}
+
+
 def offer_twiml(person: dict, called_number: str, from_number: str) -> Response:
     """The "press 1" offer. No key falls through to the normal flow."""
     choice_url = (

@@ -5,6 +5,7 @@ Shoalhaven's real hours (weekdays 9-4:30) are used, and the frozen clock is
 moved to either side of them. Naive times are Sydney local.
 """
 
+import re
 from datetime import datetime
 
 import pytest
@@ -179,3 +180,33 @@ def test_holiday_audio_is_played(client, make_store):
     twiml = ring(client, store)
     assert 'closed_sat.mp3' in twiml
     assert '<Record' in twiml
+
+
+def test_stuart_is_told_who_from_the_team_rang_the_caller(client, make_store, frozen_clock):
+    """1 in 8 callers open with "I had a missed call from you" (call scan,
+    2026-10-29) - Stuart should know it was Phil, and when."""
+    store = make_store(hours=STORE_HOURS, no_answer='ai_receptionist',
+                       closed_action='ai_receptionist').with_staff(PHIL)
+    store.db.upsert_user({'sid': 'USphil', 'username': 'phil', 'friendly_name': 'Phil Smith',
+                          'staff_email': PHIL, 'is_active': 1, 'synced_at': '2026-10-28'})
+    store.db.log_call({'call_sid': 'CAout', 'direction': 'outbound', 'from_number': store.number,
+                       'to_number': '+61400111222', 'agent_email': PHIL, 'status': 'completed',
+                       'started_at': _utc_minutes_ago(5)})
+    frozen_clock.set(datetime(2026, 10, 28, 17, 15))
+    twiml = ring(client, store)
+    assert 'called_by_name=Phil' in twiml
+    assert 'called_by_email=phil%40watsonblinds.com.au' in twiml
+    # "today at 3:15pm" - the date wording runs on the real clock
+    assert re.search(r'called_by_when=(today|yesterday)\+at\+\d', twiml)
+
+
+def _utc_minutes_ago(n):
+    from datetime import timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(minutes=n)).strftime('%Y-%m-%d %H:%M:%S')
+
+
+def test_nobody_rang_means_nothing_extra_for_stuart(client, make_store, frozen_clock):
+    store = make_store(hours=STORE_HOURS, no_answer='ai_receptionist',
+                       closed_action='ai_receptionist').with_staff(PHIL)
+    frozen_clock.set(datetime(2026, 10, 28, 17, 15))
+    assert 'called_by' not in ring(client, store)

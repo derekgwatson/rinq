@@ -177,6 +177,14 @@ def _redirect_to_ai_receptionist(response_parts, called_number, from_number, cal
     for key, value in (extra_params or {}).items():
         if value:
             params[key] = value
+    # Who from the team rang them lately - "I had a missed call from you".
+    # Not for a verified staff caller, who isn't returning a customer call.
+    if not params.get('staff_email'):
+        try:
+            from rinq.api.callback_routes import called_by_for_stuart
+            params.update(called_by_for_stuart(from_number, db))
+        except Exception as e:
+            logger.warning(f"AI receptionist: couldn't find who rang {from_number}: {e}")
 
     redirect_url = f"{_ai_url}?{urlencode(params)}"
 
