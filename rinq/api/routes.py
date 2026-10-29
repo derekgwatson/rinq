@@ -186,7 +186,22 @@ def _redirect_to_ai_receptionist(response_parts, called_number, from_number, cal
         except Exception as e:
             logger.warning(f"AI receptionist: couldn't find who rang {from_number}: {e}")
 
-    redirect_url = f"{_ai_url}?{urlencode(params)}"
+    # Rosie has no Twilio account of its own - record from here, as the test
+    # line does (a Stuart call isn't a conference, so nothing else records it).
+    # A call that is still ringing can't be recorded yet ("not eligible for
+    # recording" - every after-hours call, which no one has answered), so
+    # then the caller goes via /voice/stuart-record, which starts it once
+    # Twilio has answered and passes them straight on to Stuart.
+    recording = None
+    try:
+        from rinq.services.recording_service import recording_service
+        recording = recording_service.start_recording(call_sid)
+    except Exception as e:
+        logger.warning(f"AI receptionist: couldn't start recording for {call_sid}: {e}")
+    if recording and recording.get('success'):
+        redirect_url = f"{_ai_url}?{urlencode(params)}"
+    else:
+        redirect_url = f"{config.webhook_base_url}/api/voice/stuart-record?{urlencode(params)}"
 
     response_parts.append(f'    <Redirect method="POST">{xml_escape(redirect_url)}</Redirect>')
     response_parts.append('</Response>')
@@ -197,14 +212,6 @@ def _redirect_to_ai_receptionist(response_parts, called_number, from_number, cal
         'status': 'ai_answered',
     })
 
-    # Rosie has no Twilio account of its own - record from here, as the test
-    # line does (a Stuart call isn't a conference, so nothing else records it)
-    try:
-        from rinq.services.recording_service import recording_service
-        recording_service.start_recording(call_sid)
-    except Exception as e:
-        logger.warning(f"AI receptionist: couldn't start recording for {call_sid}: {e}")
-
     db.log_activity(
         action="call_to_ai_receptionist",
         target=called_number,
@@ -214,6 +221,34 @@ def _redirect_to_ai_receptionist(response_parts, called_number, from_number, cal
 
     logger.info(f"Redirecting call {call_sid} to AI receptionist (reason: {reason})")
     return Response('\n'.join(response_parts), mimetype='application/xml')
+
+
+@api_bp.route('/voice/stuart-record', methods=['POST'])
+def voice_stuart_record():
+    """Start recording a call on its way to Stuart, then hand it to him.
+
+    Only reached when the recording couldn't start while the call was still
+    ringing (after hours). By the time Twilio fetches this the call is
+    answered, so it can be recorded. The query string is Stuart's own
+    parameters, passed through untouched - the Redirect only ever goes to
+    Stuart's URL, never to one taken from the request.
+    """
+    from rinq.api.ai_test_routes import rosie_answer_url
+    from rinq.services.recording_service import recording_service
+
+    call_sid = request.form.get('CallSid', '')
+    try:
+        result = recording_service.start_recording(call_sid)
+        if not result.get('success'):
+            logger.warning(f"Stuart call {call_sid} still not recordable: {result.get('error')}")
+    except Exception as e:
+        logger.warning(f"Stuart call {call_sid}: couldn't start recording: {e}")
+    ai_url = _get_ai_receptionist_url() or rosie_answer_url()
+    redirect_url = f"{ai_url}?{urlencode(request.args.to_dict())}"
+    twiml = ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>',
+             f'    <Redirect method="POST">{xml_escape(redirect_url)}</Redirect>',
+             '</Response>']
+    return Response('\n'.join(twiml), mimetype='application/xml')
 
 
 # =============================================================================

@@ -126,6 +126,12 @@ from rinq.database.stats_mixin import StatsMixin
 from rinq.database.call_log_mixin import CallLogMixin
 
 
+
+# A recording of a call Stuart (the AI receptionist) took - Tina marks the call
+# ai_receptionist when it hands the caller to him
+_IS_STUART_SQL = ("EXISTS (SELECT 1 FROM call_log cl WHERE cl.call_sid = recording_log.call_sid "
+                  "AND cl.call_type = 'ai_receptionist')")
+
 class Database(StatsMixin, CallLogMixin):
     """SQLite database for Rinq."""
 
@@ -958,7 +964,10 @@ class Database(StatsMixin, CallLogMixin):
             phone_number: If provided, filter by phone number (normalized match)
         """
         with self._get_conn() as conn:
-            query = "SELECT * FROM recording_log WHERE 1=1"
+            # is_stuart: Stuart (the AI receptionist) had the call - such a row
+            # carries no staff member, so on its own it reads as an anonymous
+            # inbound call
+            query = f"SELECT recording_log.*, {_IS_STUART_SQL} AS is_stuart FROM recording_log WHERE 1=1"
             params = []
 
             if staff_emails:
@@ -966,7 +975,9 @@ class Database(StatsMixin, CallLogMixin):
                 query += f" AND staff_email IN ({placeholders})"
                 params.extend(e.lower() for e in staff_emails)
 
-            if call_type:
+            if call_type == 'stuart':
+                query += f" AND {_IS_STUART_SQL}"
+            elif call_type:
                 query += " AND call_type = ?"
                 params.append(call_type)
 
