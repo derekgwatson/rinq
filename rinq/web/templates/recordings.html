@@ -123,6 +123,11 @@ input:checked + .toggle-slider:before {
     color: #004085;
 }
 
+.call-type-badge.stuart {
+    background: #e9e3f7;
+    color: #4b2e83;
+}
+
 .call-type-badge.unknown {
     background: #e9ecef;
     color: #495057;
@@ -277,6 +282,7 @@ input:checked + .toggle-slider:before {
             <option value="">All</option>
             <option value="inbound" {% if filter_type == 'inbound' %}selected{% endif %}>Inbound</option>
             <option value="outbound" {% if filter_type == 'outbound' %}selected{% endif %}>Outbound</option>
+            <option value="stuart" {% if filter_type == 'stuart' %}selected{% endif %}>Stuart</option>
         </select>
         {% if filter_staff == 'mine' %}<input type="hidden" name="staff" value="mine">{% endif %}
         {% if can_filter_staff %}
@@ -300,12 +306,14 @@ input:checked + .toggle-slider:before {
         </thead>
         <tbody id="recordingsTable">
             {% for rec in recordings %}
-            <tr class="rec-row" data-searchable="{{ (rec.caller_name or '')|lower }} {{ (rec.from_number or '')|lower }} {{ (rec.to_number or '')|lower }} {{ (rec.staff_name or '')|lower }} {{ (rec.staff_email or '')|lower }}" data-type="{{ rec.call_type or '' }}" onclick="toggleDetail('{{ rec.recording_sid }}')">
+            <tr class="rec-row" data-searchable="{{ (rec.caller_name or '')|lower }} {{ (rec.from_number or '')|lower }} {{ (rec.to_number or '')|lower }} {{ (rec.staff_name or '')|lower }} {{ (rec.staff_email or '')|lower }}{% if rec.is_stuart %} stuart{% endif %}" data-type="{{ rec.call_type or '' }}" onclick="toggleDetail('{{ rec.recording_sid }}')">
                 <td class="text-muted" style="white-space: nowrap;" title="{{ rec.created_at }}">
                     {{ time_ago(rec.created_at) }}
                 </td>
                 <td>
-                    {% if rec.call_type == 'inbound' %}
+                    {% if rec.is_stuart %}
+                    <span class="call-type-badge stuart">Stuart</span>
+                    {% elif rec.call_type == 'inbound' %}
                     <span class="call-type-badge inbound">Inbound</span>
                     {% elif rec.call_type == 'outbound' %}
                     <span class="call-type-badge outbound">Outbound</span>
@@ -315,7 +323,7 @@ input:checked + .toggle-slider:before {
                 </td>
                 <td style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
                     {% if can_filter_staff and filter_staff != 'mine' %}
-                        {{ rec.staff_name or (rec.staff_email.split('@')[0] if rec.staff_email else '-') }}
+                        {{ rec.staff_name or (rec.staff_email.split('@')[0] if rec.staff_email else ('Stuart' if rec.is_stuart else '-')) }}
                     {% elif rec.call_type == 'outbound' %}
                         {{ rec.caller_name or rec.to_number or '-' }}
                     {% else %}

@@ -130,7 +130,15 @@ def outside(monkeypatch):
     monkeypatch.setattr(caller_enrichment, 'get_enrichment_service',
                         lambda: SimpleNamespace(enrich_caller=lambda number: {}))
     from rinq.services import recording_service as rec
-    monkeypatch.setattr(rec.recording_service, 'start_recording', lambda sid: None)
+    # Recording starts fine unless a test says otherwise (outside.recordable)
+    state.recordable = True
+    state.recordings_started = []
+
+    def start_recording(sid):
+        state.recordings_started.append(sid)
+        return ({'success': True, 'recording_sid': f'RE{sid}'} if state.recordable
+                else {'success': False, 'error': 'Requested resource is not eligible for recording'})
+    monkeypatch.setattr(rec.recording_service, 'start_recording', start_recording)
     return state
 
 
