@@ -351,6 +351,62 @@ def register(bp):
 
         return jsonify({"error": "Recording not available"}), 404
 
+    # --- Audrey (bot-team call analysis): every recording, bot-to-bot only ---
+    #
+    # A logged-in user must never reach these: they ignore reports_to (who
+    # may hear whose calls), which only the Recordings page enforces. And an
+    # API-key caller has no tenant, so the tenant is named in the request.
+
+    def _bot_tenant():
+        """(tenant, error_response). Bot key or unix socket only."""
+        from flask import g
+        from rinq.database.master import get_master_db
+        if getattr(g, 'api_caller', None) not in ('bot', 'local'):
+            return None, (jsonify({"error": "Bot access only"}), 403)
+        tenant = get_master_db().get_tenant(request.args.get('tenant', ''))
+        if not tenant:
+            return None, (jsonify({"error": "Unknown tenant"}), 404)
+        g.tenant = tenant
+        return tenant, None
+
+    @bp.route('/recordings/feed', methods=['GET'])
+    @api_or_session_auth
+    def recording_feed():
+        """Recordings after ?after_id=, oldest first (?limit=, max 500), no voicemails."""
+        _, error = _bot_tenant()
+        if error:
+            return error
+        after_id = request.args.get('after_id', 0, type=int)
+        limit = max(1, min(request.args.get('limit', 200, type=int), 500))
+        rows = get_db().get_recording_feed(after_id=after_id, limit=limit)
+        return jsonify({"recordings": rows, "count": len(rows),
+                        "next_after_id": rows[-1]['id'] if rows else after_id})
+
+    @bp.route('/recordings/<recording_sid>/export-audio', methods=['GET'])
+    @api_or_session_auth
+    def export_recording_audio(recording_sid: str):
+        """The recording's MP3 for analysis. Unlike /audio, a Drive copy is
+        streamed WITHOUT being cached locally, and last_accessed_at is left
+        alone - a backfill would otherwise fill this server's disk and stop
+        the purge from ever evicting anything."""
+        from flask import Response
+        from rinq.services.recording_service import recording_service
+
+        _, error = _bot_tenant()
+        if error:
+            return error
+        recording = get_db().get_recording_by_sid(recording_sid)
+        if not recording:
+            return jsonify({"error": "Recording not found"}), 404
+        file_path = recording_service.get_recording_file_path(recording_sid)
+        if file_path:
+            return send_file(file_path, mimetype='audio/mpeg')
+        if recording.get('drive_file_id'):
+            audio = recording_service.fetch_from_drive(recording['drive_file_id'])
+            if audio:
+                return Response(audio, mimetype='audio/mpeg')
+        return jsonify({"error": "Recording not available"}), 404
+
     @bp.route('/recordings/purge', methods=['POST'])
     @api_or_session_auth
     def purge_stale_recordings():

@@ -950,6 +950,31 @@ class Database(StatsMixin, CallLogMixin):
             """, (recording_sid,)).fetchone()
             return dict(row) if row else None
 
+    def get_recording_feed(self, after_id: int = 0, limit: int = 200) -> list[dict]:
+        """Recordings after `after_id`, oldest first, for Audrey (call analysis).
+
+        Voicemails are left out (they are already transcribed onto a ticket).
+        Joined to call_log for the store (queue_name) and customer, which the
+        recording row doesn't carry. has_audio: a playable copy exists (the
+        local cache or Drive) - the Google Groups archive can't be played.
+        """
+        with self._get_conn() as conn:
+            rows = conn.execute(f"""
+                SELECT recording_log.id, recording_log.recording_sid, recording_log.call_sid, recording_log.call_type,
+                       recording_log.from_number, recording_log.to_number, recording_log.duration_seconds, recording_log.created_at,
+                       recording_log.staff_email, recording_log.staff_name, recording_log.caller_name,
+                       {_IS_STUART_SQL} AS is_stuart,
+                       (recording_log.drive_file_id IS NOT NULL AND recording_log.drive_file_id != ''
+                        OR recording_log.local_file_path IS NOT NULL AND recording_log.local_file_path != '') AS has_audio,
+                       cl.queue_name, cl.direction, cl.status AS call_status,
+                       cl.customer_name, cl.agent_email
+                FROM recording_log
+                LEFT JOIN call_log cl ON cl.call_sid = recording_log.call_sid
+                WHERE recording_log.id > ? AND (recording_log.call_type IS NULL OR recording_log.call_type != 'voicemail')
+                ORDER BY recording_log.id LIMIT ?
+            """, (after_id, limit)).fetchall()
+            return [dict(r) for r in rows]
+
     def get_recording_log(self, limit: int = 100, call_type: str = None,
                           exclude_voicemail: bool = False,
                           staff_emails: list[str] = None,
