@@ -83,6 +83,22 @@ def test_after_hours_stuart_says_the_store_welcome_himself(client, make_store, f
     assert 'welcome=Welcome+to+Watson+Blinds+and+Awnings+Shoalhaven' in twiml
 
 
+def test_stuart_is_told_when_the_store_next_opens_skipping_holidays(client, make_store, frozen_clock):
+    """Derek 2026-10-30: Stuart's own copy of the hours doesn't know holidays
+    (#100 promised "9am tomorrow" on a Friday night). Tina's schedule does, so
+    Tina tells him - here Monday is a holiday, so it's Tuesday."""
+    from urllib.parse import unquote_plus
+    store = make_store(hours=STORE_HOURS, no_answer='ai_receptionist',
+                       closed_action='ai_receptionist').with_staff(PHIL)
+    store.db.add_schedule_holiday(store.schedule_id, 'Show day', '2026-11-02', False, 'test')
+    frozen_clock.set(datetime(2026, 10, 30, 19, 40))  # Friday night
+    twiml = unquote_plus(ring(client, store))
+    assert 'next_open=Tuesday 3 November at 9am' in twiml
+
+    frozen_clock.set(datetime(2026, 10, 28, 17, 15))  # Wednesday evening
+    assert 'next_open=tomorrow (Thursday) at 9am' in unquote_plus(ring(client, store, sid='CAcustomer2'))
+
+
 def test_a_recorded_welcome_with_no_words_still_plays_before_stuart(client, make_store, frozen_clock):
     store = make_store(hours=STORE_HOURS, no_answer='ai_receptionist',
                        closed_action='ai_receptionist').with_staff(PHIL)

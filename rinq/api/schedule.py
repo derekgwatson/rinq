@@ -107,9 +107,30 @@ def get_next_open_time(schedule: dict, now, tz) -> dict | None:
         else:
             day_label = check_date.strftime('%A')
 
-        return {'day_label': day_label, 'time': time_spoken, 'time_raw': open_time_str}
+        return {'day_label': day_label, 'time': time_spoken, 'time_raw': open_time_str,
+                'date': check_date.strftime('%Y-%m-%d')}
 
     return None
+
+
+def next_open_for_stuart(next_open: dict | None) -> str:
+    """When the store next opens, written for Stuart to say - "tomorrow
+    (Saturday) at 9am", "Monday 5 January at 9am". Tina's schedule knows the
+    holidays and closures; Stuart's own copy of the hours doesn't, so he uses
+    this when it's sent (Derek, 2026-10-30). "" when there's nothing to send."""
+    if not next_open or not next_open.get('date') or not next_open.get('time_raw'):
+        return ""
+    try:
+        when = datetime.strptime(next_open['date'], '%Y-%m-%d')
+        hour, minute = (int(x) for x in next_open['time_raw'].split(':'))
+    except (ValueError, TypeError):
+        return ""
+    time_text = f"{hour % 12 or 12}{f':{minute:02d}' if minute else ''}{'am' if hour < 12 else 'pm'}"
+    weekday = when.strftime('%A')
+    label = next_open.get('day_label')
+    if label in ('later today', 'tomorrow'):
+        return f"{label} ({weekday}) at {time_text}"
+    return f"{weekday} {when.day} {when.strftime('%B')} at {time_text}"
 
 
 def check_business_status(schedule: dict) -> dict:
