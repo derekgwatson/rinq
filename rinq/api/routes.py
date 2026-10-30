@@ -2426,6 +2426,9 @@ def call_status_callback():
             # Same for an outbound call the customer never picked up
             if existing in NOT_ANSWERED_STATUSES or existing == 'voicemail':
                 mapped_status = existing
+            # Stuart answered it - keep it his, not a staff member's
+            elif existing == 'ai_answered':
+                mapped_status = existing
 
         # Complete the call in call_log
         db.complete_call(

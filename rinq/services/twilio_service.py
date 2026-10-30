@@ -171,9 +171,19 @@ class TwilioService:
 
             # Track which SIDs we see from Twilio
             twilio_sids = set()
+            status_callback = (f"{config.webhook_base_url}/api/voice/call-status"
+                               if config.webhook_base_url else None)
 
             for number in numbers:
                 twilio_sids.add(number.sid)
+                # Without it Twilio never says the call ended, and call_log
+                # keeps whatever it last guessed - four store lines added
+                # after the one-off configure_status_callbacks ran without it
+                # for seven months
+                if status_callback and number.status_callback != status_callback:
+                    number.update(status_callback=status_callback,
+                                  status_callback_method='POST')
+                    logger.info(f"Set status callback on {number.phone_number}")
                 self.db.upsert_phone_number({
                     "sid": number.sid,
                     "phone_number": number.phone_number,
