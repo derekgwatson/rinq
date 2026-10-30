@@ -119,6 +119,11 @@ def customer_name_for_number(db, number: str) -> str | None:
     from rinq.services.phone import is_lookupable_number, normalize_au_mobile
     if not number or not is_lookupable_number(number):
         return None
+    # A store's own number is on plenty of customer records - Clara named the
+    # Wagga showroom "Alan Sheridan" (backfill, 2026-10-30)
+    from rinq.services.phone import to_e164
+    if db.get_phone_number_by_number(to_e164(number)):
+        return None
     from rinq.integrations import get_customer_lookup
     lookup = get_customer_lookup()
     if lookup:
