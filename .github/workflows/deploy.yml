@@ -15,11 +15,18 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     needs: lint
+    # Moving off do-personal (209.38.91.37) onto do-rinq (170.64.218.137).
+    # Until cutover both get every deploy so the new box stays on prod's code;
+    # drop do-personal from this list once DNS points at do-rinq.
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [209.38.91.37, 170.64.218.137]
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
         with:
-          host: 209.38.91.37
+          host: ${{ matrix.host }}
           username: derek
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: /var/www/rinq/deploy.sh
