@@ -126,6 +126,24 @@ from rinq.database.stats_mixin import StatsMixin
 from rinq.database.call_log_mixin import CallLogMixin
 
 
+class _ClosingConnection(sqlite3.Connection):
+    """A connection that CLOSES at the end of `with ... as conn:`.
+
+    sqlite3's own `with conn:` only commits/rolls back - it never closes. Every
+    query here is written `with self._get_conn() as conn:`, so each one left a
+    file handle open until garbage collection got to it. On do-rinq (Python
+    3.14) that took a worker past its 1024 open files in under a day, and the
+    next call it answered failed with "unable to open database file" - the
+    caller heard "an application error has occurred" (2026-11-02).
+    """
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            return super().__exit__(exc_type, exc, tb)
+        finally:
+            self.close()
+
+
 
 # A recording of a call Stuart (the AI receptionist) took - Tina marks the call
 # ai_receptionist when it hands the caller to him
@@ -152,7 +170,7 @@ class Database(StatsMixin, CallLogMixin):
 
     def _get_conn(self):
         """Get database connection."""
-        conn = sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path), factory=_ClosingConnection)
         conn.row_factory = sqlite3.Row
         return conn
 
