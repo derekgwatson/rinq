@@ -61,7 +61,7 @@ def provision_tenant(tenant_id: str, tenant_name: str, admin_email: str,
 
         twiml_app = sub_client.applications.create(
             friendly_name=f"{tenant_name} Phone",
-            voice_url=f"{base_url}/api/voice/client-incoming",
+            voice_url=f"{base_url}/api/voice/outbound",
             voice_method='POST',
         )
         logger.info(f"Created TwiML App: {twiml_app.sid}")
