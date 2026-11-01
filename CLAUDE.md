@@ -39,7 +39,7 @@ When improving UI:
 Rinq is a multi-tenant cloud phone system built on Twilio. Extracted from the Watson Blinds bot-team (Tina) and running as a standalone product.
 
 **Repo:** `dezgo/rinq` (Derek's personal GitHub)
-**Server:** do-personal (209.38.91.37)
+**Server:** do-rinq (170.64.218.137, `ssh do-rinq`) — Watson's own droplet since 2026-11-01. Moved off do-personal (209.38.91.37), which only forwards stragglers until ~8 Nov
 **Domains:** rinq.cc, rinq.appfoundry.cc, tina.watsonblinds.com.au
 
 ## Architecture
