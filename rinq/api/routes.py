@@ -2451,8 +2451,13 @@ def call_status_callback():
         # When the caller hangs up before an agent answers, the outbound
         # ring calls (SIP/browser) keep ringing because they're separate
         # calls not yet joined to the conference.
+        # Same for a call Stuart is handling: the "take over" ring to staff
+        # (ai_test_routes.ring_for_takeover) kept ringing up to 30s after the
+        # caller hung up (Derek's test call 2026-11-01).
+        from rinq.api.ai_test_routes import TAKEOVER_PREFIX
         conference_name = f"call_{call_sid}"
-        ring_sids = db.pop_ring_attempts(conference_name)
+        ring_sids = (db.pop_ring_attempts(conference_name)
+                     + db.pop_ring_attempts(f"{TAKEOVER_PREFIX}{call_sid}"))
         if ring_sids:
             service = get_twilio_service()
             for sid in ring_sids:
