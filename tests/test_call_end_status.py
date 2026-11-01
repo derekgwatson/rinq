@@ -83,3 +83,21 @@ def test_sync_sets_the_call_status_callback_on_numbers_without_it(make_store, mo
     assert TwilioService().sync_phone_numbers()['success']
     assert updated == {'+61244181100': {'status_callback': good,
                                          'status_callback_method': 'POST'}}
+
+
+def test_hanging_up_on_stuart_stops_the_takeover_ring(client, make_store, frozen_clock,
+                                                      stuart_told, monkeypatch):
+    """While Stuart talks, the tester's Tina rings so they can take over
+    (ai_test_routes.ring_for_takeover). Derek 2026-11-01: after he hung up it
+    kept ringing for up to 30s - the caller's call-status now cancels it."""
+    import rinq.api.routes as routes
+    from rinq.api.ai_test_routes import TAKEOVER_PREFIX
+    store = _after_hours_stuart_call(client, make_store, frozen_clock)
+    store.db.store_ring_attempts(f"{TAKEOVER_PREFIX}CAcustomer1", ['CAtakeover1'], 'ai_takeover')
+    hung_up = []
+    fake = SimpleNamespace(client=SimpleNamespace(
+        calls=lambda sid: SimpleNamespace(update=lambda **kw: hung_up.append((sid, kw)))))
+    monkeypatch.setattr(routes, 'get_twilio_service', lambda: fake)
+    _ended(client, 'completed', duration='12')
+    assert ('CAtakeover1', {'status': 'completed'}) in hung_up
+    assert store.db.get_ring_attempts(f"{TAKEOVER_PREFIX}CAcustomer1") == []
