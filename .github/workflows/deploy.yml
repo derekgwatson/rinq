@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
 
+# One deploy at a time: a second push waits for the first to finish (it can
+# be waiting up to an hour for calls to end) instead of racing it.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -28,4 +34,30 @@ jobs:
           host: ${{ matrix.host }}
           username: derek
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: /var/www/rinq/deploy.sh
+          # Room for the wait below (the action's default is 10 minutes)
+          command_timeout: 70m
+          # Restart only when NOBODY is on a call - a restart drops calls that
+          # are connecting or being transferred. Asks Twilio every 30s; needs
+          # two clear checks in a row, then deploys straight away (same ssh
+          # session, so the gap is seconds). Still busy after 60 minutes:
+          # give up WITHOUT restarting - the run fails, GitHub emails Derek,
+          # and "Re-run jobs" tries again (Derek, 2026-11-02). The checker is
+          # read from origin/main so a change to it applies to this deploy.
+          script: |
+            set -u
+            cd /var/www/rinq
+            git fetch -q origin main
+            git show origin/main:rinq/scripts/live_calls.py > /tmp/rinq_live_calls.py
+            clear=0
+            for i in $(seq 1 120); do
+              out=$(venv/bin/python /tmp/rinq_live_calls.py 2>&1 | tail -1) || true
+              if [ "$out" = "LIVE 0" ]; then clear=$((clear + 1)); else clear=0; fi
+              echo "$(date -u +%H:%M:%S) $out (clear $clear/2)"
+              if [ "$clear" -ge 2 ]; then
+                /var/www/rinq/deploy.sh
+                exit $?
+              fi
+              sleep 30
+            done
+            echo "DEPLOY NOT DONE: calls were live for 60 minutes - Tina was NOT restarted. Re-run this job to try again."
+            exit 1
