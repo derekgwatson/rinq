@@ -170,7 +170,9 @@
 }
 
 /* Stuart (AI receptionist) live transcript - shown while a call he's
-   answering rings you, and after you take it over */
+   answering rings you, and after you take it over. One panel per caller,
+   stacked newest last (built by startAiTranscript) */
+.ai-transcripts { max-width: 640px; }
 .ai-transcript {
     display: none;
     margin: 12px 0;
@@ -202,7 +204,22 @@
 }
 .ai-line { margin: 4px 0; }
 .ai-transcript-actions { padding: 0 12px 10px; }
-.ai-transcript-actions:has(#aiTakeBtn[style*="none"]) { display: none; }
+.ai-transcript-actions:has(.ai-take-btn[style*="none"]) { display: none; }
+.ai-transcript-caller {
+    display: block;
+    font-weight: 400;
+    color: #57606a;
+    margin-top: 2px;
+}
+.ai-transcript-caller:empty { display: none; }
+/* Two or more callers at once on a narrow screen: keep each panel short so
+   every Take button stays in reach */
+@media (max-width: 600px) {
+    .ai-transcripts:has(.ai-transcript.active ~ .ai-transcript.active) .ai-transcript-lines {
+        max-height: 140px;
+    }
+    .ai-transcript-actions .ai-take-btn { width: 100%; }
+}
 .ai-line .who { font-weight: 600; margin-right: 6px; }
 .ai-line.caller .who { color: #1f6feb; }
 .ai-line.receptionist .who { color: #57606a; }
@@ -2518,16 +2535,22 @@
             </div>
         </div>
 
-        <div class="ai-transcript" id="aiTranscript" aria-live="polite">
-            <div class="ai-transcript-head">
-                <span id="aiTranscriptTitle">Stuart (AI) is talking with them</span>
-                <span class="ai-transcript-reason" id="aiTranscriptReason"></span>
+        <!-- One panel per caller Stuart is talking with; startAiTranscript
+             clones the template below into this container -->
+        <div class="ai-transcripts" id="aiTranscripts"></div>
+        <template id="aiTranscriptTemplate">
+            <div class="ai-transcript" aria-live="polite">
+                <div class="ai-transcript-head">
+                    <span class="ai-transcript-title">Stuart (AI) is talking with them</span>
+                    <span class="ai-transcript-caller"></span>
+                    <span class="ai-transcript-reason"></span>
+                </div>
+                <div class="ai-transcript-lines"></div>
+                <div class="ai-transcript-actions">
+                    <button class="btn-answer ai-take-btn" style="display:none;">Take this call</button>
+                </div>
             </div>
-            <div class="ai-transcript-lines" id="aiTranscriptLines"></div>
-            <div class="ai-transcript-actions">
-                <button class="btn-answer" id="aiTakeBtn" style="display:none;">Take this call</button>
-            </div>
-        </div>
+        </template>
 
         <div class="call-info" id="callInfo">
             <div class="mute-warning" id="muteWarning" style="display:none;">🔇 You are muted — the caller cannot hear you</div>
@@ -3262,28 +3285,57 @@ async function initPhone() {
         // he and the caller are saying. It stays up after the ringing stops, for
         // as long as the caller is still with Stuart, with a "Take this call"
         // button - so you can step in at any time, not just while it rings.
-        let aiFollowToken = 0;
-
-        function hideAiTranscript() {
-            document.getElementById('aiTranscript').classList.remove('active');
-            document.getElementById('aiTranscriptLines').textContent = '';
-            document.getElementById('aiTranscriptReason').textContent = '';
-            document.getElementById('aiTakeBtn').style.display = 'none';
-        }
+        //
+        // ONE PANEL PER CALLER: each ring gets its own panel (cloned from
+        // #aiTranscriptTemplate into #aiTranscripts) that follows its own call
+        // and closes on its own. A second Stuart call adds a panel and leaves
+        // the first alone. Only a new ring for the SAME caller (the ring that
+        // "Take this call" asks for) replaces that caller's panel.
+        const aiPanels = new Set();  // live followers: {el, customerSid, stopped}
 
         function startAiTranscript(call, callSid) {
             if (!callSid) return;
-            const token = ++aiFollowToken;
-            const box = document.getElementById('aiTranscript');
-            const lines = document.getElementById('aiTranscriptLines');
-            const reason = document.getElementById('aiTranscriptReason');
-            const title = document.getElementById('aiTranscriptTitle');
-            const takeBtn = document.getElementById('aiTakeBtn');
-            let shown = 0, wasAnswered = false, customerSid = null, callerNumber = null;
+            const container = document.getElementById('aiTranscripts');
+            const tpl = document.getElementById('aiTranscriptTemplate');
+            if (!container || !tpl) return;
+            const box = tpl.content.firstElementChild.cloneNode(true);
+            const lines = box.querySelector('.ai-transcript-lines');
+            const reason = box.querySelector('.ai-transcript-reason');
+            const title = box.querySelector('.ai-transcript-title');
+            const callerLabel = box.querySelector('.ai-transcript-caller');
+            const takeBtn = box.querySelector('.ai-take-btn');
+            const panel = {el: box, customerSid: null, stopped: false};
+            let shown = 0, wasAnswered = false, callerNumber = null;
             let notAi = 0;
+
+            const close = () => {
+                panel.stopped = true;
+                aiPanels.delete(panel);
+                box.remove();
+            };
+
+            // This ring turned out to be for a caller who already has a panel
+            // (e.g. the ring "Take this call" asked for): this one replaces it,
+            // in the same spot, so that caller never has two panels
+            const adoptCaller = (sid) => {
+                panel.customerSid = sid;
+                box.dataset.customer = sid;
+                for (const other of aiPanels) {
+                    if (other !== panel && other.customerSid === sid) {
+                        other.stopped = true;
+                        aiPanels.delete(other);
+                        if (other.el.parentNode) other.el.replaceWith(box);
+                    }
+                }
+            };
 
             const render = (data) => {
                 reason.textContent = data.reason ? `About: ${data.reason}` : '';
+                if (callerNumber) {
+                    const shownAs = typeof formatPhoneDisplay === 'function'
+                        ? formatPhoneDisplay(callerNumber) : callerNumber;
+                    callerLabel.textContent = `Caller: ${shownAs}`;
+                }
                 const entries = data.transcript || [];
                 for (; shown < entries.length; shown++) {
                     const e = entries[shown];
@@ -3300,14 +3352,14 @@ async function initPhone() {
             };
 
             takeBtn.onclick = async () => {
-                if (!customerSid) return;
+                if (!panel.customerSid) return;
                 takeBtn.disabled = true;
                 takeBtn.textContent = 'Ringing you…';
                 try {
                     const r = await fetch('/api/ai-takeover/claim', {
                         method: 'POST', credentials: 'same-origin',
                         headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({customer: customerSid, caller_number: callerNumber}),
+                        body: JSON.stringify({customer: panel.customerSid, caller_number: callerNumber}),
                     });
                     if (!r.ok) {
                         const d = await r.json().catch(() => ({}));
@@ -3319,23 +3371,25 @@ async function initPhone() {
             };
 
             const tick = async () => {
-                if (token !== aiFollowToken) return;  // a newer call took over the panel
+                if (panel.stopped) return;  // closed, or a newer ring for this caller took over
                 const ringing = currentCall === call;
                 if (ringing && call.status && call.status() === 'open') wasAnswered = true;
-                if (!ringing && (wasAnswered || !customerSid)) {
+                if (!ringing && (wasAnswered || !panel.customerSid)) {
                     // Answered then finished, or never an AI call: nothing to follow
-                    hideAiTranscript();
+                    close();
                     return;
                 }
                 const url = ringing
                     ? `/api/ai-transcript?call_sid=${encodeURIComponent(callSid)}`
-                    : `/api/ai-transcript?customer=${encodeURIComponent(customerSid)}`;
+                    : `/api/ai-transcript?customer=${encodeURIComponent(panel.customerSid)}`;
                 try {
                     const r = await fetch(url, {credentials: 'same-origin'});
                     const data = r.ok ? await r.json() : null;
-                    if (token !== aiFollowToken) return;
+                    if (panel.stopped) return;
                     if (data && data.found) {
-                        customerSid = data.customer_sid || customerSid;
+                        if (data.customer_sid && data.customer_sid !== panel.customerSid) {
+                            adoptCaller(data.customer_sid);
+                        }
                         callerNumber = data.caller_number || callerNumber;
                         box.classList.add('active');
                         if (wasAnswered) {
@@ -3356,15 +3410,16 @@ async function initPhone() {
                             // Stuart finished, or someone else took it: keep the
                             // last lines up briefly, then clear
                             title.textContent = 'Stuart (AI) has finished with this caller';
-                            setTimeout(() => { if (token === aiFollowToken) hideAiTranscript(); }, 15000);
+                            setTimeout(() => { if (!panel.stopped) close(); }, 15000);
                             return;
                         }
                     } else if (!ringing) {
-                        hideAiTranscript();
+                        close();
                         return;
-                    } else if ((!data || data.ai === false) && !customerSid && ++notAi >= 2) {
+                    } else if ((!data || data.ai === false) && !panel.customerSid && ++notAi >= 2) {
                         // An ordinary call (asked twice, in case the AI ring
                         // was still being recorded): stop asking
+                        close();
                         return;
                     }
                 } catch (err) {
@@ -3372,7 +3427,8 @@ async function initPhone() {
                 }
                 setTimeout(tick, 2000);
             };
-            hideAiTranscript();
+            aiPanels.add(panel);
+            container.appendChild(box);  // hidden until Stuart's transcript is found
             tick();
         }
 
