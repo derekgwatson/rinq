@@ -4421,7 +4421,7 @@ def voicemail_handler():
 
             if voicemail_dest:
                 logger.info(f"Voicemail lookup: phone={to_number}, call_flow={call_flow.get('name')}, "
-                           f"destination={voicemail_dest['name']} ({voicemail_dest.get('routing_type', 'email')})")
+                           f"destination={voicemail_dest['name']}")
             else:
                 logger.warning(f"Voicemail lookup: call_flow={call_flow.get('name')} has no valid voicemail destination")
         else:
@@ -4431,7 +4431,7 @@ def voicemail_handler():
         voicemail_dest = db.get_voicemail_destination(phone_record['voicemail_destination_id'])
         if voicemail_dest:
             logger.info(f"Voicemail lookup: phone={to_number} (direct ring), "
-                       f"destination={voicemail_dest['name']} ({voicemail_dest.get('routing_type', 'email')})")
+                       f"destination={voicemail_dest['name']}")
         else:
             logger.warning(f"Voicemail lookup: phone={to_number} voicemail_destination_id={phone_record['voicemail_destination_id']} not found")
     else:
@@ -4464,86 +4464,75 @@ def voicemail_handler():
 
     # Route voicemail if destination configured
     if voicemail_dest:
-        routing_type = voicemail_dest.get('routing_type', 'ticket')
+        # Every voicemail box files a ticket (an "Email" option existed but was
+        # never built — it silently dropped the voicemail — and was removed 2026-11-04).
+        try:
+            import time
 
-        # Email routing not yet implemented
-        if routing_type == 'email':
-            logger.warning(f"Email routing not yet implemented for destination '{voicemail_dest['name']}'")
-            db.log_activity(
-                action="voicemail_routing_skipped",
-                target=to_number,
-                details=f"Email routing not implemented for '{voicemail_dest['name']}'",
-                performed_by="tina"
-            )
-        else:
-            # Ticket routing
-            try:
-                import time
+            # Download recording from Twilio (add .mp3 extension for audio format)
+            audio_url = f"{recording_url}.mp3"
 
-                # Download recording from Twilio (add .mp3 extension for audio format)
-                audio_url = f"{recording_url}.mp3"
+            # Twilio requires auth to download recordings
+            # Recording might not be immediately available - retry with backoff
+            auth = (get_twilio_config('twilio_account_sid'), get_twilio_config('twilio_auth_token'))
+            audio_bytes = None
+            audio_content = None
+            max_retries = 5
+            for attempt in range(max_retries):
+                audio_response = requests.get(audio_url, auth=auth, timeout=30)
+                if audio_response.status_code == 200:
+                    audio_bytes = audio_response.content
+                    audio_content = base64.b64encode(audio_bytes).decode('utf-8')
+                    break
+                elif audio_response.status_code == 404 and attempt < max_retries - 1:
+                    # Recording not ready yet - wait and retry
+                    wait_time = 2 ** attempt  # 1, 2, 4, 8 seconds
+                    logger.info(f"Recording not ready (attempt {attempt + 1}), waiting {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    audio_response.raise_for_status()
 
-                # Twilio requires auth to download recordings
-                # Recording might not be immediately available - retry with backoff
-                auth = (get_twilio_config('twilio_account_sid'), get_twilio_config('twilio_auth_token'))
-                audio_bytes = None
-                audio_content = None
-                max_retries = 5
-                for attempt in range(max_retries):
-                    audio_response = requests.get(audio_url, auth=auth, timeout=30)
-                    if audio_response.status_code == 200:
-                        audio_bytes = audio_response.content
-                        audio_content = base64.b64encode(audio_bytes).decode('utf-8')
-                        break
-                    elif audio_response.status_code == 404 and attempt < max_retries - 1:
-                        # Recording not ready yet - wait and retry
-                        wait_time = 2 ** attempt  # 1, 2, 4, 8 seconds
-                        logger.info(f"Recording not ready (attempt {attempt + 1}), waiting {wait_time}s...")
-                        time.sleep(wait_time)
+            if not audio_content:
+                raise Exception("Failed to download recording after retries")
+
+            # Transcribe via Whisper if configured. The Twilio transcribe
+            # callback path is skipped at TwiML emit time when Whisper is
+            # on, so this is the only transcription source in that case —
+            # a failure here means this voicemail has no transcription at
+            # all, ever, so it gets named on the ticket and raised to the
+            # admins rather than passed off as "unavailable".
+            transcription_problem = None
+            if not transcription_text and audio_bytes:
+                from rinq.integrations.openai.whisper import get_whisper_service
+                from rinq.services import transcription_alerts
+                whisper = get_whisper_service()
+                if whisper.is_configured:
+                    result = whisper.transcribe(
+                        audio_bytes,
+                        filename=f"voicemail_{recording_sid}.mp3",
+                    )
+                    if result.ok:
+                        transcription_text = result.text
+                        db.update_recording_transcription(recording_sid, result.text)
+                        logger.info(f"Whisper transcribed voicemail {recording_sid}: {len(result.text)} chars")
+                        transcription_alerts.note_success(db)
                     else:
-                        audio_response.raise_for_status()
-
-                if not audio_content:
-                    raise Exception("Failed to download recording after retries")
-
-                # Transcribe via Whisper if configured. The Twilio transcribe
-                # callback path is skipped at TwiML emit time when Whisper is
-                # on, so this is the only transcription source in that case —
-                # a failure here means this voicemail has no transcription at
-                # all, ever, so it gets named on the ticket and raised to the
-                # admins rather than passed off as "unavailable".
-                transcription_problem = None
-                if not transcription_text and audio_bytes:
-                    from rinq.integrations.openai.whisper import get_whisper_service
-                    from rinq.services import transcription_alerts
-                    whisper = get_whisper_service()
-                    if whisper.is_configured:
-                        result = whisper.transcribe(
-                            audio_bytes,
-                            filename=f"voicemail_{recording_sid}.mp3",
-                        )
-                        if result.ok:
-                            transcription_text = result.text
-                            db.update_recording_transcription(recording_sid, result.text)
-                            logger.info(f"Whisper transcribed voicemail {recording_sid}: {len(result.text)} chars")
-                            transcription_alerts.note_success(db)
+                        transcription_problem = result.error
+                        if result.fault:
+                            transcription_alerts.note_failure(
+                                db, get_current_tenant(), result.error, recording_sid
+                            )
                         else:
-                            transcription_problem = result.error
-                            if result.fault:
-                                transcription_alerts.note_failure(
-                                    db, get_current_tenant(), result.error, recording_sid
-                                )
-                            else:
-                                # Nothing was said. The service is working.
-                                transcription_alerts.note_success(db)
+                            # Nothing was said. The service is working.
+                            transcription_alerts.note_success(db)
 
-                # Format the ticket
-                flow_name = call_flow.get('name', 'Unknown') if call_flow else 'Unknown'
-                friendly_name = phone_record.get('friendly_name', to_number) if phone_record else to_number
+            # Format the ticket
+            flow_name = call_flow.get('name', 'Unknown') if call_flow else 'Unknown'
+            friendly_name = phone_record.get('friendly_name', to_number) if phone_record else to_number
 
-                subject = f"Voicemail from {from_number} ({friendly_name})"
+            subject = f"Voicemail from {from_number} ({friendly_name})"
 
-                text_body = f"""New voicemail received:
+            text_body = f"""New voicemail received:
 
 From: {from_number}
 To: {friendly_name} ({to_number})
@@ -4551,82 +4540,82 @@ Duration: {recording_duration} seconds
 Call Flow: {flow_name}
 
 """
-                if transcription_text:
-                    text_body += f"Transcription:\n{transcription_text}\n\n"
-                elif transcription_problem:
-                    # Say what actually went wrong. "Unavailable" reads as "this
-                    # one was mumbled", which is how an eight-day outage in
-                    # September 2026 went unreported for eight days.
-                    text_body += (
-                        f"(No transcription — {transcription_problem}. "
-                        f"Please play the recording.)\n\n"
-                    )
-                else:
-                    text_body += "(Transcription pending or unavailable)\n\n"
+            if transcription_text:
+                text_body += f"Transcription:\n{transcription_text}\n\n"
+            elif transcription_problem:
+                # Say what actually went wrong. "Unavailable" reads as "this
+                # one was mumbled", which is how an eight-day outage in
+                # September 2026 went unreported for eight days.
+                text_body += (
+                    f"(No transcription — {transcription_problem}. "
+                    f"Please play the recording.)\n\n"
+                )
+            else:
+                text_body += "(Transcription pending or unavailable)\n\n"
 
-                text_body += "The voicemail recording is attached.\n"
+            text_body += "The voicemail recording is attached.\n"
 
-                ticket_group_id = voicemail_dest.get('ticket_group_id')
-                logger.info(f"Voicemail routing: destination '{voicemail_dest['name']}' -> ticket group {ticket_group_id}")
+            ticket_group_id = voicemail_dest.get('ticket_group_id')
+            logger.info(f"Voicemail routing: destination '{voicemail_dest['name']}' -> ticket group {ticket_group_id}")
 
-                # Create ticket via ticket service.
-                # Requester email is per-tenant (bot_settings key
-                # 'voicemail_requester_email'); the fallback keeps watson's
-                # historical behaviour. TODO(vendor-neutral): the 'tina' tag
-                # is kept because downstream ticket automation may filter on
-                # it — confirm before changing.
-                from rinq.integrations import get_ticket_service
-                tickets = get_ticket_service()
-                requester_email = (db.get_bot_setting('voicemail_requester_email')
-                                   or 'tina.bot@watsonblinds.com.au')
-                ticket_data = tickets.create_ticket(
-                    subject=subject,
-                    description=text_body,
-                    priority='normal',
-                    ticket_type='task',
-                    tags=['voicemail', 'tina'],
-                    requester_email=requester_email,
-                    requester_name=f"{config.product_name} (Phone System)",
-                    group_id=ticket_group_id,
-                    assignee_email=voicemail_dest.get('ticket_assignee_email') or None,
-                    attachments=[{
-                        'filename': f"voicemail_{recording_sid}.mp3",
-                        'content_type': 'audio/mpeg',
-                        'content_base64': audio_content,
-                    }],
-                ) if tickets else None
+            # Create ticket via ticket service.
+            # Requester email is per-tenant (bot_settings key
+            # 'voicemail_requester_email'); the fallback keeps watson's
+            # historical behaviour. TODO(vendor-neutral): the 'tina' tag
+            # is kept because downstream ticket automation may filter on
+            # it — confirm before changing.
+            from rinq.integrations import get_ticket_service
+            tickets = get_ticket_service()
+            requester_email = (db.get_bot_setting('voicemail_requester_email')
+                               or 'tina.bot@watsonblinds.com.au')
+            ticket_data = tickets.create_ticket(
+                subject=subject,
+                description=text_body,
+                priority='normal',
+                ticket_type='task',
+                tags=['voicemail', 'tina'],
+                requester_email=requester_email,
+                requester_name=f"{config.product_name} (Phone System)",
+                group_id=ticket_group_id,
+                assignee_email=voicemail_dest.get('ticket_assignee_email') or None,
+                attachments=[{
+                    'filename': f"voicemail_{recording_sid}.mp3",
+                    'content_type': 'audio/mpeg',
+                    'content_base64': audio_content,
+                }],
+            ) if tickets else None
 
-                if ticket_data:
-                    ticket_id = ticket_data.get('id')
-                    group_info = f", group_id={ticket_group_id}" if ticket_group_id else ""
-                    logger.info(f"Voicemail ticket #{ticket_id} created for call {call_sid}{group_info}")
+            if ticket_data:
+                ticket_id = ticket_data.get('id')
+                group_info = f", group_id={ticket_group_id}" if ticket_group_id else ""
+                logger.info(f"Voicemail ticket #{ticket_id} created for call {call_sid}{group_info}")
 
-                    if ticket_id:
-                        db.update_recording_ticket(recording_sid, ticket_id)
+                if ticket_id:
+                    db.update_recording_ticket(recording_sid, ticket_id)
 
-                    db.log_activity(
-                        action="voicemail_ticket_created",
-                        target=to_number,
-                        details=f"Ticket #{ticket_id} created, recording {recording_sid}{group_info}",
-                        performed_by="tina"
-                    )
-                else:
-                    logger.error("Failed to create voicemail ticket")
-                    db.log_activity(
-                        action="voicemail_ticket_failed",
-                        target=to_number,
-                        details="Ticket service returned no data",
-                        performed_by="tina"
-                    )
-
-            except Exception as e:
-                logger.error(f"Error creating voicemail ticket: {e}")
+                db.log_activity(
+                    action="voicemail_ticket_created",
+                    target=to_number,
+                    details=f"Ticket #{ticket_id} created, recording {recording_sid}{group_info}",
+                    performed_by="tina"
+                )
+            else:
+                logger.error("Failed to create voicemail ticket")
                 db.log_activity(
                     action="voicemail_ticket_failed",
                     target=to_number,
-                    details=f"Error: {e}",
+                    details="Ticket service returned no data",
                     performed_by="tina"
                 )
+
+        except Exception as e:
+            logger.error(f"Error creating voicemail ticket: {e}")
+            db.log_activity(
+                action="voicemail_ticket_failed",
+                target=to_number,
+                details=f"Error: {e}",
+                performed_by="tina"
+            )
     else:
         # Log why voicemail wasn't routed
         if not phone_record:

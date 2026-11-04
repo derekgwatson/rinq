@@ -153,3 +153,26 @@ def test_the_assignee_can_be_changed_and_cleared(make_store):
         'brittany.moore@watsonblinds.com.au'
     store.db.update_voicemail_destination(store.vm_id, {'ticket_assignee_email': None}, 'test')
     assert store.db.get_voicemail_destination(store.vm_id)['ticket_assignee_email'] is None
+
+
+def test_a_box_left_on_the_old_email_type_still_files_a_ticket(client, make_store, tickets):
+    # "Email" routing was never built: it logged and dropped the voicemail.
+    # It's gone, so a box still carrying that type must not lose messages.
+    store = make_store()
+    _set_box(store, store.vm_id, routing_type='email', ticket_group_id=42)
+    _voicemail(client, store.number)
+    assert [t['group_id'] for t in tickets] == [42]
+
+
+def test_the_admin_page_offers_no_email_option(app):
+    from flask import render_template_string
+    src = open('rinq/web/templates/admin_voicemail_destinations.html').read()
+    src = src.replace('{% extends "base.html" %}', '')
+    with app.test_request_context():
+        html = render_template_string(
+            src, voicemail_destinations=[{'id': 1, 'name': 'B', 'ticket_group_id': 18,
+                                          'ticket_assignee_email': 'b@x.com', 'description': None}],
+            ticket_groups=[{'id': 18, 'name': 'Showroom'}],
+            staff=[{'email': 'b@x.com', 'name_audio_text': 'Brittany Moore', 'extension': '2700'}])
+    assert 'Showroom' in html and 'assigned to b@x.com' in html
+    assert 'routing_type' not in html and '>Email<' not in html

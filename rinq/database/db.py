@@ -3507,7 +3507,7 @@ class Database(StatsMixin, CallLogMixin):
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (data['name'], data.get('email'), data.get('description'),
                   data.get('ticket_group_id'), data.get('ticket_assignee_email'),
-                  data.get('routing_type', 'email'),
+                  data.get('routing_type', 'ticket'),
                   now, created_by, now, created_by))
             conn.commit()
             return cursor.lastrowid
