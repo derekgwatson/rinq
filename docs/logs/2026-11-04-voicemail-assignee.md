@@ -33,3 +33,14 @@ to Britt too.
 - After the deploy lands: edit box 11 → name "Brittany Moore", group Showroom (Zelda 18), assign
   brittany.moore@watsonblinds.com.au. Check the next voicemail on that number lands correctly, then tell Jacinta.
 - Decide on email routing for voicemail boxes: remove the option or build it.
+
+## Later the same day
+
+- **Box configured:** box 11 renamed "Brittany Moore", group Showroom (Zelda 18), assigned
+  brittany.moore@watsonblinds.com.au (~03:46 UTC). It's only used by +61261926884. Still to check: the next real voicemail.
+- **Email routing removed (PR #93):** Derek said a dead option gets removed, not built. Every box now
+  files a ticket (group required, and an assignee can be set on create too). A box still marked `email` files a ticket.
+  Nothing on prod used it.
+- **#93's deploy FAILED the F821 lint gate:** a duplicate-name flash still referenced the removed `email`
+  variable. The PR showed merged but prod kept the old code. Fixed in **PR #94** and deployed. Lesson: run
+  `uvx ruff check --select F821 rinq/` before merging, and check the run concluded `success`.
