@@ -271,10 +271,14 @@ def register(bp):
             except Exception as e:
                 logger.warning(f"Failed to load ticket groups: {e}")
 
+        # People a ticket box can assign to: the staff Tina knows about
+        staff = [s for s in db.get_all_staff_extensions() if s.get('email')]
+
         return render_template(
             'admin_voicemail_destinations.html',
             voicemail_destinations=voicemail_destinations,
             ticket_groups=ticket_groups,
+            staff=staff,
             current_user=user,
         )
 
@@ -287,6 +291,7 @@ def register(bp):
         email = request.form.get('email', '').strip() or None
         description = request.form.get('description', '').strip() or None
         ticket_group_id_str = request.form.get('ticket_group_id', '').strip()
+        ticket_assignee_email = request.form.get('ticket_assignee_email', '').strip().lower() or None
     
         # Convert ticket_group_id to int or None
         ticket_group_id = None
@@ -320,6 +325,8 @@ def register(bp):
                     'email': email,
                     'description': description,
                     'ticket_group_id': ticket_group_id,
+                    # Only a ticket box assigns anyone; switching to email clears it
+                    'ticket_assignee_email': ticket_assignee_email if routing_type == 'ticket' else None,
                 },
                 created_by=_audit_tag(user)
             )
@@ -350,6 +357,7 @@ def register(bp):
         email = request.form.get('email', '').strip() or None
         description = request.form.get('description', '').strip() or None
         ticket_group_id_str = request.form.get('ticket_group_id', '').strip()
+        ticket_assignee_email = request.form.get('ticket_assignee_email', '').strip().lower() or None
     
         # Convert ticket_group_id to int or None
         ticket_group_id = None
@@ -389,6 +397,8 @@ def register(bp):
                     'email': email,
                     'description': description,
                     'ticket_group_id': ticket_group_id,
+                    # Only a ticket box assigns anyone; switching to email clears it
+                    'ticket_assignee_email': ticket_assignee_email if routing_type == 'ticket' else None,
                 },
                 updated_by=_audit_tag(user)
             )

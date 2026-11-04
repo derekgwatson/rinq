@@ -66,7 +66,8 @@ class TicketService(ABC):
                       requester_email: str = None,
                       requester_name: str = None,
                       group_id: str = None,
-                      attachments: list[dict] = None) -> Optional[dict]:
+                      attachments: list[dict] = None,
+                      assignee_email: str = None) -> Optional[dict]:
         """Create a support ticket.
 
         Args:
@@ -79,6 +80,8 @@ class TicketService(ABC):
             requester_name: Display name of the requester
             group_id: Assign to a specific group/team
             attachments: List of dicts with 'filename', 'content_type', 'content_base64'
+            assignee_email: Assign to a specific person (providers that can't
+                assign by email ignore it)
 
         Returns:
             Dict with 'id' (ticket ID) on success, None on failure.

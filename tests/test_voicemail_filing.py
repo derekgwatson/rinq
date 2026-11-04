@@ -105,3 +105,51 @@ def test_no_transcription_says_so_on_the_ticket(client, make_store, tickets):
     _set_box(store, store.vm_id, routing_type='ticket')
     _voicemail(client, store.number, text='')
     assert 'Transcription pending or unavailable' in tickets[0]['description']
+
+
+def test_a_box_with_a_person_assigns_the_ticket_to_them(client, make_store, tickets):
+    # A person's own line (Brittany's 02 6192 6884): her voicemails must reach
+    # HER, not sit in a group nobody watches for them.
+    store = make_store()
+    box = store.db.create_voicemail_destination(
+        {'name': 'Brittany Moore', 'routing_type': 'ticket', 'ticket_group_id': 18,
+         'ticket_assignee_email': 'brittany.moore@watsonblinds.com.au'}, 'test')
+    store.db.upsert_phone_number({'sid': 'PNbritt', 'phone_number': '+61261926884',
+                                  'friendly_name': 'Britt', 'forward_to': None,
+                                  'is_active': 1, 'synced_at': None})
+    store.db.update_phone_number_voicemail_destination('PNbritt', box, 'test')
+    _voicemail(client, '+61261926884', sid='REbritt')
+    assert [(t['group_id'], t['assignee_email']) for t in tickets] == [
+        (18, 'brittany.moore@watsonblinds.com.au')]
+
+
+def test_a_box_without_a_person_assigns_nobody(client, make_store, tickets):
+    store = make_store()
+    _set_box(store, store.vm_id, routing_type='ticket', ticket_group_id=42)
+    _voicemail(client, store.number)
+    assert tickets[0]['assignee_email'] is None
+
+
+def test_zelda_is_sent_the_assignee(monkeypatch):
+    from rinq.integrations.zelda.tickets import ZeldaTicketService
+    sent = {}
+
+    class FakeClient:
+        def post(self, path, json=None, timeout=None):
+            sent.update(json)
+            return type('R', (), {'status_code': 201, 'json': lambda self: {'ticket': {'id': 5}}})()
+
+    svc = ZeldaTicketService()
+    svc._client = FakeClient()
+    svc.create_ticket(subject='s', description='d', assignee_email='a@b.com')
+    assert sent['assignee_email'] == 'a@b.com'
+
+
+def test_the_assignee_can_be_changed_and_cleared(make_store):
+    store = make_store()
+    store.db.update_voicemail_destination(
+        store.vm_id, {'ticket_assignee_email': 'brittany.moore@watsonblinds.com.au'}, 'test')
+    assert store.db.get_voicemail_destination(store.vm_id)['ticket_assignee_email'] == \
+        'brittany.moore@watsonblinds.com.au'
+    store.db.update_voicemail_destination(store.vm_id, {'ticket_assignee_email': None}, 'test')
+    assert store.db.get_voicemail_destination(store.vm_id)['ticket_assignee_email'] is None

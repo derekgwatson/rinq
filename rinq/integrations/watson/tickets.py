@@ -35,7 +35,8 @@ class WatsonTicketService(TicketService):
                       requester_email: str = None,
                       requester_name: str = None,
                       group_id: str = None,
-                      attachments: list[dict] = None) -> Optional[dict]:
+                      attachments: list[dict] = None,
+                      assignee_email: str = None) -> Optional[dict]:
         try:
             payload = {
                 'subject': subject,

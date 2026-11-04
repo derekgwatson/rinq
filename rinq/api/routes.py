@@ -4588,6 +4588,7 @@ Call Flow: {flow_name}
                     requester_email=requester_email,
                     requester_name=f"{config.product_name} (Phone System)",
                     group_id=ticket_group_id,
+                    assignee_email=voicemail_dest.get('ticket_assignee_email') or None,
                     attachments=[{
                         'filename': f"voicemail_{recording_sid}.mp3",
                         'content_type': 'audio/mpeg',

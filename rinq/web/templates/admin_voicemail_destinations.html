@@ -27,6 +27,9 @@
                     <p style="margin: 0;">
                         <span class="badge badge-info">Ticket</span>
                         <span style="margin-left: 8px; color: #495057;">{{ group_name.value }}</span>
+                        {% if dest.ticket_assignee_email %}
+                        <span style="margin-left: 8px; color: #495057;">· assigned to {{ dest.ticket_assignee_email }}</span>
+                        {% endif %}
                     </p>
                     {% else %}
                     <p style="margin: 0;">
@@ -71,6 +74,20 @@
                                 {% for group in ticket_groups %}
                                 <option value="{{ group.id }}" {% if dest.ticket_group_id == group.id %}selected{% endif %}>{{ group.name }}</option>
                                 {% endfor %}
+                            </select>
+                        </div>
+                        <div id="edit_assignee_field_{{ dest.id }}" {% if dest.routing_type == 'email' and not dest.ticket_group_id %}style="display: none;"{% endif %}>
+                            <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em;">Assign to (optional)</label>
+                            <select name="ticket_assignee_email" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
+                                <option value="">-- Nobody, just the group --</option>
+                                {% set ns = namespace(found=false) %}
+                                {% for s in staff %}
+                                {% if s.email == dest.ticket_assignee_email %}{% set ns.found = true %}{% endif %}
+                                <option value="{{ s.email }}" {% if s.email == dest.ticket_assignee_email %}selected{% endif %}>{{ s.name_audio_text or s.email }}{% if s.extension %} ({{ s.extension }}){% endif %}</option>
+                                {% endfor %}
+                                {% if dest.ticket_assignee_email and not ns.found %}
+                                <option value="{{ dest.ticket_assignee_email }}" selected>{{ dest.ticket_assignee_email }}</option>
+                                {% endif %}
                             </select>
                         </div>
                         <div id="edit_email_field_{{ dest.id }}" {% if dest.routing_type != 'email' or dest.ticket_group_id %}style="display: none;"{% endif %}>
@@ -153,6 +170,8 @@ function toggleRoutingFields(mode, destId) {
     }
     ticketField.style.display = routingType === 'ticket' ? '' : 'none';
     emailField.style.display = routingType === 'email' ? '' : 'none';
+    const assigneeField = mode === 'create' ? null : document.getElementById('edit_assignee_field_' + destId);
+    if (assigneeField) assigneeField.style.display = routingType === 'ticket' ? '' : 'none';
 }
 </script>
 {% endblock %}
