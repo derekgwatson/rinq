@@ -287,8 +287,8 @@ def register(bp):
     def create_voicemail_destination():
         """Create a new voicemail destination."""
         name = request.form.get('name', '').strip()
-        routing_type = request.form.get('routing_type', 'ticket').strip()
-        email = request.form.get('email', '').strip() or None
+        # Every box files a ticket; an "Email" type was never built and was removed.
+        routing_type = 'ticket'
         description = request.form.get('description', '').strip() or None
         ticket_group_id_str = request.form.get('ticket_group_id', '').strip()
         ticket_assignee_email = request.form.get('ticket_assignee_email', '').strip().lower() or None
@@ -301,17 +301,13 @@ def register(bp):
             except ValueError:
                 pass
     
-        # Validate based on routing type
+        # Validate
         if not name:
             flash("Name is required", "error")
             return redirect(url_for('web.admin_voicemail_destinations'))
 
-        if routing_type == 'ticket' and not ticket_group_id:
-            flash("A ticket group is required for ticket routing", "error")
-            return redirect(url_for('web.admin_voicemail_destinations'))
-
-        if routing_type == 'email' and not email:
-            flash("Email address is required for Email routing", "error")
+        if not ticket_group_id:
+            flash("Pick the group that gets this box's voicemail tickets", "error")
             return redirect(url_for('web.admin_voicemail_destinations'))
 
         user = get_current_user()
@@ -322,20 +318,18 @@ def register(bp):
                 data={
                     'name': name,
                     'routing_type': routing_type,
-                    'email': email,
                     'description': description,
                     'ticket_group_id': ticket_group_id,
-                    # Only a ticket box assigns anyone; switching to email clears it
-                    'ticket_assignee_email': ticket_assignee_email if routing_type == 'ticket' else None,
+                    'ticket_assignee_email': ticket_assignee_email,
                 },
                 created_by=_audit_tag(user)
             )
     
-            detail = f"group_id={ticket_group_id}" if routing_type == 'ticket' else f"email={email}"
+            detail = f"group_id={ticket_group_id}, assignee={ticket_assignee_email}"
             db.log_activity(
                 action="create_voicemail_destination",
                 target=name,
-                details=f"Created {routing_type} voicemail destination: {detail}",
+                details=f"Created voicemail destination: {detail}",
                 performed_by=_audit_tag(user)
             )
             flash(f"Voicemail destination '{name}' created", "success")
@@ -353,8 +347,8 @@ def register(bp):
     def update_voicemail_destination(destination_id):
         """Update a voicemail destination."""
         name = request.form.get('name', '').strip()
-        routing_type = request.form.get('routing_type', 'ticket').strip()
-        email = request.form.get('email', '').strip() or None
+        # Every box files a ticket; an "Email" type was never built and was removed.
+        routing_type = 'ticket'
         description = request.form.get('description', '').strip() or None
         ticket_group_id_str = request.form.get('ticket_group_id', '').strip()
         ticket_assignee_email = request.form.get('ticket_assignee_email', '').strip().lower() or None
@@ -367,17 +361,13 @@ def register(bp):
             except ValueError:
                 pass
     
-        # Validate based on routing type
+        # Validate
         if not name:
             flash("Name is required", "error")
             return redirect(url_for('web.admin_voicemail_destinations'))
 
-        if routing_type == 'ticket' and not ticket_group_id:
-            flash("A ticket group is required for ticket routing", "error")
-            return redirect(url_for('web.admin_voicemail_destinations'))
-
-        if routing_type == 'email' and not email:
-            flash("Email address is required for Email routing", "error")
+        if not ticket_group_id:
+            flash("Pick the group that gets this box's voicemail tickets", "error")
             return redirect(url_for('web.admin_voicemail_destinations'))
 
         user = get_current_user()
@@ -394,20 +384,18 @@ def register(bp):
                 data={
                     'name': name,
                     'routing_type': routing_type,
-                    'email': email,
                     'description': description,
                     'ticket_group_id': ticket_group_id,
-                    # Only a ticket box assigns anyone; switching to email clears it
-                    'ticket_assignee_email': ticket_assignee_email if routing_type == 'ticket' else None,
+                    'ticket_assignee_email': ticket_assignee_email,
                 },
                 updated_by=_audit_tag(user)
             )
     
-            detail = f"group_id={ticket_group_id}" if routing_type == 'ticket' else f"email={email}"
+            detail = f"group_id={ticket_group_id}, assignee={ticket_assignee_email}"
             db.log_activity(
                 action="update_voicemail_destination",
                 target=name,
-                details=f"Updated {routing_type} destination: {detail}",
+                details=f"Updated voicemail destination: {detail}",
                 performed_by=_audit_tag(user)
             )
             flash(f"Voicemail destination '{name}' updated", "success")
