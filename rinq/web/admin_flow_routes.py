@@ -335,7 +335,7 @@ def register(bp):
             flash(f"Voicemail destination '{name}' created", "success")
         except Exception as e:
             if 'UNIQUE constraint' in str(e):
-                flash(f"A destination with email '{email}' already exists", "error")
+                flash(f"A voicemail destination called '{name}' already exists", "error")
             else:
                 flash_error(f"Failed to create voicemail destination: {e}", e)
 
