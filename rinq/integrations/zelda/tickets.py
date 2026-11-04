@@ -54,7 +54,8 @@ class ZeldaTicketService(TicketService):
                       requester_email: str = None,
                       requester_name: str = None,
                       group_id: str = None,
-                      attachments: list[dict] = None) -> Optional[dict]:
+                      attachments: list[dict] = None,
+                      assignee_email: str = None) -> Optional[dict]:
         # ticket_type has no Zelda equivalent — intentionally dropped.
         try:
             payload = {
@@ -72,6 +73,8 @@ class ZeldaTicketService(TicketService):
                 resolved = self._resolve_group_id(group_id)
                 if resolved:
                     payload['group_id'] = resolved
+            if assignee_email:
+                payload['assignee_email'] = assignee_email
             if attachments:
                 # Rinq interface uses 'content_base64'; Zelda's API calls it 'data'.
                 payload['attachments'] = [

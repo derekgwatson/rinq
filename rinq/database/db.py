@@ -3502,16 +3502,19 @@ class Database(StatsMixin, CallLogMixin):
         with self._get_conn() as conn:
             cursor = conn.execute("""
                 INSERT INTO voicemail_destinations (name, email, description, ticket_group_id,
-                    routing_type, created_at, created_by, updated_at, updated_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ticket_assignee_email, routing_type, created_at, created_by,
+                    updated_at, updated_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (data['name'], data.get('email'), data.get('description'),
-                  data.get('ticket_group_id'), data.get('routing_type', 'email'),
+                  data.get('ticket_group_id'), data.get('ticket_assignee_email'),
+                  data.get('routing_type', 'email'),
                   now, created_by, now, created_by))
             conn.commit()
             return cursor.lastrowid
 
     _VOICEMAIL_DEST_UPDATE_COLS = frozenset({
         'name', 'email', 'description', 'ticket_group_id', 'routing_type',
+        'ticket_assignee_email',
     })
 
     def update_voicemail_destination(self, destination_id: int, data: dict,

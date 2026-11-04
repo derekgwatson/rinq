@@ -44,7 +44,8 @@ class ZendeskTicketService(TicketService):
                       requester_email: str = None,
                       requester_name: str = None,
                       group_id: str = None,
-                      attachments: list[dict] = None) -> Optional[dict]:
+                      attachments: list[dict] = None,
+                      assignee_email: str = None) -> Optional[dict]:
         if not self.is_configured:
             logger.warning("Zendesk not configured — skipping ticket creation")
             return None
