@@ -17,6 +17,13 @@ The result is emailed to the tenant admins every week, pass or fail: a check
 that only speaks up on failure looks exactly like a check that has stopped
 running. "Couldn't check" (Twilio unreachable) is reported as its own state,
 never as a pass.
+
+Known outages: when Tina itself is down, callers never reach call_log, so the
+incoming check rightly fails for that week. Once the outage has been dealt with
+(lost callers found and rung back), record its window with
+`python -m rinq.cli add-known-outage`. Calls inside a recorded window are still
+REPORTED, on their own line, but no longer counted as a problem - so a re-run
+of that week comes back clean, and a new, unexplained gap still fails.
 """
 
 import json
@@ -30,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 LOCAL_TZ = pytz.timezone('Australia/Sydney')
 SETTING_KEY = 'cross_check_last'
+OUTAGES_KEY = 'cross_check_known_outages'
 
 # Calls right at the window edges can land either side (Twilio's start time vs
 # the moment Tina logged the webhook), so a couple of strays isn't a problem.
@@ -89,6 +97,53 @@ def _sort_key(value) -> datetime:
     return _as_utc(value) or datetime.min.replace(tzinfo=pytz.UTC)
 
 
+def get_known_outages(db) -> list[dict]:
+    """[{start, end, note}] - start/end are Sydney local 'YYYY-MM-DDTHH:MM'."""
+    try:
+        return json.loads(db.get_bot_setting(OUTAGES_KEY) or '[]')
+    except (ValueError, TypeError):
+        logger.warning("Cross-check: known outages setting is not valid JSON - ignoring it")
+        return []
+
+
+def add_known_outage(db, start: datetime, end: datetime, note: str, by: str = 'cli') -> dict:
+    """Record a window (naive Sydney local time) when Tina was known to be down."""
+    if end <= start:
+        raise ValueError("end must be after start")
+    if not (note or '').strip():
+        raise ValueError("a note is required: what happened, and how the lost callers were handled")
+    outages = get_known_outages(db)
+    entry = {'start': start.strftime('%Y-%m-%dT%H:%M'), 'end': end.strftime('%Y-%m-%dT%H:%M'),
+             'note': note.strip()}
+    outages.append(entry)
+    outages.sort(key=lambda o: o['start'])
+    db.set_bot_setting(OUTAGES_KEY, json.dumps(outages), by)
+    return entry
+
+
+def _outage_windows(db) -> list[tuple[datetime, datetime, dict]]:
+    """Known outages as aware-UTC (start, end, entry)."""
+    windows = []
+    for o in get_known_outages(db):
+        try:
+            s = LOCAL_TZ.localize(datetime.fromisoformat(o['start'])).astimezone(pytz.UTC)
+            e = LOCAL_TZ.localize(datetime.fromisoformat(o['end'])).astimezone(pytz.UTC)
+        except (KeyError, ValueError, TypeError):
+            logger.warning(f"Cross-check: skipping malformed known outage {o!r}")
+            continue
+        windows.append((s, e, o))
+    return windows
+
+
+def _outage_label(o: dict) -> str:
+    s, e = datetime.fromisoformat(o['start']), datetime.fromisoformat(o['end'])
+    t = lambda d: f"{d.hour % 12 or 12}:{d:%M}{'am' if d.hour < 12 else 'pm'}"
+    day = lambda d: f"{d:%a} {d.day} {d:%b}"
+    span = (f"{day(s)} {t(s)}-{t(e)}" if s.date() == e.date()
+            else f"{day(s)} {t(s)} to {day(e)} {t(e)}")
+    return f"{span}: {o['note']}"
+
+
 def run(db, twilio_client, start: date, end: date) -> dict:
     """Compare Tina and Twilio for local dates start..end. Never raises."""
     from rinq.services.twilio_service import twilio_list
@@ -117,6 +172,16 @@ def run(db, twilio_client, start: date, end: date) -> dict:
         return result
 
     ours = {p['phone_number'] for p in db.get_phone_numbers() if p.get('phone_number')}
+    windows = _outage_windows(db)
+    outages_hit = {}
+
+    def in_known_outage(when) -> bool:
+        t = _as_utc(when)
+        for s, e, o in windows:
+            if t is not None and s <= t <= e:
+                outages_hit[o['start']] = o
+                return True
+        return False
 
     # ---- 1. Incoming calls, SID by SID
     tw_in = {c.sid: c for c in calls
@@ -129,12 +194,17 @@ def run(db, twilio_client, start: date, end: date) -> dict:
               AND {ONE_ROW_PER_CALL_SQL}
         """, (_fmt(s_utc), _fmt(e_utc))) if _REAL_SID.match(r['call_sid'] or '')}
     result['incoming_calls'] = len(tw_in)
-    missing = sorted(tw_in.keys() - log_in.keys(), key=lambda sid: (_sort_key(tw_in[sid].start_time), sid))
+    missing_all = sorted(tw_in.keys() - log_in.keys(), key=lambda sid: (_sort_key(tw_in[sid].start_time), sid))
+    missing = [sid for sid in missing_all if not in_known_outage(tw_in[sid].start_time)]
+    in_outage = len(missing_all) - len(missing)
+    result['incoming_in_outage'] = in_outage
     extra = sorted(log_in.keys() - tw_in.keys(), key=lambda sid: (_sort_key(log_in[sid]['started_at']), sid))
     ok = len(missing) <= EDGE_TOLERANCE and len(extra) <= EDGE_TOLERANCE
     add('Incoming calls', ok,
         f"Twilio delivered {len(tw_in)} customer calls to our numbers; Tina recorded {len(log_in)}. "
-        f"{len(missing)} missing from Tina, {len(extra)} in Tina that Twilio doesn't have.",
+        f"{len(missing)} missing from Tina, {len(extra)} in Tina that Twilio doesn't have."
+        + (f" (Not counted: {in_outage} more that came in during a known outage - see below.)"
+           if in_outage else ""),
         [f"missing: {sid} at {_local(tw_in[sid].start_time)} from …{(tw_in[sid]._from or '')[-3:]}" for sid in missing]
         + [f"extra: {sid} at {_local(log_in[sid]['started_at'])} ({log_in[sid]['status']})" for sid in extra])
 
@@ -149,13 +219,16 @@ def run(db, twilio_client, start: date, end: date) -> dict:
         """, (_fmt(s_utc - timedelta(minutes=5)), _fmt(e_utc)))}
     matched = [sid for sid in tw_out if sid in staff_rows]
     unanswered = [sid for sid in matched if tw_out[sid].status in ('no-answer', 'busy', 'failed', 'canceled')]
-    wrong = sorted((sid for sid in unanswered
-                    if staff_rows[sid]['status'] in ('answered', 'completed', 'transferred')),
-                   key=lambda sid: (_sort_key(staff_rows[sid]['started_at']), sid))
+    wrong_all = sorted((sid for sid in unanswered
+                        if staff_rows[sid]['status'] in ('answered', 'completed', 'transferred')),
+                       key=lambda sid: (_sort_key(staff_rows[sid]['started_at']), sid))
+    wrong = [sid for sid in wrong_all if not in_known_outage(staff_rows[sid]['started_at'])]
+    out_in_outage = len(wrong_all) - len(wrong)
     pct = round(len(wrong) / len(matched) * 100, 1) if matched else 0
     add('Outgoing calls', pct <= OUTBOUND_TOLERANCE_PCT,
         f"{len(matched)} outgoing customer calls matched to Twilio; the customer didn't pick up on "
-        f"{len(unanswered)}. Tina recorded {len(wrong)} of those as answered ({pct}%).",
+        f"{len(unanswered)}. Tina recorded {len(wrong)} of those as answered ({pct}%)."
+        + (f" (Not counted: {out_in_outage} more during a known outage.)" if out_in_outage else ""),
         [f"{staff_rows[sid]['call_sid']} by {(staff_rows[sid]['agent_email'] or '').split('@')[0]} at "
          f"{_local(staff_rows[sid]['started_at'])}: Twilio '{tw_out[sid].status}', Tina '{staff_rows[sid]['status']}'"
          for sid in wrong])
@@ -183,6 +256,7 @@ def run(db, twilio_client, start: date, end: date) -> dict:
         if unfinished else "None — every incoming call has an end.")
     add('Duplicate daily tallies', dupes == 0,
         f"{dupes} daily tallies were written with the old broken key, so they pile up." if dupes else "None.")
+    result['known_outages'] = [_outage_label(o) for _, o in sorted(outages_hit.items())]
     return result
 
 
@@ -214,6 +288,9 @@ def email_result(tenant: dict, result: dict, product: str = 'Tina') -> list[str]
             lines.append(f"{'OK     ' if c['ok'] else 'PROBLEM'}  {c['name']}: {c['summary']}")
             for ex in c['examples']:
                 lines.append(f"           - {ex}")
+        if result.get('known_outages'):
+            lines.append("\nKnown outages this week (already dealt with, so not counted above):")
+            lines += [f"  - {label}" for label in result['known_outages']]
         if bad:
             lines.append("\nA problem here means Reports (and Tina Says) may be showing wrong numbers. "
                          "Worth asking Claude to look into it.")
