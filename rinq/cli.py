@@ -6,6 +6,9 @@ Usage:
     python -m rinq.cli add-user --tenant watson --email user@example.com
     python -m rinq.cli list-tenants
     python -m rinq.cli register-number --tenant watson --number +61261234567
+    python -m rinq.cli add-known-outage --tenant watson --start 2026-11-02T08:30 --end 2026-11-02T09:22 \
+        --note "Tina down; lost callers rung back"
+    python -m rinq.cli list-known-outages --tenant watson
 """
 
 import argparse
@@ -319,6 +322,44 @@ def register_number(args):
     print(f"Registered {number} -> tenant {args.tenant}")
 
 
+def _tenant_db(tenant_id):
+    """A tenant's Database without a request (only if it already exists on disk)."""
+    from rinq.database.db import Database
+    if not get_master_db().get_tenant(tenant_id):
+        print(f"Tenant '{tenant_id}' not found")
+        sys.exit(1)
+    path = os.path.join(config.tenants_dir, tenant_id, 'rinq.db')
+    if not os.path.exists(path):
+        print(f"No database for tenant '{tenant_id}' at {path}")
+        sys.exit(1)
+    return Database(db_path=path)
+
+
+def add_known_outage(args):
+    """Tell the weekly Twilio cross-check that Tina was down in this window
+    (Sydney time), so calls lost in it are listed but not counted as a problem.
+    Only once the lost callers have been dealt with - see services/cross_check.py."""
+    from datetime import datetime
+    from rinq.services import cross_check
+    try:
+        entry = cross_check.add_known_outage(
+            _tenant_db(args.tenant), datetime.fromisoformat(args.start),
+            datetime.fromisoformat(args.end), args.note)
+    except ValueError as e:
+        print(f"Not recorded: {e}")
+        sys.exit(1)
+    print(f"Recorded known outage for {args.tenant}: {entry['start']} to {entry['end']} - {entry['note']}")
+
+
+def list_known_outages(args):
+    from rinq.services import cross_check
+    outages = cross_check.get_known_outages(_tenant_db(args.tenant))
+    if not outages:
+        print("No known outages recorded.")
+    for o in outages:
+        print(f"{o['start']} to {o['end']}  {o['note']}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Rinq Tenant Management CLI')
     subparsers = parser.add_subparsers(dest='command')
@@ -363,6 +404,19 @@ def main():
     sp.add_argument('--tenant', required=True, help='Tenant ID')
     sp.add_argument('--number', required=True, help='Phone number (E.164 format)')
     sp.set_defaults(func=register_number)
+
+    # add-known-outage / list-known-outages
+    sp = subparsers.add_parser('add-known-outage',
+                               help='Mark a window (Sydney time) when Tina was down, for the weekly cross-check')
+    sp.add_argument('--tenant', required=True, help='Tenant ID')
+    sp.add_argument('--start', required=True, help='Sydney local, YYYY-MM-DDTHH:MM')
+    sp.add_argument('--end', required=True, help='Sydney local, YYYY-MM-DDTHH:MM')
+    sp.add_argument('--note', required=True, help='What happened and how the lost callers were handled')
+    sp.set_defaults(func=add_known_outage)
+
+    sp = subparsers.add_parser('list-known-outages', help='List recorded known outages')
+    sp.add_argument('--tenant', required=True, help='Tenant ID')
+    sp.set_defaults(func=list_known_outages)
 
     args = parser.parse_args()
     if not args.command:
