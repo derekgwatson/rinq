@@ -21,6 +21,7 @@ never as a pass.
 
 import json
 import logging
+import re
 from datetime import date, datetime, time, timedelta
 
 import pytz
@@ -54,6 +55,38 @@ def _utc(d: date, end: bool = False) -> datetime:
 
 def _fmt(dt: datetime) -> str:
     return dt.strftime('%Y-%m-%d %H:%M:%S')
+
+
+# A real Twilio call SID. Anything else in call_log (e.g. 'CAclaudeprobe-b1')
+# is a hand-made test row, which Twilio can never have.
+_REAL_SID = re.compile(r'^CA[0-9a-f]{32}$')
+
+
+def _as_utc(value) -> datetime | None:
+    """Twilio's aware datetime, or call_log's naive-UTC text, as aware UTC."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.strip().replace('Z', '+00:00'))
+        except ValueError:
+            return None
+    if value.tzinfo is None:
+        value = pytz.UTC.localize(value)
+    return value.astimezone(pytz.UTC)
+
+
+def _local(value) -> str:
+    """Sydney time the way a person reads it: 'Mon 2 Nov 9:19am'."""
+    dt = _as_utc(value)
+    if dt is None:
+        return str(value)
+    dt = dt.astimezone(LOCAL_TZ)
+    return f"{dt:%a} {dt.day} {dt:%b} {dt.hour % 12 or 12}:{dt:%M}{'am' if dt.hour < 12 else 'pm'}"
+
+
+def _sort_key(value) -> datetime:
+    return _as_utc(value) or datetime.min.replace(tzinfo=pytz.UTC)
 
 
 def run(db, twilio_client, start: date, end: date) -> dict:
@@ -94,16 +127,16 @@ def run(db, twilio_client, start: date, end: date) -> dict:
             SELECT call_sid, started_at, status FROM call_log
             WHERE direction = 'inbound' AND started_at >= ? AND started_at <= ?
               AND {ONE_ROW_PER_CALL_SQL}
-        """, (_fmt(s_utc), _fmt(e_utc)))}
+        """, (_fmt(s_utc), _fmt(e_utc))) if _REAL_SID.match(r['call_sid'] or '')}
     result['incoming_calls'] = len(tw_in)
-    missing = sorted(tw_in.keys() - log_in.keys())
-    extra = sorted(log_in.keys() - tw_in.keys())
+    missing = sorted(tw_in.keys() - log_in.keys(), key=lambda sid: (_sort_key(tw_in[sid].start_time), sid))
+    extra = sorted(log_in.keys() - tw_in.keys(), key=lambda sid: (_sort_key(log_in[sid]['started_at']), sid))
     ok = len(missing) <= EDGE_TOLERANCE and len(extra) <= EDGE_TOLERANCE
     add('Incoming calls', ok,
         f"Twilio delivered {len(tw_in)} customer calls to our numbers; Tina recorded {len(log_in)}. "
         f"{len(missing)} missing from Tina, {len(extra)} in Tina that Twilio doesn't have.",
-        [f"missing: {sid} at {tw_in[sid].start_time} from …{(tw_in[sid]._from or '')[-3:]}" for sid in missing]
-        + [f"extra: {sid} at {log_in[sid]['started_at']} ({log_in[sid]['status']})" for sid in extra])
+        [f"missing: {sid} at {_local(tw_in[sid].start_time)} from …{(tw_in[sid]._from or '')[-3:]}" for sid in missing]
+        + [f"extra: {sid} at {_local(log_in[sid]['started_at'])} ({log_in[sid]['status']})" for sid in extra])
 
     # ---- 2. Outgoing calls: never "answered" when the customer didn't pick up
     tw_out = {c.sid: c for c in calls
@@ -116,14 +149,15 @@ def run(db, twilio_client, start: date, end: date) -> dict:
         """, (_fmt(s_utc - timedelta(minutes=5)), _fmt(e_utc)))}
     matched = [sid for sid in tw_out if sid in staff_rows]
     unanswered = [sid for sid in matched if tw_out[sid].status in ('no-answer', 'busy', 'failed', 'canceled')]
-    wrong = [sid for sid in unanswered
-             if staff_rows[sid]['status'] in ('answered', 'completed', 'transferred')]
+    wrong = sorted((sid for sid in unanswered
+                    if staff_rows[sid]['status'] in ('answered', 'completed', 'transferred')),
+                   key=lambda sid: (_sort_key(staff_rows[sid]['started_at']), sid))
     pct = round(len(wrong) / len(matched) * 100, 1) if matched else 0
     add('Outgoing calls', pct <= OUTBOUND_TOLERANCE_PCT,
         f"{len(matched)} outgoing customer calls matched to Twilio; the customer didn't pick up on "
         f"{len(unanswered)}. Tina recorded {len(wrong)} of those as answered ({pct}%).",
         [f"{staff_rows[sid]['call_sid']} by {(staff_rows[sid]['agent_email'] or '').split('@')[0]} at "
-         f"{staff_rows[sid]['started_at']}: Twilio '{tw_out[sid].status}', Tina '{staff_rows[sid]['status']}'"
+         f"{_local(staff_rows[sid]['started_at'])}: Twilio '{tw_out[sid].status}', Tina '{staff_rows[sid]['status']}'"
          for sid in wrong])
 
     # ---- 3. Housekeeping: have any of the old problems come back?
@@ -175,7 +209,7 @@ def email_result(tenant: dict, result: dict, product: str = 'Tina') -> list[str]
         subject = (f"{product} weekly check: all good ({period})" if not bad else
                    f"{product} weekly check: {len(bad)} problem{'s' if len(bad) != 1 else ''} ({period})")
         lines = [f"Every week {product} compares its own call records with Twilio's independent record "
-                 f"of the same calls. Week checked: {period}.\n"]
+                 f"of the same calls. Week checked: {period}. Times are Sydney time.\n"]
         for c in result['checks']:
             lines.append(f"{'OK     ' if c['ok'] else 'PROBLEM'}  {c['name']}: {c['summary']}")
             for ex in c['examples']:
