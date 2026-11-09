@@ -10,6 +10,7 @@ werkzeug>=3.0
 # Auth
 google-auth>=2.0
 google-auth-oauthlib>=1.0
+oauthlib>=4.0.1  # security fix GHSA-3jp2-3mrg-2vxc
 google-auth-httplib2>=0.2
 
 # Google APIs (Drive, Gmail for recordings)
