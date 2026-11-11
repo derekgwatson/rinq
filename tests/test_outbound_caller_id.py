@@ -71,3 +71,16 @@ def test_empty_shared_desk_phone_with_no_default_says_how_to_log_in(client, make
     twiml = _call_out(client, frm=_shared_desk_phone(store))
     assert 'star 5 0' in twiml
     assert _customer_leg(outside) is None
+
+
+def test_saved_setting_beats_a_stale_phone_page(client, make_store, outside):
+    """The phone page posts the number it loaded at page-open. A change made
+    in Settings since then must win (Britt, 2026-11-11)."""
+    store = make_store(tenant_default_caller_id=False)
+    store.db.create_staff_extension(ANNA, 'test')
+    store.db.update_staff_extension_caller_id(ANNA, '+61262804443', 'test')
+    r = client.post('/api/voice/outbound',
+                    data={'To': CUSTOMER, 'From': ANNA_BROWSER, 'CallSid': 'CAagentleg',
+                          'AccountSid': 'ACwatson', 'CallerId': '+61261926884'})
+    assert r.status_code == 200
+    assert _customer_leg(outside)['from_'] == '+61262804443'
