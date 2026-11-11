@@ -115,35 +115,46 @@ def resolve_caller_id(email: str, db=None) -> dict:
             f"one is set (Admin -> Caller ID overview)."
         )
 
-    # Build display name.
-    #
-    # phone_numbers.friendly_name is often just the number's own digits (Twilio
-    # seeds it that way), which tells the user nothing — they'd see "Calling as
-    # 61269316440" instead of "Calling as Wagga Wagga". Treat a name that is
-    # merely the digits as no name at all and prefer the verified_caller_ids
-    # label, which is where the office names actually live.
-    display = caller_id
-    if caller_id:
-        wanted_digits = _digits(caller_id)
-
-        def _label(row):
-            name = (row.get('friendly_name') or '').strip()
-            return name if name and _digits(name) != wanted_digits else None
-
-        owned = next((n for n in db.get_phone_numbers()
-                      if n['phone_number'] == caller_id), None)
-        verified = next((v for v in db.get_verified_caller_ids(active_only=True)
-                         if v['phone_number'] == caller_id), None)
-
-        display = (_label(owned) if owned else None) \
-            or (_label(verified) if verified else None) \
-            or caller_id
-
-        if owned and owned.get('section'):
-            display += f" ({owned['section']})"
+    display = caller_id_label(caller_id, db) if caller_id else caller_id
 
     return {
         'caller_id': caller_id,
         'source': source,
         'display': display,
     }
+
+
+def caller_id_label(phone_number, db):
+    """The name staff see for one of our numbers ("Wagga Wagga", "Canberra (CBR Showroom)").
+
+    phone_numbers.friendly_name is often just the number's own digits (Twilio
+    seeds it that way), which tells the user nothing — they'd see "Calling as
+    61269316440" instead of "Calling as Wagga Wagga". Treat a name that is
+    merely the digits as no name at all and prefer the verified_caller_ids
+    label, which is where the office names actually live (gotcha 39).
+
+    Every place that shows a caller ID by name must use this — the swap
+    button had its own copy that skipped the digits rule, so it read
+    "⇄ 61269316440" while the active number read "Canberra", and pressing it
+    looked like nothing happened (Britt, 2026-11-11).
+    """
+    if not phone_number:
+        return phone_number
+    wanted_digits = _digits(phone_number)
+
+    def _label(row):
+        name = (row.get('friendly_name') or '').strip()
+        return name if name and _digits(name) != wanted_digits else None
+
+    owned = next((n for n in db.get_phone_numbers()
+                  if n['phone_number'] == phone_number), None)
+    verified = next((v for v in db.get_verified_caller_ids(active_only=True)
+                     if v['phone_number'] == phone_number), None)
+
+    display = (_label(owned) if owned else None) \
+        or (_label(verified) if verified else None) \
+        or phone_number
+
+    if owned and owned.get('section'):
+        display += f" ({owned['section']})"
+    return display
