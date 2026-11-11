@@ -3704,11 +3704,10 @@ async function swapCallerId() {
             showCallNotice(data.error || 'Could not swap caller ID');
             return;
         }
-        // The endpoint only returns phone numbers; swap the visible labels too.
-        const previousActiveLabel = display.textContent;
-        const previousSwapLabel = swapLabel ? swapLabel.textContent : '';
-        if (swapLabel) swapLabel.textContent = previousActiveLabel;
-        display.textContent = previousSwapLabel;
+        // Show what the server now has, by name — never just trade the two
+        // labels on screen, or the page can disagree with what calls go out on.
+        display.textContent = data.active_display || data.active_caller_id || 'Not set';
+        if (swapLabel) swapLabel.textContent = data.toggle_display || data.toggle_target || '';
         if (callerIdInput) callerIdInput.value = data.active_caller_id || '';
         if (alternateInput) alternateInput.value = data.toggle_target || '';
         if (typeof currentCallerId !== 'undefined') {

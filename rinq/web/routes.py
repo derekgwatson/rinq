@@ -2613,10 +2613,13 @@ def swap_desk_phone_caller_id():
         details=f"Swapped to active={result['default_caller_id']}, target={result['alternate_caller_id']}",
         performed_by=_audit_tag(user)
     )
+    from rinq.services.caller_id import caller_id_label
     return jsonify({
         'ok': True,
         'active_caller_id': result['default_caller_id'],
         'toggle_target': result['alternate_caller_id'],
+        'active_display': caller_id_label(result['default_caller_id'], db),
+        'toggle_display': caller_id_label(result['alternate_caller_id'], db),
     })
 
 
@@ -2753,7 +2756,7 @@ def phone():
     db = get_db()
 
     # Resolve outbound caller ID via priority chain
-    from rinq.services.caller_id import resolve_caller_id
+    from rinq.services.caller_id import resolve_caller_id, caller_id_label
     cid = resolve_caller_id(user.email, db)
     default_caller_id = cid['caller_id']
     caller_id_display = cid['display']
@@ -2769,19 +2772,8 @@ def phone():
     # Toggle target for the swap button (label only — the swap endpoint
     # re-resolves the active number itself).
     alternate_caller_id = staff_ext.get('alternate_caller_id') if staff_ext else None
-    alternate_caller_id_display = None
-    if alternate_caller_id:
-        for n in db.get_phone_numbers():
-            if n['phone_number'] == alternate_caller_id:
-                alternate_caller_id_display = n.get('friendly_name') or alternate_caller_id
-                break
-        if not alternate_caller_id_display:
-            for vcid in db.get_verified_caller_ids(active_only=True):
-                if vcid['phone_number'] == alternate_caller_id:
-                    alternate_caller_id_display = vcid.get('friendly_name') or alternate_caller_id
-                    break
-        if not alternate_caller_id_display:
-            alternate_caller_id_display = alternate_caller_id
+    alternate_caller_id_display = caller_id_label(alternate_caller_id, db) \
+        if alternate_caller_id else None
 
     response = make_response(render_template('phone.html',
                          default_caller_id=default_caller_id,
