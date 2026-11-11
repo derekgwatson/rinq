@@ -5545,6 +5545,19 @@ def voice_outbound():
     service = get_twilio_service()
     to_e164 = service._format_phone_number(to_number)
 
+    # The browser phone page posts the caller ID it loaded when the page was
+    # opened. Change it in the home-page Settings card with the phone tab
+    # already open and that tab keeps sending the OLD number until it is
+    # reloaded — staff saw "I changed my caller ID and it didn't work" (Britt,
+    # 2026-11-11: a call went out on her old number a minute after the change).
+    # When we know who is calling, their saved setting is the answer, not
+    # whatever a possibly-stale page sent.
+    if caller_id and staff_email:
+        posted_caller_id = caller_id
+        caller_id = None
+    else:
+        posted_caller_id = None
+
     # Determine caller ID - use provided, or look up user's default, or fall back
     if not caller_id:
         # Who is calling was settled at the top of this function, for browser
@@ -5563,6 +5576,9 @@ def voice_outbound():
             if caller_id:
                 logger.info(f"Caller ID for {lookup_email}: {caller_id} "
                             f"(source={cid['source']})")
+            if posted_caller_id and posted_caller_id != caller_id:
+                logger.info(f"Ignored stale caller ID {posted_caller_id} from "
+                            f"{lookup_email}'s phone page; using {caller_id}")
         elif empty_shared_phone:
             caller_id = _empty_shared_phone_caller_id(from_identity, db)
 
