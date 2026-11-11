@@ -8,6 +8,7 @@ Provides the same interface as GatewayAuth:
 - api_or_session_auth (for API endpoints)
 """
 
+import hmac
 import os
 import logging
 from functools import wraps
@@ -140,14 +141,13 @@ def manager_required(f):
     return decorated
 
 
-def api_or_session_auth(view_func):
-    """Allow either API key, session auth, or direct unix socket access.
+def _valid_bot_key(header_key) -> bool:
+    expected = os.environ.get('BOT_API_KEY', '')
+    return bool(header_key and expected) and hmac.compare_digest(str(header_key), expected)
 
-    Standalone version — checks BOT_API_KEY env var for API access,
-    falls back to session auth for web UI, and allows unauthenticated
-    requests that arrive directly on the unix socket (no X-Forwarded-For
-    header means no nginx proxy, so it must be a local process).
-    """
+
+def _api_auth(view_func, require_admin):
+    """Shared body of api_or_session_auth / admin_or_api."""
     @wraps(view_func)
     def wrapper(*args, **kwargs):
         # Direct unix socket access (no proxy) — trusted local request
@@ -158,20 +158,51 @@ def api_or_session_auth(view_func):
         header_key = request.headers.get("X-API-Key")
 
         if header_key:
-            bot_api_key = os.environ.get('BOT_API_KEY', '')
-            if header_key == bot_api_key:
+            if _valid_bot_key(header_key):
                 g.api_caller = 'bot'
                 return view_func(*args, **kwargs)
             return jsonify({"error": "Invalid API key"}), 403
 
-        # Check session auth
+        # Session auth: the person must still be a member of the current
+        # tenant (get_current_user() is None otherwise).
         if session.get('user_id'):
+            user = get_current_user() if getattr(g, 'tenant', None) else None
+            if user is None:
+                return jsonify({"error": "No access to this tenant"}), 403
+            if require_admin and not user.is_admin:
+                return jsonify({"error": "Admin access required"}), 403
             g.api_caller = f"session:{session.get('user_email', 'unknown')}"
             return view_func(*args, **kwargs)
 
         return jsonify({"error": "Authentication required"}), 401
 
     return wrapper
+
+
+def api_or_session_auth(view_func):
+    """Allow either API key, session auth, or direct unix socket access.
+
+    Standalone version — checks BOT_API_KEY env var for API access,
+    falls back to session auth for web UI (the user must be a member of the
+    current tenant), and allows unauthenticated requests that arrive directly
+    on the unix socket (no X-Forwarded-For header means no nginx proxy, so it
+    must be a local process).
+    """
+    return _api_auth(view_func, require_admin=False)
+
+
+def admin_or_api(view_func):
+    """Like api_or_session_auth, but a session caller must be a tenant admin.
+
+    For admin, bot and cron endpoints: the bot key and local (unix socket)
+    callers are accepted as before.
+    """
+    return _api_auth(view_func, require_admin=True)
+
+
+def is_session_caller() -> bool:
+    """True when the current API request was authorised by a user session."""
+    return (getattr(g, 'api_caller', None) or '').startswith('session:')
 
 
 def get_api_caller():

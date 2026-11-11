@@ -16,6 +16,8 @@ try:
     from shared.auth.bot_api import api_or_session_auth, get_api_caller
 except ImportError:
     from rinq.auth.decorators import api_or_session_auth, get_api_caller
+from rinq.auth.decorators import admin_or_api, is_session_caller
+from rinq.auth.decorators import get_current_user as _session_user
 
 logger = logging.getLogger(__name__)
 
@@ -303,10 +305,21 @@ def register(bp):
         call_type = request.args.get('call_type')
         staff_email = request.args.get('staff_email')
 
+        # A signed-in user sees the same recordings as on the Recordings page
+        # (own + reportees unless they can view all); bot/local callers see all.
+        scope = None
+        if is_session_caller():
+            from rinq.services.recording_access import visible_staff_emails
+            scope = visible_staff_emails(_session_user())
+
         if staff_email:
-            recordings = db.get_recordings_for_staff(staff_email, limit)
+            if scope is not None and staff_email.lower() not in {e.lower() for e in scope}:
+                recordings = []
+            else:
+                recordings = db.get_recordings_for_staff(staff_email, limit)
         else:
-            recordings = db.get_recording_log(limit=limit, call_type=call_type, exclude_voicemail=True)
+            recordings = db.get_recording_log(limit=limit, call_type=call_type,
+                                              exclude_voicemail=True, staff_emails=scope)
 
         return jsonify({"recordings": recordings, "count": len(recordings)})
 
@@ -323,6 +336,10 @@ def register(bp):
         recording = db.get_recording_by_sid(recording_sid)
         if not recording:
             return jsonify({"error": "Recording not found"}), 404
+        if is_session_caller():
+            from rinq.services.recording_access import can_access_recording
+            if not can_access_recording(_session_user(), recording):
+                return jsonify({"error": "Recording not found"}), 404
 
         # 1. Local cache
         file_path = recording_service.get_recording_file_path(recording_sid)
@@ -416,7 +433,7 @@ def register(bp):
         return jsonify({"error": "Recording not available"}), 404
 
     @bp.route('/recordings/purge', methods=['POST'])
-    @api_or_session_auth
+    @admin_or_api
     def purge_stale_recordings():
         """Purge local recording cache files not accessed recently.
 
@@ -493,7 +510,7 @@ def register(bp):
         return jsonify(payload), 200 if not errors else 207
 
     @bp.route('/recordings/purge-drive', methods=['POST'])
-    @api_or_session_auth
+    @admin_or_api
     def purge_drive_recordings():
         """Purge old recordings from Google Drive."""
         from rinq.services.drive_service import drive_service

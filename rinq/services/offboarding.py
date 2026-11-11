@@ -15,6 +15,9 @@ from phone numbers on /api/voice|sip paths. `g.tenant` is None for this
 request, so touching `get_db()` directly would raise (gotcha 35). Iterating is
 also the semantically correct thing — offboarding means "remove this person
 everywhere", and a person can hold credentials in more than one tenant.
+
+A signed-in admin calling the endpoint passes `tenant_id`, which limits both
+the tenant steps and the master-DB membership removal to that one tenant.
 """
 
 import logging
@@ -152,6 +155,13 @@ TENANT_STEPS = (
 )
 
 
+def _tenants(tenant_id=None):
+    """Every tenant (bot/local callers), or just `tenant_id` when given."""
+    for tenant in iter_tenant_contexts():
+        if tenant_id is None or tenant['id'] == tenant_id:
+            yield tenant
+
+
 def _has_any_trace(email, db):
     """Whether this tenant holds anything belonging to the person."""
     return bool(
@@ -162,7 +172,7 @@ def _has_any_trace(email, db):
     )
 
 
-def preview_offboard_staff(email: str) -> dict:
+def preview_offboard_staff(email: str, tenant_id: str | None = None) -> dict:
     """Report what offboarding would remove, changing nothing.
 
     Worth running before the real thing on anyone whose departure is in doubt
@@ -176,7 +186,7 @@ def preview_offboard_staff(email: str) -> dict:
     preview = {'email': email, 'dry_run': True, 'tenants': {},
                'tenant_access': [], 'orphaned_reports': {}}
 
-    for tenant in iter_tenant_contexts():
+    for tenant in _tenants(tenant_id):
         db = get_db()
         if not _has_any_trace(email, db):
             continue
@@ -204,14 +214,16 @@ def preview_offboard_staff(email: str) -> dict:
             {'tenant': t['id'],
              'role': master_db.get_user_role_in_tenant(master_user['id'], t['id'])}
             for t in master_db.get_user_tenants(master_user['id'])
+            if tenant_id is None or t['id'] == tenant_id
         ]
 
     preview['success'] = True
     return preview
 
 
-def offboard_staff(email: str, performed_by: str) -> dict:
-    """Revoke a person's Rinq access across every tenant they appear in.
+def offboard_staff(email: str, performed_by: str, tenant_id: str | None = None) -> dict:
+    """Revoke a person's Rinq access across every tenant they appear in
+    (or only in `tenant_id`, when given).
 
     Idempotent — safe to call repeatedly. Steps that were already done report
     'already_clear'. A step that fails is recorded and the rest still run, so a
@@ -236,8 +248,8 @@ def offboard_staff(email: str, performed_by: str) -> dict:
         'errors': [],
     }
 
-    for tenant in iter_tenant_contexts():
-        tenant_id = tenant['id']
+    for tenant in _tenants(tenant_id):
+        this_tenant = tenant['id']
         try:
             db = get_db()
             if not _has_any_trace(email, db):
@@ -252,18 +264,18 @@ def offboard_staff(email: str, performed_by: str) -> dict:
                     # would then never reach them either.
                     logger.exception(
                         f"Offboarding step {step_fn.__name__} failed for "
-                        f"{email} in tenant {tenant_id}: {e}")
+                        f"{email} in tenant {this_tenant}: {e}")
                     steps.append(_step(step_fn.__name__.strip('_'), FAILED, str(e)))
 
             reports = [r['email'] for r in db.get_staff_reporting_to(email)]
             if reports:
-                result['orphaned_reports'][tenant_id] = reports
+                result['orphaned_reports'][this_tenant] = reports
 
-            result['tenants'][tenant_id] = steps
+            result['tenants'][this_tenant] = steps
 
             failures = [s for s in steps if s['status'] == FAILED]
             for failure in failures:
-                result['errors'].append(f"{tenant_id}/{failure['step']}: {failure['detail']}")
+                result['errors'].append(f"{this_tenant}/{failure['step']}: {failure['detail']}")
 
             db.log_activity(
                 action='offboard_staff',
@@ -272,8 +284,8 @@ def offboard_staff(email: str, performed_by: str) -> dict:
                 performed_by=performed_by,
             )
         except Exception as e:
-            logger.exception(f"Offboarding failed for {email} in tenant {tenant_id}: {e}")
-            result['errors'].append(f"{tenant_id}: {e}")
+            logger.exception(f"Offboarding failed for {email} in tenant {this_tenant}: {e}")
+            result['errors'].append(f"{this_tenant}: {e}")
 
     # Tenant access lives in the master DB and needs no tenant context.
     try:
@@ -281,6 +293,8 @@ def offboard_staff(email: str, performed_by: str) -> dict:
         master_user = master_db.get_user_by_email(email)
         if master_user:
             for tenant in master_db.get_user_tenants(master_user['id']):
+                if tenant_id is not None and tenant['id'] != tenant_id:
+                    continue
                 if master_db.remove_user_from_tenant(tenant['id'], master_user['id']):
                     result['tenant_access_revoked'].append(tenant['id'])
     except Exception as e:

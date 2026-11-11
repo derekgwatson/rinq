@@ -14,6 +14,7 @@ try:
     from shared.auth.bot_api import api_or_session_auth, get_api_caller, get_api_caller_email
 except ImportError:
     from rinq.auth.decorators import api_or_session_auth, get_api_caller, get_api_caller_email
+from rinq.auth.decorators import admin_or_api
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,7 @@ def register(bp):
     # =========================================================================
 
     @bp.route('/staff/sync', methods=['POST'])
-    @api_or_session_auth
+    @admin_or_api
     def sync_staff_extensions():
         """Sync staff from Peter - create extensions for anyone who doesn't have one.
 
@@ -151,7 +152,7 @@ def register(bp):
         })
 
     @bp.route('/staff/import-hierarchy', methods=['POST'])
-    @api_or_session_auth
+    @admin_or_api
     def import_staff_hierarchy():
         """One-off import of reporting hierarchy from Peter (Watson bot-team).
 
@@ -570,7 +571,7 @@ def register(bp):
         return jsonify({'entries': entries})
 
     @bp.route('/address-book', methods=['POST'])
-    @api_or_session_auth
+    @admin_or_api
     def create_address_book_entry():
         """Add a manual address book entry.
 
@@ -599,7 +600,7 @@ def register(bp):
         return jsonify({'id': entry_id}), 201
 
     @bp.route('/address-book/<int:entry_id>', methods=['DELETE'])
-    @api_or_session_auth
+    @admin_or_api
     def delete_address_book_entry(entry_id):
         """Delete an address book entry by id."""
         db = get_db()
@@ -609,7 +610,7 @@ def register(bp):
         return jsonify({'ok': True})
 
     @bp.route('/address-book/sync', methods=['POST'])
-    @api_or_session_auth
+    @admin_or_api
     def sync_address_book():
         """Trigger an address book sync from the configured source.
 
@@ -697,7 +698,7 @@ def register(bp):
     # =========================================================================
 
     @bp.route('/staff/offboard', methods=['POST'])
-    @api_or_session_auth
+    @admin_or_api
     def offboard_staff_member():
         """Revoke a departing person's phone-system access.
 
@@ -728,10 +729,16 @@ def register(bp):
 
         performed_by = get_api_caller() or 'api'
 
+        # A signed-in admin offboards within their own tenant only; the bot
+        # key / local callers (Olive) cover every tenant.
+        from flask import g
+        from rinq.auth.decorators import is_session_caller
+        tenant_id = g.tenant['id'] if is_session_caller() else None
+
         try:
             if data.get('dry_run'):
-                return jsonify(preview_offboard_staff(email))
-            result = offboard_staff(email, performed_by=performed_by)
+                return jsonify(preview_offboard_staff(email, tenant_id=tenant_id))
+            result = offboard_staff(email, performed_by=performed_by, tenant_id=tenant_id)
         except Exception as e:
             logger.exception(f"Offboarding {email} failed: {e}")
             return jsonify({'success': False, 'email': email, 'error': str(e)}), 500
