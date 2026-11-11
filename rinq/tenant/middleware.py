@@ -8,8 +8,10 @@ Resolves the current tenant on each request and stores it in Flask's g object.
 - Auth/system routes: no tenant needed
 """
 
+import hmac
 import logging
 import os
+import re
 from flask import g, request, session
 from rinq.database.master import get_master_db
 
@@ -34,6 +36,33 @@ SIGNATURE_EXEMPT_PATHS = (
 )
 
 
+_LOG_ONLY_PATH_RE = re.compile(
+    r'^/api/voice/(queue/\d+/agent-answer|stuart-record|extension-dial-status)$')
+
+
+def _is_valid_bot_key(key) -> bool:
+    expected = os.environ.get('BOT_API_KEY', '')
+    return bool(key and expected) and hmac.compare_digest(str(key), expected)
+
+
+def _signed_url_candidates():
+    """The URL Twilio signed, as exactly as we can rebuild it.
+
+    Twilio signs the URL byte-for-byte as it requested it. Flask's request.url
+    decodes and re-quotes the query string, so %40 comes back as '@' and %2B as
+    '+' — and every genuine callback whose URL carries an encoded email or
+    phone number (mobile-screened queue answers, Stuart's record redirect)
+    failed validation (the log-mode warnings, 2026-11). gunicorn keeps the raw
+    request line in RAW_URI; try that first, then request.url.
+    """
+    raw = request.environ.get('RAW_URI') or request.environ.get('REQUEST_URI')
+    urls = []
+    if raw:
+        urls.append(f"{request.scheme}://{request.host}{raw}")
+    urls.append(request.url)
+    return urls
+
+
 def _check_twilio_signature(tenant):
     """Validate X-Twilio-Signature on unauthenticated webhook requests.
 
@@ -48,21 +77,36 @@ def _check_twilio_signature(tenant):
     socket (no X-Forwarded-For); both skip this check.
 
     Rollout is controlled by RINQ_TWILIO_SIGNATURE_MODE:
-      - 'log' (default): validate and log failures, but allow the request.
+      - 'log': validate and log failures, but allow the request.
         Watch the logs for false negatives (URL reconstruction behind the
         proxy), then switch to enforce.
-      - 'enforce': reject invalid/missing signatures with 403.
+      - 'enforce' (default): reject invalid/missing signatures with 403
+        (except _LOG_ONLY_PATH_RE, still being verified — see below).
       - 'off': skip entirely.
 
     Returns True if the request may proceed.
     """
-    mode = os.environ.get('RINQ_TWILIO_SIGNATURE_MODE', 'log').lower()
+    mode = os.environ.get('RINQ_TWILIO_SIGNATURE_MODE', 'enforce').lower()
+    # Default is now ENFORCE (security audit 2026-11-12: in 'log' mode anyone
+    # could forge a webhook — place calls on our bill, steal the Twilio token
+    # via a forged recording URL). The routes below still had GENUINE Twilio
+    # callbacks failing in production because of URL re-encoding; they stay in
+    # log mode until _signed_url_candidates() is proven on live traffic, then
+    # this list should be emptied.
+    if mode == 'enforce' and _LOG_ONLY_PATH_RE.match(request.path):
+        mode = 'log'
     if mode == 'off':
         return True
     if request.path in SIGNATURE_EXEMPT_PATHS:
         return True
-    if session.get('user_id') or request.headers.get('X-API-Key'):
-        return True  # app caller, not Twilio
+    if session.get('user_id'):
+        return True  # signed-in browser softphone, not Twilio
+    # An app caller must present the REAL bot key. This used to accept any
+    # X-API-Key value at all, so one made-up header switched the Twilio check
+    # off for every webhook — anonymous outbound calls on the tenant's bill,
+    # forged recording callbacks (security audit 2026-11-12).
+    if _is_valid_bot_key(request.headers.get('X-API-Key')):
+        return True
     if not request.headers.get('X-Forwarded-For'):
         return True  # unix-socket cron / local process
 
@@ -72,8 +116,9 @@ def _check_twilio_signature(tenant):
     if signature and auth_token:
         try:
             from twilio.request_validator import RequestValidator
-            valid = RequestValidator(auth_token).validate(
-                request.url, request.form, signature)
+            validator = RequestValidator(auth_token)
+            valid = any(validator.validate(url, request.form, signature)
+                        for url in _signed_url_candidates())
         except Exception as e:
             logger.warning(f"Twilio signature validation errored for {request.path}: {e}")
     if valid:

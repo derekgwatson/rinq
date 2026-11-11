@@ -11,6 +11,7 @@ Handles:
 import base64
 import logging
 import os
+import re
 import shutil
 import requests
 from datetime import datetime, timezone
@@ -157,6 +158,27 @@ def get_retention_days(db) -> int:
     return days if days >= 1 else DEFAULT_RETENTION_DAYS
 
 
+
+# Twilio recording SIDs are 'RE' + 32 hex. Webhook form fields are attacker-
+# reachable (security audit 2026-11-12): a forged RecordingUrl made Rinq send the
+# tenant's Twilio account SID + auth token to any host, and a '../' RecordingSid
+# wrote files outside the recordings folder. So the media URL is BUILT from a
+# validated SID and the tenant's own account — never taken from the request.
+_RECORDING_SID_RE = re.compile(r'RE[0-9a-f]{32}')
+
+
+def is_recording_sid(value) -> bool:
+    return bool(value) and bool(_RECORDING_SID_RE.fullmatch(str(value)))
+
+
+def twilio_recording_media_url(recording_sid):
+    """The tenant's own api.twilio.com URL for this recording's MP3, or None."""
+    from rinq.tenant.context import get_twilio_config
+    account_sid = get_twilio_config('twilio_account_sid') or ''
+    if not is_recording_sid(recording_sid) or not re.fullmatch(r'AC[0-9A-Za-z]+', account_sid):
+        return None
+    return f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Recordings/{recording_sid}.mp3"
+
 class RecordingService:
     """Service for managing call recordings."""
 
@@ -189,6 +211,8 @@ class RecordingService:
         Returns:
             Relative path to saved file (relative to RECORDINGS_DIR)
         """
+        if not is_recording_sid(recording_sid):
+            raise ValueError(f"not a Twilio recording SID: {recording_sid!r}")
         filename = f"{recording_sid}.mp3"
         filepath = os.path.join(self.RECORDINGS_DIR, filename)
         with open(filepath, 'wb') as f:
@@ -296,7 +320,10 @@ class RecordingService:
         try:
             # 1. Download recording from Twilio
             logger.info(f"Downloading recording {recording_sid} from Twilio")
-            audio_url = recording_url if recording_url.endswith('.mp3') else f"{recording_url}.mp3"
+            audio_url = twilio_recording_media_url(recording_sid)
+            if not audio_url:
+                logger.warning(f"Refusing recording with unexpected SID {recording_sid!r}")
+                return {'success': False, 'error': 'invalid recording sid'}
 
             # Twilio requires authentication for recording downloads
             from rinq.tenant.context import get_twilio_config

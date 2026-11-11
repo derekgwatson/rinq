@@ -2966,6 +2966,14 @@ function checkForNewQueueCallers(callers) {
 // caller numbers etc. come from external data — Clara/customer records).
 // Defined here (shared block) so both the softphone and non-softphone
 // branches can use it.
+// Numbers that go inside an inline onclick: digits, + * # only. A caller's
+// number comes from the phone network (and could be forged), and escapeHtml
+// doesn't escape quotes — a crafted number broke out of the Call Back button
+// and ran script on staff phone pages (security audit 2026-11-12).
+function dialSafe(value) {
+    return String(value || '').replace(/[^+\d*#]/g, '');
+}
+
 function escapeHtml(str) {
     if (!str) return '';
     const div = document.createElement('div');
@@ -5118,7 +5126,7 @@ function renderHistoryCard(call) {
     const duration = formatDuration(call.talk_seconds || call.total_seconds);
 
     // Sanitize number for onclick - phone numbers and extensions are dialable
-    const dialNumber = otherNumber.match(/^[+\d]/) ? otherNumber.replace(/'/g, '') : '';
+    const dialNumber = otherNumber.match(/^[+\d]/) ? dialSafe(otherNumber) : '';
 
     return `
         <div class="history-card"${dialNumber ? ` onclick="historyCardClick('${dialNumber}')"` : ''}>
@@ -6614,7 +6622,7 @@ function renderCallbacks(callbacks) {
                     </div>
                 </div>
                 <div class="callback-actions">
-                    <button class="btn-callback-call" onclick="claimAndCallBack(${cb.id}, '${cb.customer_phone}')">
+                    <button class="btn-callback-call" onclick="claimAndCallBack(${Number(cb.id)}, '${dialSafe(cb.customer_phone)}')">
                         Call Back
                     </button>
                     <button class="btn-callback-done" onclick="completeCallback(${cb.id})" title="Mark as done">
