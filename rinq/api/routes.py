@@ -11,6 +11,7 @@ Provides endpoints for:
 - Test calls
 """
 
+import re
 import json
 import logging
 import threading
@@ -4058,7 +4059,9 @@ def queue_escape(queue_id):
         # Create callback request
         db.create_callback_request(
             queue_id=queue_id,
-            customer_phone=from_number,
+            # Phone characters only — this value ends up in a staff-page
+            # button (security audit 2026-11-12).
+            customer_phone=re.sub(r'[^+\d]', '', from_number or '') or 'unknown',
             customer_name=customer_name,
             call_sid=call_sid,
         )
@@ -4470,7 +4473,12 @@ def voicemail_handler():
             import time
 
             # Download recording from Twilio (add .mp3 extension for audio format)
-            audio_url = f"{recording_url}.mp3"
+            # Built from the SID + our own account, never the posted URL (see
+            # recording_service.twilio_recording_media_url).
+            from rinq.services.recording_service import twilio_recording_media_url
+            audio_url = twilio_recording_media_url(recording_sid)
+            if not audio_url:
+                raise ValueError(f"not a Twilio recording SID: {recording_sid!r}")
 
             # Twilio requires auth to download recordings
             # Recording might not be immediately available - retry with backoff

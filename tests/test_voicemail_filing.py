@@ -32,7 +32,9 @@ def tickets(monkeypatch):
     return made
 
 
-def _voicemail(client, to, sid='REvm1', text='Hi, ringing about my blinds'):
+# Real Twilio recording SIDs are 'RE' + 32 hex — Rinq refuses anything else
+# since the 2026-11-12 security audit.
+def _voicemail(client, to, sid='RE11111111111111111111111111111111', text='Hi, ringing about my blinds'):
     r = client.post('/api/voice/voicemail', data={
         'RecordingUrl': f'https://api.twilio.com/Recordings/{sid}', 'RecordingSid': sid,
         'RecordingDuration': '12', 'From': '+61400111222', 'To': to, 'CallSid': f'CA{sid}',
@@ -56,7 +58,7 @@ def test_voicemail_becomes_a_ticket_for_the_flows_team(client, make_store, ticke
     t = tickets[0]
     assert t['group_id'] == 42
     assert 'Hi, ringing about my blinds' in t['description']
-    assert t['attachments'][0]['filename'] == 'voicemail_REvm1.mp3'
+    assert t['attachments'][0]['filename'] == 'voicemail_RE11111111111111111111111111111111.mp3'
 
 
 def test_the_ticket_number_is_kept_on_the_recording(client, make_store, tickets):
@@ -64,7 +66,7 @@ def test_the_ticket_number_is_kept_on_the_recording(client, make_store, tickets)
     _set_box(store, store.vm_id, routing_type='ticket')
     _voicemail(client, store.number)
     with store.db._get_conn() as conn:
-        row = conn.execute("SELECT * FROM recording_log WHERE recording_sid = 'REvm1'").fetchone()
+        row = conn.execute("SELECT * FROM recording_log WHERE recording_sid = 'RE11111111111111111111111111111111'").fetchone()
     assert dict(row).get('ticket_id') in (700001, '700001')
 
 
@@ -93,10 +95,10 @@ def test_no_box_files_no_ticket_but_keeps_the_recording(client, make_store, tick
     store.db.upsert_phone_number({'sid': 'PNbare', 'phone_number': '+61261000000',
                                   'friendly_name': 'Bare', 'forward_to': None,
                                   'is_active': 1, 'synced_at': None})
-    _voicemail(client, '+61261000000', sid='REbare')
+    _voicemail(client, '+61261000000', sid='REbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
     assert tickets == []
     with store.db._get_conn() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM recording_log WHERE recording_sid = 'REbare'"
+        assert conn.execute("SELECT COUNT(*) FROM recording_log WHERE recording_sid = 'REbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'"
                             ).fetchone()[0] == 1
 
 
@@ -118,7 +120,7 @@ def test_a_box_with_a_person_assigns_the_ticket_to_them(client, make_store, tick
                                   'friendly_name': 'Britt', 'forward_to': None,
                                   'is_active': 1, 'synced_at': None})
     store.db.update_phone_number_voicemail_destination('PNbritt', box, 'test')
-    _voicemail(client, '+61261926884', sid='REbritt')
+    _voicemail(client, '+61261926884', sid='REcccccccccccccccccccccccccccccccc')
     assert [(t['group_id'], t['assignee_email']) for t in tickets] == [
         (18, 'brittany.moore@watsonblinds.com.au')]
 
