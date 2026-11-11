@@ -17,6 +17,7 @@ try:
     from shared.auth.bot_api import api_or_session_auth, get_api_caller, get_api_caller_email
 except ImportError:
     from rinq.auth.decorators import api_or_session_auth, get_api_caller, get_api_caller_email
+from rinq.auth.decorators import admin_or_api
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ def register(bp):
     # =============================================================================
 
     @bp.route('/stats/aggregate', methods=['POST'])
-    @api_or_session_auth
+    @admin_or_api
     def aggregate_stats():
         """Aggregate call statistics for a given date.
 
@@ -120,7 +121,7 @@ def register(bp):
 
 
     @bp.route('/queue/cleanup', methods=['POST'])
-    @api_or_session_auth
+    @admin_or_api
     def cleanup_queue():
         """Clean up old queued_calls records.
 
@@ -203,7 +204,7 @@ def register(bp):
 
 
     @bp.route('/security/sip-check', methods=['POST'])
-    @api_or_session_auth
+    @admin_or_api
     def check_sip_sign_ins():
         """Read failed desk-phone sign-ins from Twilio and alert on them.
 
@@ -239,7 +240,7 @@ def register(bp):
 
 
     @bp.route('/voicemail/cleanup', methods=['POST'])
-    @api_or_session_auth
+    @admin_or_api
     def cleanup_voicemail_recordings():
         """Clean up voicemail recordings stuck in Twilio.
 

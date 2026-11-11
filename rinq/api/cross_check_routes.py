@@ -16,6 +16,7 @@ try:
     from shared.auth.bot_api import api_or_session_auth
 except ImportError:
     from rinq.auth.decorators import api_or_session_auth
+from rinq.auth.decorators import admin_or_api
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 def register(bp):
 
     @bp.route('/stats/cross-check', methods=['POST'])
-    @api_or_session_auth
+    @admin_or_api
     def cross_check():
         """Compare Tina's call records with Twilio's for a week and email the admins.
 

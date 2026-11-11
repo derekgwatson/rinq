@@ -1853,24 +1853,9 @@ def recordings():
     tenant_records_all = record_all_enabled(db)
     recording_enabled = db.get_user_recording_default(user.email)
 
-    # Build the list of staff emails this user can see recordings for
-    from rinq.integrations import get_staff_directory
-
-    if user.can_view_all_recordings and filter_staff != 'mine':
-        # Admins, managers, and users with recordings access see all recordings
-        staff_emails = None
-    elif filter_staff == 'mine':
-        staff_emails = [user.email]
-    else:
-        # User sees own + reportees' recordings
-        staff_emails = [user.email]
-        staff_dir = get_staff_directory()
-        if staff_dir:
-            try:
-                reportees = staff_dir.get_reportees(user.email, recursive=True)
-                staff_emails.extend(r.get('email') for r in reportees if r.get('email'))
-            except Exception as e:
-                logger.warning(f"Failed to get reportees for {user.email}: {e}")
+    # Staff emails this user can see recordings for (None = everyone's)
+    from rinq.services.recording_access import visible_staff_emails
+    staff_emails = visible_staff_emails(user, mine_only=(filter_staff == 'mine'))
 
     has_reportees = user.is_manager or (staff_emails and len(staff_emails) > 1)
     recordings_list = db.get_recording_log(

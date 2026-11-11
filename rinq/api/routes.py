@@ -26,6 +26,7 @@ try:
     from shared.auth.bot_api import api_or_session_auth, get_api_caller, get_api_caller_email
 except ImportError:
     from rinq.auth.decorators import api_or_session_auth, get_api_caller, get_api_caller_email
+from rinq.auth.decorators import admin_or_api
 from rinq.services.twilio_service import get_twilio_service, twilio_list, start_twilio_thread
 from rinq.services.person_devices import person_ring_targets, mobile_screen_url
 from rinq.services.auth import login_required, get_current_user
@@ -391,7 +392,7 @@ def list_phone_numbers():
 
 
 @api_bp.route('/phone-numbers/sync', methods=['POST'])
-@api_or_session_auth
+@admin_or_api
 def sync_phone_numbers():
     """Sync phone numbers from Twilio to local database."""
     service = get_twilio_service()
@@ -401,7 +402,7 @@ def sync_phone_numbers():
 
 
 @api_bp.route('/phone-numbers/configure-status-callbacks', methods=['POST'])
-@api_or_session_auth
+@admin_or_api
 def configure_status_callbacks():
     """Set status callback URL on all Twilio phone numbers.
 
@@ -415,7 +416,7 @@ def configure_status_callbacks():
 
 
 @api_bp.route('/phone-numbers/<sid>/forward', methods=['POST'])
-@api_or_session_auth
+@admin_or_api
 def update_forwarding(sid):
     """Update forwarding number for a phone number.
 
@@ -5699,7 +5700,7 @@ def voice_outbound():
 # =============================================================================
 
 @api_bp.route('/sip-domains')
-@api_or_session_auth
+@admin_or_api
 def list_sip_domains():
     """List all SIP domains."""
     service = get_twilio_service()
@@ -5708,7 +5709,7 @@ def list_sip_domains():
 
 
 @api_bp.route('/credential-lists')
-@api_or_session_auth
+@admin_or_api
 def list_credential_lists():
     """List all credential lists."""
     service = get_twilio_service()
@@ -5717,7 +5718,7 @@ def list_credential_lists():
 
 
 @api_bp.route('/users', methods=['POST'])
-@api_or_session_auth
+@admin_or_api
 def create_user():
     """Create a new SIP user (for onboarding).
 
@@ -5750,7 +5751,7 @@ def create_user():
 
 
 @api_bp.route('/users/<credential_list_sid>/<credential_sid>', methods=['DELETE'])
-@api_or_session_auth
+@admin_or_api
 def delete_user(credential_list_sid, credential_sid):
     """Delete a SIP user (for offboarding)."""
     service = get_twilio_service()
@@ -5769,7 +5770,7 @@ def delete_user(credential_list_sid, credential_sid):
 # =============================================================================
 
 @api_bp.route('/test-call', methods=['POST'])
-@api_or_session_auth
+@admin_or_api
 def make_test_call():
     """Make a test call to verify the phone system is working.
 
