@@ -1415,7 +1415,12 @@ def voice_incoming():
             # still plays (it says why, and when we reopen) - after the
             # recorded welcome, so then Tina's voice keeps both.
             extra = {}
-            if matched_holiday and matched_holiday.get('audio_id'):
+            # A WEEKLY closure is part of the store's normal week (Canberra's
+            # Saturday: showroom open, phones off) and Stuart knows it, so he
+            # opens like any after-hours call. Its recording played first made
+            # callers hear it twice (Derek 2026-11-14).
+            if (matched_holiday and matched_holiday.get('audio_id')
+                    and matched_holiday.get('recurrence') != 'weekly'):
                 response_parts.extend(_build_closed_sequence() or [])
             else:
                 extra.update(_welcome_for_stuart() or {})

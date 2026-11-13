@@ -226,3 +226,43 @@ def test_nobody_rang_means_nothing_extra_for_stuart(client, make_store, frozen_c
                        closed_action='ai_receptionist').with_staff(PHIL)
     frozen_clock.set(datetime(2026, 10, 28, 17, 15))
     assert 'called_by' not in ring(client, store)
+
+
+def _stuart_store_with_welcome(make_store):
+    store = make_store(hours=STORE_HOURS, no_answer='ai_receptionist',
+                       closed_action='ai_receptionist').with_staff(PHIL)
+    welcome_id = store.db.create_audio_file({
+        'name': 'Welcome Canberra', 'file_type': 'greeting', 'file_url': '/audio/welcome_cbr.mp3',
+        'tts_text': 'Welcome to Watson Blinds Canberra.'}, 'test')
+    store.db.update_call_flow(store.flow_id, {'greeting_audio_id': welcome_id}, 'test')
+    audio_id = store.db.create_audio_file({'name': 'Showroom open, phones off', 'file_type': 'closed',
+                                           'file_url': '/audio/closed_sat.mp3'}, 'test')
+    return store, audio_id
+
+
+def test_weekly_closure_goes_straight_to_stuart(client, make_store, frozen_clock):
+    """Derek 2026-11-14: Canberra's Saturday (showroom open, phones off) is a
+    weekly closure with its own recording. Played before Stuart, callers heard
+    it and then Stuart saying the same. Stuart knows the weekly hours, so he
+    opens like any after-hours call - the store welcome, no recording."""
+    store, audio_id = _stuart_store_with_welcome(make_store)
+    store.db.add_schedule_holiday(store.schedule_id, 'Wednesday showroom only', None, False, 'test',
+                                  recurrence='weekly', day_of_week=2,
+                                  start_time='12:00', end_time='13:00', audio_id=audio_id)
+    frozen_clock.set(datetime(2026, 10, 28, 12, 30))
+    twiml = ring(client, store)
+    assert ROSIE_ANSWER_URL in twiml
+    assert 'closed_sat.mp3' not in twiml
+    assert 'welcome=Welcome+to+Watson+Blinds+Canberra' in twiml
+
+
+def test_one_off_closure_recording_still_plays_before_stuart(client, make_store, frozen_clock):
+    """A one-off closure's recording says WHY the store's shut - Stuart
+    doesn't know that, so it still plays first."""
+    store, audio_id = _stuart_store_with_welcome(make_store)
+    store.db.add_schedule_holiday(store.schedule_id, 'Stocktake', '2026-10-28', False, 'test',
+                                  audio_id=audio_id)
+    frozen_clock.set(datetime(2026, 10, 28, 12, 30))
+    twiml = ring(client, store)
+    assert ROSIE_ANSWER_URL in twiml
+    assert 'closed_sat.mp3' in twiml
