@@ -33,6 +33,10 @@ def _normalise_mobile(raw: str) -> str | None:
     return None
 
 
+# external_id suffix for a staff member's private (unlisted) mobile
+PRIVATE_SUFFIX = ':private'
+
+
 class AddressBookSource:
     """Abstract interface for an address book sync source."""
 
@@ -57,6 +61,7 @@ class PeterAddressBookSource(AddressBookSource):
 
     def __init__(self, staff_directory=None):
         self._directory = staff_directory
+        self.keep_private = False
 
     @property
     def directory(self):
@@ -96,7 +101,32 @@ class PeterAddressBookSource(AddressBookSource):
                 'position': position,
                 'email': email,
             })
-        return entries
+        return entries + self._private_entries()
+
+    def _private_entries(self) -> list[dict]:
+        """Staff private mobiles (Peter's "Private mobile"): recognised by
+        number, never listed. If Peter can't be asked, keep the ones we have
+        rather than prune them."""
+        getter = getattr(self.directory, 'get_private_mobiles', None)
+        people = getter() if getter else []
+        if people is None:
+            self.keep_private = True
+            return []
+        self.keep_private = False
+        out = []
+        for person in people:
+            if not person.get('mobile') or not person.get('id'):
+                continue
+            out.append({
+                'external_id': f"{person['id']}{PRIVATE_SUFFIX}",
+                'name': (person.get('name') or '').strip(),
+                'mobile': person['mobile'],
+                'section': person.get('section') or None,
+                'position': person.get('position') or None,
+                'email': person.get('email') or None,
+                'unlisted': True,
+            })
+        return out
 
 
 def sync_address_book(db, source: AddressBookSource = None) -> tuple[int, int, int]:
@@ -145,11 +175,18 @@ def sync_address_book(db, source: AddressBookSource = None) -> tuple[int, int, i
             source=source_name,
             external_id=external_id,
             email=entry.get('email'),
+            unlisted=bool(entry.get('unlisted')),
         )
         if existing:
             updated += 1
         else:
             added += 1
+
+    if getattr(source, 'keep_private', False):
+        # Peter didn't answer for private mobiles: keep the ones we have
+        seen_external_ids += [e['external_id'] for e in db.get_address_book(include_unlisted=True)
+                              if e.get('source') == source_name
+                              and (e.get('external_id') or '').endswith(PRIVATE_SUFFIX)]
 
     removed = db.delete_address_book_by_source(source_name,
                                                keep_external_ids=seen_external_ids)

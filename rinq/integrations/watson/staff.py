@@ -39,6 +39,19 @@ class WatsonStaffDirectory(StaffDirectory):
             logger.warning(f"Could not fetch staff from Peter: {e}")
         return []
 
+    def get_private_mobiles(self) -> Optional[list[dict]]:
+        """Active staff's PRIVATE mobiles (never listed) - or None if Peter
+        couldn't be asked, so the sync keeps what it has rather than
+        locking those people out of extension 9000."""
+        try:
+            response = self.client.get('/api/staff/private-mobiles')
+            if response.status_code == 200:
+                return response.json().get('staff', [])
+            logger.warning(f"Peter private mobiles lookup failed: {response.status_code}")
+        except Exception as e:
+            logger.warning(f"Could not fetch private mobiles from Peter: {e}")
+        return None
+
     def get_staff_by_email(self, email: str) -> Optional[dict]:
         try:
             response = self.client.get('/api/staff/self', params={'email': email})
