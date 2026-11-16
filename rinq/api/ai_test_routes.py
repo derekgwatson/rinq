@@ -6,6 +6,10 @@ customer would, without switching it on for any real call flow:
     central number -> enter 9000 -> "enter the caller ID to pretend to be,
     then hash" -> Rosie, as the Shoalhaven store, in TEST mode
 
+From outside, only a staff mobile (Tina's address book) may use it - anyone
+else pressing 9000 hears "that extension is not valid" (2026-11-17: the line
+was open to any caller, who could then hear another customer's details).
+
 The typed-in number is looked up exactly as a real caller's would be (Clara
 customer + Otto orders), so the test shows how much Rosie works out about who
 is calling. Rosie is told ?test=1: it writes its summary but files no ticket
@@ -109,23 +113,43 @@ def rosie_is_up() -> bool:
         return False
 
 
+# What Twilio puts in From for a withheld caller ID
+WITHHELD = 'anonymous'
+
+
 def prompt_twiml(called_number: str, from_number: str, internal: bool = False) -> Response:
     """Ask for the caller ID to pretend to be. Called from voice_extension_dial,
     and from voice_outbound when 9000 is dialled from Tina or a desk phone
-    (internal=True: no own number to fall back on, and nobody to ring)."""
+    (internal=True: nobody to ring for a takeover). Pressing hash alone
+    tests as a withheld caller."""
     start_url = (
         f"{config.webhook_base_url}/api/voice/ai-test/start"
         f"?called={quote(called_number, safe='')}&from={quote(from_number, safe='')}"
     )
-    own = "" if internal else " Or just press hash to use your own number."
     return _twiml(
         f'    <Gather numDigits="12" finishOnKey="#" timeout="15" action="{xml_escape(start_url)}" method="POST">',
         f'        <Say voice="{VOICE}">AI receptionist test. Enter the phone number you want to pretend '
-        f'to be calling from, then press hash.{own}</Say>',
+        f'to be calling from, then press hash. Or just press hash to call as a withheld number.</Say>',
         '    </Gather>',
-        # No input at all: carry on with their own number
+        # No number typed (hash alone, or silence - Twilio can't tell them
+        # apart): test as a withheld caller
         f'    <Redirect method="POST">{xml_escape(start_url)}</Redirect>',
     )
+
+
+def is_staff_mobile(db, number: str) -> bool:
+    """Is this caller a staff member's mobile (Tina's address book, synced
+    nightly from Peter)? The only test of who may use 9000 from OUTSIDE the
+    phone system - a withheld or unknown number never may, because the test
+    line lets the caller pick which customer Stuart believes they are.
+    (From Tina or a desk phone the caller is already a logged-in staff member.)"""
+    if not number or not number.startswith('+') or not number[1:].isdigit():
+        return False
+    try:
+        return bool(db.get_address_book_by_mobile(number))
+    except Exception as e:
+        logger.warning(f"AI test: staff lookup failed for {number} - refusing: {e}")
+        return False
 
 
 def store_welcome(db) -> str:
@@ -194,7 +218,9 @@ def register(bp):
         call_sid = request.form.get('CallSid', '')
         called_number = ensure_plus(request.args.get('called', '').strip())
         own_number = ensure_plus(request.args.get('from', '').strip())
-        pretend = to_e164(digits) if digits else own_number
+        # Nothing typed = a withheld caller, shaped as Twilio sends one. To
+        # test as yourself, type your own number.
+        pretend = to_e164(digits) if digits else WITHHELD
 
         answer_url = rosie_answer_url()
         if not answer_url:
@@ -260,8 +286,12 @@ def register(bp):
         )
 
         found = caller_info.get('customer_name')
-        say = (f"Test call as {found}. Connecting you to the receptionist."
-               if found else "That number isn't a known customer. Connecting you to the receptionist.")
+        if pretend == WITHHELD:
+            say = "Test call from a withheld number. Connecting you to the receptionist."
+        elif found:
+            say = f"Test call as {found}. Connecting you to the receptionist."
+        else:
+            say = "That number isn't a known customer. Connecting you to the receptionist."
         return _twiml(
             f'    <Say voice="{VOICE}">{xml_escape(say)}</Say>',
             f'    <Redirect method="POST">{xml_escape(answer_url + "?" + urlencode(params))}</Redirect>',
