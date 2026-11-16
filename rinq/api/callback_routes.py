@@ -27,11 +27,12 @@ import logging
 from urllib.parse import quote
 from xml.sax.saxutils import escape as xml_escape
 
-from flask import request, Response
+from flask import jsonify, request, Response
 
 from rinq.config import config
 from rinq.database.db import get_db
 from rinq.services.person_devices import person_ring_targets
+from rinq.services.auth import login_required
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +136,39 @@ def find_callback_person(from_number: str, db, first_offer_only: bool = True) ->
     return {'email': email, 'name': _first_name(email, db)}
 
 
+def busy_callback_person(from_number: str, db) -> str | None:
+    """Email of the staff member who rang this caller recently, if they are
+    on another call right now - the case the press-1 offer has to skip.
+    None when nobody rang them, or when we can't tell (never guess busy)."""
+    if not from_number or not from_number.startswith('+'):
+        return None
+    call = db.get_recent_outbound_call(from_number, days=CALLBACK_WINDOW_DAYS)
+    if not call:
+        return None
+    email = call['agent_email']
+    own = db.get_address_book_by_mobile(from_number)
+    if own and (own.get('email') or '').lower() == email.lower():
+        return None
+    try:
+        busy = any((c.get('agent_email') or '').lower() == email.lower()
+                   for c in db.get_active_calls())
+    except Exception as e:
+        logger.warning(f"Callback: couldn't check whether {email} is on a call: {e}")
+        return None
+    return email if busy else None
+
+
+def note_if_busy(from_number: str, db) -> str | None:
+    """No offer was made. If that's because the person who rang this caller
+    is on another call, note it for their phone page ("rang while you were
+    on a call"), shown once their call ends. Returns their email, or None."""
+    email = busy_callback_person(from_number, db)
+    if email:
+        db.note_rang_while_busy(email, from_number)
+        logger.info(f"Callback from {from_number}: noted for {email} (rang while on a call)")
+    return email
+
+
 def last_called_by(number: str, db, viewer_email: str | None = None) -> dict | None:
     """Who rang this number recently, for the phone screen.
 
@@ -208,9 +242,14 @@ def called_by_for_stuart(from_number: str, db) -> dict:
     except Exception as e:
         logger.debug(f"called_by_for_stuart: couldn't date {call.get('started_at')}: {e}")
 
-    return {'called_by_email': email,
-            'called_by_name': _first_name(email, db) or email.split('@')[0].split('.')[0].title(),
-            'called_by_when': when}
+    params = {'called_by_email': email,
+              'called_by_name': _first_name(email, db) or email.split('@')[0].split('.')[0].title(),
+              'called_by_when': when}
+    # On another call right now: Stuart says so, rather than a bare "she'll
+    # call you back". Only when we know - an unknown reads as not busy.
+    if busy_callback_person(from_number, db):
+        params['called_by_busy'] = '1'
+    return params
 
 
 def offer_twiml(person: dict, called_number: str, from_number: str) -> Response:
@@ -236,6 +275,27 @@ def offer_twiml(person: dict, called_number: str, from_number: str) -> Response:
 
 
 def register(bp):
+
+    @bp.route('/rang-while-busy', methods=['GET'])
+    @login_required
+    def rang_while_busy():
+        """Callers returning MY call who rang while I was on another call,
+        for the phone page. Each disappears once someone has spoken to them."""
+        from rinq.services.auth import get_current_user
+        user = get_current_user()
+        email = getattr(user, 'email', None) if user else None
+        if not email:
+            return jsonify({'notes': []})
+        return jsonify({'notes': get_db().get_rang_while_busy(email)})
+
+    @bp.route('/rang-while-busy/<int:note_id>/dismiss', methods=['POST'])
+    @login_required
+    def rang_while_busy_dismiss(note_id):
+        from rinq.services.auth import get_current_user
+        user = get_current_user()
+        email = getattr(user, 'email', None) if user else None
+        ok = bool(email) and get_db().dismiss_rang_while_busy(note_id, email)
+        return jsonify({'success': ok}), (200 if ok else 404)
 
     @bp.route('/voice/callback/choice', methods=['POST'])
     def voice_callback_choice():
