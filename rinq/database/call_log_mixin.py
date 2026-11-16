@@ -163,6 +163,74 @@ class CallLogMixin:
             """, (f'From: {number},%', since)).fetchone()
             return row is not None
 
+    # How long a "rang while you were on a call" note stays on the phone page
+    RANG_WHILE_BUSY_HOURS = 12
+
+    def note_rang_while_busy(self, staff_email: str, from_number: str) -> None:
+        """A caller returning this staff member's call rang while they were on
+        another call. One open note per person + caller: a second ring bumps it."""
+        if not staff_email or not from_number:
+            return
+        with self._get_conn() as conn:
+            row = conn.execute("""
+                SELECT id FROM rang_while_busy
+                WHERE lower(staff_email) = lower(?) AND from_number = ?
+                  AND dismissed_at IS NULL
+                  AND last_rang_at >= datetime('now', ?)
+                ORDER BY id DESC LIMIT 1
+            """, (staff_email, from_number, f'-{self.RANG_WHILE_BUSY_HOURS} hours')).fetchone()
+            if row:
+                conn.execute("UPDATE rang_while_busy SET times = times + 1, "
+                             "last_rang_at = datetime('now') WHERE id = ?", (row['id'],))
+            else:
+                conn.execute("INSERT INTO rang_while_busy (staff_email, from_number, "
+                             "first_rang_at, last_rang_at) VALUES (?, ?, datetime('now'), "
+                             "datetime('now'))", (staff_email, from_number))
+            conn.commit()
+
+    def get_rang_while_busy(self, staff_email: str) -> list[dict]:
+        """Open notes for this staff member, newest first.
+
+        A note disappears by itself once anyone from the team has spoken to
+        the caller since: a staff call out to that number, or a call in from
+        it that a staff member answered (a call Stuart handled alone doesn't
+        count). Or when dismissed, or after RANG_WHILE_BUSY_HOURS.
+        """
+        if not staff_email:
+            return []
+        with self._get_conn() as conn:
+            rows = conn.execute("""
+                SELECT n.id, n.from_number, n.first_rang_at, n.last_rang_at, n.times,
+                       (SELECT c.customer_name FROM call_log c
+                        WHERE c.from_number = n.from_number AND c.customer_name IS NOT NULL
+                          AND c.customer_name != ''
+                        ORDER BY c.started_at DESC LIMIT 1) AS customer_name
+                FROM rang_while_busy n
+                WHERE lower(n.staff_email) = lower(?)
+                  AND n.dismissed_at IS NULL
+                  AND n.last_rang_at >= datetime('now', ?)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM call_log c
+                      WHERE c.direction = 'outbound' AND c.to_number = n.from_number
+                        AND c.agent_email LIKE '%@%'
+                        AND datetime(c.started_at) >= datetime(n.first_rang_at))
+                  AND NOT EXISTS (
+                      SELECT 1 FROM call_log c
+                      WHERE c.direction = 'inbound' AND c.from_number = n.from_number
+                        AND c.agent_email LIKE '%@%' AND c.answered_at IS NOT NULL
+                        AND datetime(c.answered_at) >= datetime(n.first_rang_at))
+                ORDER BY n.last_rang_at DESC
+            """, (staff_email, f'-{self.RANG_WHILE_BUSY_HOURS} hours')).fetchall()
+            return [dict(r) for r in rows]
+
+    def dismiss_rang_while_busy(self, note_id: int, staff_email: str) -> bool:
+        with self._get_conn() as conn:
+            cur = conn.execute("UPDATE rang_while_busy SET dismissed_at = datetime('now') "
+                               "WHERE id = ? AND lower(staff_email) = lower(?) "
+                               "AND dismissed_at IS NULL", (note_id, staff_email))
+            conn.commit()
+            return cur.rowcount > 0
+
     _CALL_LOG_FIELDS = {
         'status', 'direction', 'call_type', 'from_number', 'to_number',
         'customer_name', 'customer_email', 'conference_name', 'answered_by',

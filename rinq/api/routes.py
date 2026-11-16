@@ -1112,6 +1112,10 @@ def voice_incoming():
                         performed_by="twilio"
                     )
                     return offer_twiml(person, called_number, from_number)
+                # No offer because they're on another call: tell them once
+                # their call ends (phone page)
+                from rinq.api.callback_routes import note_if_busy
+                note_if_busy(from_number, db)
         except Exception as e:
             logger.exception(f"Callback offer check failed for {from_number}: {e}")
 

@@ -2400,6 +2400,17 @@
         </div>
     </div>
 
+    <!-- Callers returning YOUR call who rang while you were on another call.
+         Shown only once you're off the call; each goes away by itself once
+         anyone from the team has spoken to them. -->
+    <div class="queue-callers" id="rangWhileBusyCard" style="display: none; margin-top: 10px;">
+        <div class="queue-callers-header" style="background: #e7f1ff;">
+            <h3 style="color: #1d4ed8;">Rang while you were on a call</h3>
+            <span id="rangWhileBusyCount" style="color: #1d4ed8;"></span>
+        </div>
+        <div id="rangWhileBusyList"></div>
+    </div>
+
     <div class="queue-callers" id="callbacksCard" style="display: none; margin-top: 10px;">
         <div class="queue-callers-header" style="background: #fff3cd;">
             <h3 style="color: #856404;">Callback Requests</h3>
@@ -6722,6 +6733,94 @@ async function failCallback(callbackId) {
 // Poll callbacks alongside queue callers
 fetchCallbacks();
 setInterval(fetchCallbacks, 5000);
+
+// ---- Rang while you were on a call -----------------------------------
+// A customer returning your call who rang while you were busy (Tina
+// couldn't offer them "press 1 for you"). Hidden while you're on a call.
+const rangWhileBusyCard = document.getElementById('rangWhileBusyCard');
+const rangWhileBusyList = document.getElementById('rangWhileBusyList');
+const rangWhileBusyCount = document.getElementById('rangWhileBusyCount');
+
+function _onACall() {
+    return typeof currentCall !== 'undefined' && !!currentCall;
+}
+
+function _rangAgo(utc) {
+    const then = new Date(String(utc).replace(' ', 'T') + 'Z');
+    const mins = Math.max(0, Math.floor((Date.now() - then) / 60000));
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins} min${mins === 1 ? '' : 's'} ago`;
+    const h = Math.floor(mins / 60);
+    return `${h} hour${h === 1 ? '' : 's'} ago`;
+}
+
+async function fetchRangWhileBusy() {
+    if (!rangWhileBusyCard) return;
+    if (_onACall()) { rangWhileBusyCard.style.display = 'none'; return; }
+    try {
+        const r = await fetch('/api/rang-while-busy', { credentials: 'same-origin' });
+        if (!r.ok) return;
+        renderRangWhileBusy((await r.json()).notes || []);
+    } catch (e) {
+        console.error('Error fetching rang-while-busy:', e);
+    }
+}
+
+function renderRangWhileBusy(notes) {
+    if (!notes.length || _onACall()) {
+        rangWhileBusyCard.style.display = 'none';
+        return;
+    }
+    rangWhileBusyCard.style.display = 'block';
+    rangWhileBusyCount.textContent = `${notes.length} to ring back`;
+    rangWhileBusyList.innerHTML = notes.map(n => {
+        const times = n.times > 1 ? ` · rang ${Number(n.times)} times` : '';
+        return `
+            <div class="callback-item" id="rwb-${Number(n.id)}">
+                <div class="caller-info">
+                    <div class="caller-name">${escapeHtml(n.customer_name) || escapeHtml(n.from_number)}</div>
+                    <div class="caller-number">${n.customer_name ? escapeHtml(n.from_number) : ''}</div>
+                    <div class="caller-details">
+                        <span class="caller-detail">Returning your call · ${_rangAgo(n.last_rang_at)}${times}</span>
+                    </div>
+                </div>
+                <div class="callback-actions">
+                    <button class="btn-callback-call" onclick="rangWhileBusyCall(${Number(n.id)}, '${dialSafe(n.from_number)}')">Call back</button>
+                    <button class="btn-callback-done" onclick="rangWhileBusyDismiss(${Number(n.id)})" title="Already sorted">Dismiss</button>
+                </div>
+            </div>`;
+    }).join('');
+}
+
+function rangWhileBusyCall(id, phone) {
+    if (typeof makeCall !== 'function') {
+        const item = document.getElementById(`rwb-${id}`);
+        if (item) item.querySelector('.callback-actions').innerHTML =
+            `<span style="font-size: 0.85em;">Call <strong>${escapeHtml(phone)}</strong> now</span>`;
+        return;
+    }
+    switchPhoneTab('dialpad');
+    phoneNumber = phone.replace(/[^\d+]/g, '');
+    updateDisplay();
+    makeCall();
+    // The note clears itself once the call is logged
+    rangWhileBusyCard.style.display = 'none';
+}
+
+async function rangWhileBusyDismiss(id) {
+    try {
+        await fetch(`/api/rang-while-busy/${id}/dismiss`, {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' }
+        });
+    } catch (e) {
+        console.error('Error dismissing rang-while-busy:', e);
+    }
+    fetchRangWhileBusy();
+}
+
+fetchRangWhileBusy();
+setInterval(fetchRangWhileBusy, 10000);
 
 // ============================================
 // Presence / Heartbeat
