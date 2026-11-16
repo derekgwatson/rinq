@@ -514,7 +514,9 @@ def admin_staff():
     extensions = db.get_all_staff_extensions()
     signals = db.get_staff_usage_signals()
     # Whose mobile is each forwarding number? Flags a forward to someone else's phone
-    mobile_owners = {e['mobile_e164']: e for e in db.get_address_book() if e.get('mobile_e164')}
+    # (incl. private mobiles: a forward to your own personal phone is yours)
+    mobile_owners = {e['mobile_e164']: e for e in db.get_address_book(include_unlisted=True)
+                     if e.get('mobile_e164')}
 
     from rinq.services.staff_status import tenant_uses_peter
     return render_template('admin_staff.html',

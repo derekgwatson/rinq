@@ -4877,19 +4877,26 @@ class Database(StatsMixin, CallLogMixin):
     # Address Book
     # =========================================================================
 
-    def get_address_book(self, search: str = None) -> list[dict]:
-        """Return all address book entries, optionally filtered by name/section."""
+    def get_address_book(self, search: str = None, include_unlisted: bool = False) -> list[dict]:
+        """Return address book entries, optionally filtered by name/section.
+
+        Unlisted entries (staff private mobiles - migration 087) are left out
+        unless include_unlisted: every caller of this shows the list to
+        someone. Lookups BY NUMBER (get_address_book_by_mobile) still find them.
+        """
+        listed = "" if include_unlisted else " AND unlisted = 0"
         with self._get_conn() as conn:
             if search:
                 pattern = f"%{search}%"
-                rows = conn.execute("""
+                rows = conn.execute(f"""
                     SELECT * FROM address_book
-                    WHERE name LIKE ? OR section LIKE ? OR position LIKE ?
+                    WHERE (name LIKE ? OR section LIKE ? OR position LIKE ?){listed}
                     ORDER BY name COLLATE NOCASE
                 """, (pattern, pattern, pattern)).fetchall()
             else:
-                rows = conn.execute("""
+                rows = conn.execute(f"""
                     SELECT * FROM address_book
+                    WHERE 1=1{listed}
                     ORDER BY name COLLATE NOCASE
                 """).fetchall()
             return [dict(r) for r in rows]
@@ -4899,6 +4906,7 @@ class Database(StatsMixin, CallLogMixin):
         with self._get_conn() as conn:
             row = conn.execute("""
                 SELECT * FROM address_book WHERE mobile_e164 = ?
+            ORDER BY unlisted
             """, (mobile_e164,)).fetchone()
             return dict(row) if row else None
 
@@ -4914,7 +4922,7 @@ class Database(StatsMixin, CallLogMixin):
                                   mobile_e164: str, section: str = None,
                                   position: str = None, source: str = 'manual',
                                   external_id: str = None,
-                                  email: str = None) -> int:
+                                  email: str = None, unlisted: bool = False) -> int:
         """Insert or update an address book entry. Returns the row id."""
         now = datetime.now(timezone.utc).isoformat()
         email_lc = email.lower() if email else None
@@ -4922,8 +4930,8 @@ class Database(StatsMixin, CallLogMixin):
             cursor = conn.execute("""
                 INSERT INTO address_book
                     (name, display_mobile, mobile_e164, section, position,
-                     source, external_id, email, synced_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     source, external_id, email, synced_at, updated_at, unlisted)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(source, external_id) DO UPDATE SET
                     name         = excluded.name,
                     display_mobile = excluded.display_mobile,
@@ -4932,9 +4940,10 @@ class Database(StatsMixin, CallLogMixin):
                     position     = excluded.position,
                     email        = excluded.email,
                     synced_at    = excluded.synced_at,
-                    updated_at   = excluded.updated_at
+                    updated_at   = excluded.updated_at,
+                    unlisted     = excluded.unlisted
             """, (name, display_mobile, mobile_e164, section, position,
-                  source, external_id, email_lc, now, now))
+                  source, external_id, email_lc, now, now, 1 if unlisted else 0))
             conn.commit()
             return cursor.lastrowid
 
