@@ -6,6 +6,10 @@ customer would, without switching it on for any real call flow:
     central number -> enter 9000 -> "enter the caller ID to pretend to be,
     then hash" -> Rosie, as the Shoalhaven store, in TEST mode
 
+From outside, only a staff mobile (Tina's address book) may use it - anyone
+else pressing 9000 hears "that extension is not valid" (2026-11-17: the line
+was open to any caller, who could then hear another customer's details).
+
 The typed-in number is looked up exactly as a real caller's would be (Clara
 customer + Otto orders), so the test shows how much Rosie works out about who
 is calling. Rosie is told ?test=1: it writes its summary but files no ticket
@@ -126,6 +130,21 @@ def prompt_twiml(called_number: str, from_number: str, internal: bool = False) -
         # No input at all: carry on with their own number
         f'    <Redirect method="POST">{xml_escape(start_url)}</Redirect>',
     )
+
+
+def is_staff_mobile(db, number: str) -> bool:
+    """Is this caller a staff member's mobile (Tina's address book, synced
+    nightly from Peter)? The only test of who may use 9000 from OUTSIDE the
+    phone system - a withheld or unknown number never may, because the test
+    line lets the caller pick which customer Stuart believes they are.
+    (From Tina or a desk phone the caller is already a logged-in staff member.)"""
+    if not number or not number.startswith('+') or not number[1:].isdigit():
+        return False
+    try:
+        return bool(db.get_address_book_by_mobile(number))
+    except Exception as e:
+        logger.warning(f"AI test: staff lookup failed for {number} - refusing: {e}")
+        return False
 
 
 def store_welcome(db) -> str:

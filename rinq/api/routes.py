@@ -4137,11 +4137,18 @@ def voice_extension_dial():
     db = get_db()
 
     # AI receptionist test line (ai_test_routes.py) — not a person
-    from rinq.api.ai_test_routes import AI_TEST_EXTENSION, prompt_twiml
+    # Only staff may use it from outside: the test line lets the caller choose
+    # which customer Stuart thinks they are, so an unknown caller who presses
+    # 9000 is treated exactly like any other wrong extension.
+    from rinq.api.ai_test_routes import AI_TEST_EXTENSION, prompt_twiml, is_staff_mobile
     if digits == AI_TEST_EXTENSION:
-        db.log_activity(action="ai_test_extension", target=called_number,
-                        details=f"From: {from_number}", performed_by="twilio")
-        return prompt_twiml(called_number, from_number)
+        if is_staff_mobile(db, from_number):
+            db.log_activity(action="ai_test_extension", target=called_number,
+                            details=f"From: {from_number}", performed_by="twilio")
+            return prompt_twiml(called_number, from_number)
+        logger.warning(f"AI test line refused: {from_number or 'withheld number'} is not a staff mobile")
+        db.log_activity(action="ai_test_extension_refused", target=called_number,
+                        details=f"From: {from_number or 'withheld'}", performed_by="twilio")
 
     # Look up the extension
     ext_record = db.get_staff_extension_by_ext(digits)
