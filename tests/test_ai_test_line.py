@@ -64,3 +64,35 @@ def test_a_withheld_number_cannot_use_the_test_line(client, make_store):
     store = make_store()
     twiml = _press_9000_from(client, store, '+anonymous')
     assert '/api/voice/ai-test/start' not in twiml
+
+
+# --- Who Stuart thinks is calling -------------------------------------------
+
+def _start(client, store, digits, caller=STAFF_MOBILE):
+    from urllib.parse import quote
+    r = client.post(f'/api/voice/ai-test/start?called={quote(store.number)}&from={quote(caller)}',
+                    data={'Digits': digits, 'CallSid': 'CAtest', 'To': store.number, 'From': caller})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    return r.get_data(as_text=True)
+
+
+def test_pressing_hash_alone_tests_as_a_withheld_caller(client, make_store):
+    store = make_store()
+    twiml = _start(client, store, '')
+    assert 'caller_number=anonymous' in twiml
+    assert 'withheld number' in twiml
+    # NOT the staff member's own mobile
+    assert '61400999888' not in twiml.split('Redirect', 1)[1]
+
+
+def test_a_typed_number_is_who_stuart_thinks_is_calling(client, make_store):
+    store = make_store()
+    twiml = _start(client, store, '0400111222')
+    assert 'caller_number=%2B61400111222' in twiml
+    assert 'anonymous' not in twiml
+
+
+def test_the_prompt_offers_hash_for_withheld(client, make_store):
+    make_store()
+    twiml = _dial_from_tina(client, '9000')
+    assert 'withheld number' in twiml

@@ -113,21 +113,26 @@ def rosie_is_up() -> bool:
         return False
 
 
+# What Twilio puts in From for a withheld caller ID
+WITHHELD = 'anonymous'
+
+
 def prompt_twiml(called_number: str, from_number: str, internal: bool = False) -> Response:
     """Ask for the caller ID to pretend to be. Called from voice_extension_dial,
     and from voice_outbound when 9000 is dialled from Tina or a desk phone
-    (internal=True: no own number to fall back on, and nobody to ring)."""
+    (internal=True: nobody to ring for a takeover). Pressing hash alone
+    tests as a withheld caller."""
     start_url = (
         f"{config.webhook_base_url}/api/voice/ai-test/start"
         f"?called={quote(called_number, safe='')}&from={quote(from_number, safe='')}"
     )
-    own = "" if internal else " Or just press hash to use your own number."
     return _twiml(
         f'    <Gather numDigits="12" finishOnKey="#" timeout="15" action="{xml_escape(start_url)}" method="POST">',
         f'        <Say voice="{VOICE}">AI receptionist test. Enter the phone number you want to pretend '
-        f'to be calling from, then press hash.{own}</Say>',
+        f'to be calling from, then press hash. Or just press hash to call as a withheld number.</Say>',
         '    </Gather>',
-        # No input at all: carry on with their own number
+        # No number typed (hash alone, or silence - Twilio can't tell them
+        # apart): test as a withheld caller
         f'    <Redirect method="POST">{xml_escape(start_url)}</Redirect>',
     )
 
@@ -213,7 +218,9 @@ def register(bp):
         call_sid = request.form.get('CallSid', '')
         called_number = ensure_plus(request.args.get('called', '').strip())
         own_number = ensure_plus(request.args.get('from', '').strip())
-        pretend = to_e164(digits) if digits else own_number
+        # Nothing typed = a withheld caller, shaped as Twilio sends one. To
+        # test as yourself, type your own number.
+        pretend = to_e164(digits) if digits else WITHHELD
 
         answer_url = rosie_answer_url()
         if not answer_url:
@@ -279,8 +286,12 @@ def register(bp):
         )
 
         found = caller_info.get('customer_name')
-        say = (f"Test call as {found}. Connecting you to the receptionist."
-               if found else "That number isn't a known customer. Connecting you to the receptionist.")
+        if pretend == WITHHELD:
+            say = "Test call from a withheld number. Connecting you to the receptionist."
+        elif found:
+            say = f"Test call as {found}. Connecting you to the receptionist."
+        else:
+            say = "That number isn't a known customer. Connecting you to the receptionist."
         return _twiml(
             f'    <Say voice="{VOICE}">{xml_escape(say)}</Say>',
             f'    <Redirect method="POST">{xml_escape(answer_url + "?" + urlencode(params))}</Redirect>',
