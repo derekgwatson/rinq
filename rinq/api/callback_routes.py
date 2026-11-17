@@ -33,6 +33,11 @@ from rinq.config import config
 from rinq.database.db import get_db
 from rinq.services.person_devices import person_ring_targets
 from rinq.services.auth import login_required
+try:
+    from shared.auth.bot_api import api_or_session_auth
+except ImportError:
+    from rinq.auth.decorators import api_or_session_auth
+from rinq.auth.decorators import bot_tenant
 
 logger = logging.getLogger(__name__)
 
@@ -275,6 +280,21 @@ def offer_twiml(person: dict, called_number: str, from_number: str) -> Response:
 
 
 def register(bp):
+
+    @bp.route('/stuart/called-by', methods=['GET'])
+    @api_or_session_auth
+    def stuart_called_by():
+        """Who from the team rang ?number= lately - the same answer Stuart is
+        handed when a call comes in (called_by_for_stuart), for a number the
+        caller GAVE him because their caller ID was hidden (#325, Derek
+        2026-11-18: wherever the number came from, Stuart knows the same).
+        Bot key only; {} when nobody did."""
+        from rinq.services.phone import to_e164
+        _, error = bot_tenant()
+        if error:
+            return error
+        number = to_e164((request.args.get('number') or '').strip())
+        return jsonify(called_by_for_stuart(number, get_db()) if number else {})
 
     @bp.route('/rang-while-busy', methods=['GET'])
     @login_required

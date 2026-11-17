@@ -16,7 +16,7 @@ try:
     from shared.auth.bot_api import api_or_session_auth, get_api_caller
 except ImportError:
     from rinq.auth.decorators import api_or_session_auth, get_api_caller
-from rinq.auth.decorators import admin_or_api, is_session_caller
+from rinq.auth.decorators import admin_or_api, bot_tenant, is_session_caller
 from rinq.auth.decorators import get_current_user as _session_user
 
 logger = logging.getLogger(__name__)
@@ -377,28 +377,13 @@ def register(bp):
         return jsonify({"error": "Recording not available"}), 404
 
     # --- Audrey (bot-team call analysis): every recording, bot-to-bot only ---
-    #
-    # A logged-in user must never reach these: they ignore reports_to (who
-    # may hear whose calls), which only the Recordings page enforces. And an
-    # API-key caller has no tenant, so the tenant is named in the request.
-
-    def _bot_tenant():
-        """(tenant, error_response). Bot key or unix socket only."""
-        from flask import g
-        from rinq.database.master import get_master_db
-        if getattr(g, 'api_caller', None) not in ('bot', 'local'):
-            return None, (jsonify({"error": "Bot access only"}), 403)
-        tenant = get_master_db().get_tenant(request.args.get('tenant', ''))
-        if not tenant:
-            return None, (jsonify({"error": "Unknown tenant"}), 404)
-        g.tenant = tenant
-        return tenant, None
+    # (bot_tenant: a logged-in user must never reach these)
 
     @bp.route('/recordings/feed', methods=['GET'])
     @api_or_session_auth
     def recording_feed():
         """Recordings after ?after_id=, oldest first (?limit=, max 500), no voicemails."""
-        _, error = _bot_tenant()
+        _, error = bot_tenant()
         if error:
             return error
         after_id = request.args.get('after_id', 0, type=int)
@@ -417,7 +402,7 @@ def register(bp):
         from flask import Response
         from rinq.services.recording_service import recording_service
 
-        _, error = _bot_tenant()
+        _, error = bot_tenant()
         if error:
             return error
         recording = get_db().get_recording_by_sid(recording_sid)

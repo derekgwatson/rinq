@@ -224,3 +224,21 @@ def get_api_caller_email():
     if caller and caller.startswith('session:'):
         return caller[8:]
     return caller
+
+
+def bot_tenant():
+    """For a bot-only endpoint: (tenant, error_response).
+
+    A logged-in user must never reach these - they ignore reports_to (who may
+    hear whose calls), which only the pages enforce - so only the bot key or
+    the unix socket gets in. An API-key caller has no tenant, so the request
+    names it (?tenant=) and it is adopted here (gotcha 35).
+    """
+    from rinq.database.master import get_master_db
+    if getattr(g, 'api_caller', None) not in ('bot', 'local'):
+        return None, (jsonify({"error": "Bot access only"}), 403)
+    tenant = get_master_db().get_tenant(request.args.get('tenant', ''))
+    if not tenant:
+        return None, (jsonify({"error": "Unknown tenant"}), 404)
+    g.tenant = tenant
+    return tenant, None
