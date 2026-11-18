@@ -163,6 +163,28 @@ def store_welcome(db) -> str:
     return ''
 
 
+def test_store_closed(db) -> dict | None:
+    """Is the test store closed right now, by its own schedule (holidays
+    included)? Then the test call plays out as an after-hours one - Stuart
+    says the store's closed and nobody is rung (Derek 2026-11-18: after hours
+    the test line greeted "I'll help while I grab someone"). Returns the
+    closed status, or None when open or the schedule can't be found."""
+    from rinq.api.schedule import check_business_status
+    try:
+        for phone in db.get_phone_numbers() or []:
+            routing = db.get_call_routing(phone.get('phone_number')) or {}
+            flow = routing.get('call_flow') or {}
+            if (flow.get('name') or '').strip().lower() != AI_TEST_STORE.lower():
+                continue
+            if not routing.get('schedule'):
+                return None
+            status = check_business_status(routing['schedule'])
+            return None if status.get('is_open') else status
+    except Exception as e:
+        logger.warning(f"AI test: couldn't read {AI_TEST_STORE}'s hours - testing as open: {e}")
+    return None
+
+
 def ring_for_takeover(staff: dict, customer_sid: str, show_as: str, db) -> None:
     """Ring the staff member's Tina (browser) for RING_SECONDS while Stuart
     talks. Answering runs /voice/ai-takeover/answer, which moves the caller
@@ -257,9 +279,14 @@ def register(bp):
         welcome = store_welcome(db)
         if welcome:
             params['welcome'] = welcome
+        closed = test_store_closed(db)
+        if closed:
+            from rinq.api.schedule import next_open_for_stuart
+            params['reason'] = 'closed'
+            params['next_open'] = next_open_for_stuart(closed.get('next_open'))
         tester = None
         try:
-            tester = db.get_address_book_by_mobile(own_number) if own_number else None
+            tester = db.get_address_book_by_mobile(own_number) if own_number and not closed else None
         except Exception as e:
             logger.warning(f"AI test: tester lookup failed for {own_number}: {e}")
         if tester and tester.get('email'):
