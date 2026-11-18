@@ -114,3 +114,35 @@ def test_call_back_button_cannot_carry_script():
     assert "'${cb.customer_phone}'" not in page
     assert "dialSafe(cb.customer_phone)" in page
     assert "dialSafe(otherNumber)" in page
+
+
+# Three callback routes stayed in log mode after the audit, until the RAW_URI
+# fix was proven on live traffic (12-18 Nov: every genuine callback validated).
+CALLBACK_PATHS = [
+    '/api/voice/queue/1/agent-answer?agent_email=a%40b.test',
+    '/api/voice/stuart-record?caller=%2B61400000000',
+    '/api/voice/extension-dial-status',
+]
+
+
+def _callback_form(store):
+    return {'CallSid': 'CAforged', 'From': '+61400000000', 'To': store.number,
+            'Called': store.number, 'DialCallStatus': 'completed'}
+
+
+@pytest.mark.parametrize('path', CALLBACK_PATHS)
+@pytest.mark.parametrize('extra', [{}, {'X-Twilio-Signature': 'bogus'}])
+def test_forged_callback_is_refused(client, store, path, extra):
+    resp = client.post(path, data=_callback_form(store), headers={**XFF, **extra},
+                       environ_overrides={'RAW_URI': path})
+    assert resp.status_code == 403
+
+
+@pytest.mark.parametrize('path', CALLBACK_PATHS)
+def test_genuine_callback_signature_is_accepted(client, store, path):
+    form = _callback_form(store)
+    sig = RequestValidator(TOKEN).compute_signature('https://tina.test' + path, form)
+    resp = client.post(path, data=form, base_url='https://tina.test',
+                       headers={**XFF, 'X-Twilio-Signature': sig},
+                       environ_overrides={'RAW_URI': path})
+    assert resp.status_code != 403
