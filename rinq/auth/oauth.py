@@ -57,6 +57,10 @@ def _get_flow(state=None):
     return flow
 
 
+def _allowed_domains(tenant):
+    return {d.strip().lower() for d in (tenant.get('allowed_domains') or '').split(',') if d.strip()}
+
+
 @auth_bp.route('/login')
 def login():
     """Show login page."""
@@ -146,6 +150,13 @@ def callback():
         flash("Could not get email from Google.", "error")
         return redirect(url_for('standalone_auth.login'))
 
+    # Users are matched by email, so only an address Google has verified may
+    # log in. (Google sends a real boolean; anything else is a no.)
+    if id_info.get('email_verified') is not True:
+        logger.warning(f"Login refused for {email}: Google email not verified")
+        flash("Your Google email address isn't verified.", "error")
+        return redirect(url_for('standalone_auth.login'))
+
     from rinq.database.master import get_master_db
     master_db = get_master_db()
     user = master_db.get_or_create_user(
@@ -160,8 +171,15 @@ def callback():
     tenants = master_db.get_user_tenants(user['id'])
     if not tenants:
         # Auto-provision: check if email domain matches any tenant's allowed_domains
+        # Only a Google Workspace account counts: its `hd` (hosted domain)
+        # must be one of the tenant's domains too. A personal Google account
+        # registered with a work address has no `hd` and is not let in.
         email_domain = email.split('@')[-1]
-        matching_tenants = master_db.get_tenants_for_email_domain(email_domain)
+        hosted_domain = (id_info.get('hd') or '').lower().strip()
+        matching_tenants = [
+            t for t in master_db.get_tenants_for_email_domain(email_domain)
+            if hosted_domain and hosted_domain in _allowed_domains(t)
+        ]
         for tenant in matching_tenants:
             master_db.add_user_to_tenant(tenant['id'], user['id'], role='user')
             logger.info(f"Auto-provisioned {email} into tenant {tenant['id']} (domain match: {email_domain})")
