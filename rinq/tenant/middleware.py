@@ -11,7 +11,6 @@ Resolves the current tenant on each request and stores it in Flask's g object.
 import hmac
 import logging
 import os
-import re
 from flask import g, request, session
 from rinq.database.master import get_master_db
 
@@ -34,10 +33,6 @@ SIGNATURE_EXEMPT_PATHS = (
     '/api/voice/hold-music',
     '/api/voice/ringback',
 )
-
-
-_LOG_ONLY_PATH_RE = re.compile(
-    r'^/api/voice/(queue/\d+/agent-answer|stuart-record|extension-dial-status)$')
 
 
 def _is_valid_bot_key(key) -> bool:
@@ -80,21 +75,16 @@ def _check_twilio_signature(tenant):
       - 'log': validate and log failures, but allow the request.
         Watch the logs for false negatives (URL reconstruction behind the
         proxy), then switch to enforce.
-      - 'enforce' (default): reject invalid/missing signatures with 403
-        (except _LOG_ONLY_PATH_RE, still being verified — see below).
+      - 'enforce' (default): reject invalid/missing signatures with 403.
       - 'off': skip entirely.
 
     Returns True if the request may proceed.
     """
     mode = os.environ.get('RINQ_TWILIO_SIGNATURE_MODE', 'enforce').lower()
-    # Default is now ENFORCE (security audit 2026-11-12: in 'log' mode anyone
-    # could forge a webhook — place calls on our bill, steal the Twilio token
-    # via a forged recording URL). The routes below still had GENUINE Twilio
-    # callbacks failing in production because of URL re-encoding; they stay in
-    # log mode until _signed_url_candidates() is proven on live traffic, then
-    # this list should be emptied.
-    if mode == 'enforce' and _LOG_ONLY_PATH_RE.match(request.path):
-        mode = 'log'
+    # Default is ENFORCE (security audit 2026-11-12). Every route is enforced:
+    # the queue agent-answer, stuart-record and extension-dial-status callbacks
+    # ran in log mode until _signed_url_candidates() was proven on live
+    # traffic (12-18 Nov 2026, no genuine failures).
     if mode == 'off':
         return True
     if request.path in SIGNATURE_EXEMPT_PATHS:
