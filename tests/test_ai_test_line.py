@@ -96,3 +96,37 @@ def test_the_prompt_offers_hash_for_withheld(client, make_store):
     make_store()
     twiml = _dial_from_tina(client, '9000')
     assert 'withheld number' in twiml
+
+
+# --- The test line follows the test store's real hours (Derek 2026-11-18) ---
+
+def _with_tester(store, monkeypatch):
+    import rinq.api.ai_test_routes as ai
+    rung = []
+    monkeypatch.setattr(ai, 'ring_for_takeover', lambda staff, *a: rung.append(staff['email']))
+    store.db.upsert_address_book_entry('Anna', '0400 999 888', STAFF_MOBILE, source='peter',
+                                       external_id='anna', email='anna@watsonblinds.com.au')
+    return rung
+
+
+def _handover(twiml):
+    return twiml.split('Redirect', 1)[1]
+
+
+def test_open_store_test_call_rings_the_tester_as_the_team(client, make_store, monkeypatch):
+    store = make_store()
+    rung = _with_tester(store, monkeypatch)
+    twiml = _handover(_start(client, store, '0400111222'))
+    assert 'ringing=1' in twiml and 'reason=closed' not in twiml
+    assert rung == ['anna@watsonblinds.com.au']
+
+
+def test_after_hours_test_call_is_a_closed_call(client, make_store, monkeypatch):
+    """After hours the test line greeted "I'll help while I grab someone"
+    while real callers heard the store was closed."""
+    store = make_store(open=False)
+    rung = _with_tester(store, monkeypatch)
+    twiml = _handover(_start(client, store, '0400111222'))
+    assert 'reason=closed' in twiml
+    assert 'ringing=1' not in twiml
+    assert rung == []
