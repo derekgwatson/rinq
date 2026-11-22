@@ -148,6 +148,34 @@ class CallLogMixin:
             """, (number, f'-{int(days)} days')).fetchone()
             return dict(row) if row else None
 
+    def staff_contact_since(self, number: str, since: str) -> dict | None:
+        """The first time since `since` (UTC 'YYYY-MM-DD HH:MM:SS') a staff
+        member spoke to or rang this number - or None.
+
+        For Stuart's hang-up ring-backs (Derek 2026-11-23): a caller who hung
+        up on the greeting and has since got through to someone, or been rung,
+        needs no ring-back ticket. A staff member answering their inbound call
+        counts; any staff call out to them counts, answered or not - someone
+        is already onto them. Only a staff leg carries an email in agent_email,
+        which also leaves out Stuart's own calls (ai_answered, no email).
+        `number` must be E.164.
+        """
+        if not number or not since:
+            return None
+        statuses = ','.join('?' * len(ANSWERED_STATUSES))
+        with self._get_conn() as conn:
+            row = conn.execute(f"""
+                SELECT direction, agent_email, started_at FROM call_log
+                WHERE agent_email LIKE '%@%'
+                  AND COALESCE(call_type, '') <> 'transfer'
+                  AND started_at > ?
+                  AND ((direction = 'outbound' AND to_number = ?)
+                       OR (direction = 'inbound' AND from_number = ?
+                           AND status IN ({statuses})))
+                ORDER BY started_at LIMIT 1
+            """, (since, number, number, *ANSWERED_STATUSES)).fetchone()
+            return dict(row) if row else None
+
     def callback_offered_since(self, number: str, since: str) -> bool:
         """Has this caller already heard the "press 1" offer since `since`
         (a call_log started_at)? Pressed 1 or not, one offer per staff call."""

@@ -296,6 +296,37 @@ def register(bp):
         number = to_e164((request.args.get('number') or '').strip())
         return jsonify(called_by_for_stuart(number, get_db()) if number else {})
 
+    @bp.route('/stuart/reached-since', methods=['GET'])
+    @api_or_session_auth
+    def stuart_reached_since():
+        """Has anyone on staff spoken to or rung ?number= since ?since= (ISO,
+        any offset)? Rosie asks before raising a ring-back ticket for a caller
+        who hung up on Stuart's greeting (Derek 2026-11-23: "every lead is
+        gold") - one who has since got through needs none.
+        Bot key only. {"reached": false} or {"reached": true, "how":
+        "answered"|"rang", "staff_email", "at"}."""
+        from datetime import datetime, timezone
+        from rinq.services.phone import to_e164
+        _, error = bot_tenant()
+        if error:
+            return error
+        number = to_e164((request.args.get('number') or '').strip())
+        try:
+            since = datetime.fromisoformat((request.args.get('since') or '').strip())
+        except ValueError:
+            return jsonify({'error': 'since must be an ISO date-time'}), 400
+        if since.tzinfo is None:
+            since = since.replace(tzinfo=timezone.utc)
+        if not number:
+            return jsonify({'error': 'number is required'}), 400
+        contact = get_db().staff_contact_since(
+            number, since.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'))
+        if not contact:
+            return jsonify({'reached': False})
+        return jsonify({'reached': True,
+                        'how': 'answered' if contact['direction'] == 'inbound' else 'rang',
+                        'staff_email': contact['agent_email'], 'at': contact['started_at']})
+
     @bp.route('/rang-while-busy', methods=['GET'])
     @login_required
     def rang_while_busy():
