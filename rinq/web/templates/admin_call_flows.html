@@ -81,6 +81,14 @@
 
                     {% if flow.open_action == 'extension_directory' %}
                         <span class="badge badge-info">📟 Extension Directory</span>
+                    {% elif flow.open_action == 'voicemail' %}
+                        {% set ovm = namespace(name=None) %}
+                        {% for dest in voicemail_destinations if dest.id == flow.voicemail_destination_id %}{% set ovm.name = dest.name %}{% endfor %}
+                        {% if ovm.name %}
+                        <span class="badge badge-info">📧 Straight to voicemail → {{ ovm.name }}</span>
+                        {% else %}
+                        <span class="badge badge-warning">📧 Straight to voicemail (no box)</span>
+                        {% endif %}
                     {% elif flow.open_action == 'forward' and flow.open_forward_number %}
                         <span class="badge badge-info">📲 Open Forward: {{ flow.open_forward_number }}</span>
                     {% elif flow.open_queue_id %}
@@ -89,7 +97,8 @@
                         {% endfor %}
                     {% endif %}
 
-                    {% if flow.schedule_id %}
+                    {% if flow.open_action == 'voicemail' %}
+                    {% elif flow.schedule_id %}
                         {% for s in schedules if s.id == flow.schedule_id %}
                         <span class="badge badge-warning">🕐 {{ s.name }}</span>
                         {% endfor %}
@@ -105,7 +114,8 @@
                         {% endif %}
                     {% endif %}
 
-                    {% if flow.closed_action == 'ai_receptionist' %}
+                    {% if flow.open_action == 'voicemail' %}
+                    {% elif flow.closed_action == 'ai_receptionist' %}
                         <span class="badge badge-success" title="AI answers after hours">🤖 Stuart (closed)</span>
                     {% elif flow.closed_action == 'voicemail' %}
                         {% set vm_dest = namespace(name=None, type=None, detail=None) %}
@@ -171,6 +181,7 @@
                             <option value="queue" {% if flow.open_action == 'queue' %}selected{% endif %}>📞 Route to Queue</option>
                             <option value="extension_directory" {% if flow.open_action == 'extension_directory' %}selected{% endif %}>📟 Extension Directory</option>
                             <option value="forward" {% if flow.open_action == 'forward' %}selected{% endif %}>📲 Forward to Number</option>
+                            <option value="voicemail" {% if flow.open_action == 'voicemail' %}selected{% endif %}>📧 Straight to voicemail (any hour)</option>
                         </select>
                     </div>
                 </div>
@@ -186,6 +197,18 @@
                             {% endfor %}
                         </select>
                     </div>
+                </div>
+
+                <!-- Voicemail box (shown when open_action = voicemail) -->
+                <div id="edit_open_voicemail_fields_{{ flow.id }}" style="margin-bottom: 15px; {% if flow.open_action != 'voicemail' %}display: none;{% endif %}">
+                    <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em;">📧 Voicemail box</label>
+                    <select name="open_voicemail_destination_id" style="width: 100%; max-width: 400px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
+                        <option value="">-- Select box --</option>
+                        {% for dest in voicemail_destinations %}
+                        <option value="{{ dest.id }}" {% if flow.voicemail_destination_id == dest.id %}selected{% endif %}>{{ dest.name }}</option>
+                        {% endfor %}
+                    </select>
+                    <p style="margin: 5px 0 0 0; font-size: 0.8em; color: #6c757d;">Every call hears the greeting above, then leaves a message. No hours apply.</p>
                 </div>
 
                 <!-- Forward number (shown when open_action = forward) -->
@@ -384,8 +407,20 @@
                     <option value="queue">📞 Route to Queue</option>
                     <option value="extension_directory">📟 Extension Directory</option>
                     <option value="forward">📲 Forward to Number</option>
+                    <option value="voicemail">📧 Straight to voicemail (any hour)</option>
                 </select>
             </div>
+        </div>
+
+        <div id="create_open_voicemail_fields" style="margin-bottom: 15px; display: none;">
+            <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em;">📧 Voicemail box</label>
+            <select name="open_voicemail_destination_id" style="width: 100%; max-width: 400px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
+                <option value="">-- Select box --</option>
+                {% for dest in voicemail_destinations %}
+                <option value="{{ dest.id }}">{{ dest.name }}</option>
+                {% endfor %}
+            </select>
+            <p style="margin: 5px 0 0 0; font-size: 0.8em; color: #6c757d;">Every call hears the greeting, then leaves a message. No hours apply.</p>
         </div>
 
         <div id="create_schedule_row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
@@ -663,6 +698,7 @@ function updateCreateOpenFields() {
     const action = document.getElementById('create_open_action').value;
     const isQueue = action === 'queue';
     document.getElementById('create_open_forward_fields').style.display = (action === 'forward') ? '' : 'none';
+    document.getElementById('create_open_voicemail_fields').style.display = (action === 'voicemail') ? '' : 'none';
     document.getElementById('create_queue_fields').style.display = isQueue ? '' : 'none';
     document.getElementById('create_ext_fields').style.display = (action === 'extension_directory') ? '' : 'none';
     document.getElementById('create_schedule_row').style.display = isQueue ? '' : 'none';
@@ -677,6 +713,7 @@ function updateEditOpenFields(flowId) {
     const action = document.getElementById('edit_open_action_' + flowId).value;
     const isQueue = action === 'queue';
     document.getElementById('edit_open_forward_fields_' + flowId).style.display = (action === 'forward') ? '' : 'none';
+    document.getElementById('edit_open_voicemail_fields_' + flowId).style.display = (action === 'voicemail') ? '' : 'none';
     document.getElementById('edit_queue_fields_' + flowId).style.display = isQueue ? '' : 'none';
     document.getElementById('edit_ext_fields_' + flowId).style.display = (action === 'extension_directory') ? '' : 'none';
     document.getElementById('edit_schedule_row_' + flowId).style.display = isQueue ? '' : 'none';
