@@ -3587,8 +3587,13 @@ class Database(StatsMixin, CallLogMixin):
 
     def requeue_call(self, call_sid: str, queue_id: int, queue_name: str,
                      caller_number: str, called_number: str,
-                     transferred_by: str = None, enrichment: dict = None) -> int | None:
+                     transferred_by: str = None, enrichment: dict = None,
+                     transfer_type: str = 'showroom') -> int | None:
         """Put a live call into a showroom queue as a fresh waiting entry.
+
+        transfer_type 'stuart': a caller Stuart couldn't hear, back in their
+        store's queue (stuart-handback) - queue_leave then sends a timeout to
+        voicemail, never back to Stuart.
 
         Used when an agent transfers a caller to a showroom. call_sid is
         UNIQUE here, so a caller who first came in through a queue already
@@ -3626,7 +3631,7 @@ class Database(StatsMixin, CallLogMixin):
                     customer_id, customer_name, customer_email,
                     order_data, priority, priority_reason, status, enqueued_at,
                     transfer_type, transferred_by, transferred_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?, 'showroom', ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'waiting', ?, ?, ?, ?)
             """, (
                 call_sid, queue_id, queue_name, caller_number, called_number,
                 details.get('customer_id'),
@@ -3635,7 +3640,7 @@ class Database(StatsMixin, CallLogMixin):
                 details.get('order_data'),
                 details.get('priority') or 'normal',
                 details.get('priority_reason'),
-                now, transferred_by, now
+                now, transfer_type, transferred_by, now
             ))
             conn.commit()
         return archived_id
