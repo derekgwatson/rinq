@@ -160,6 +160,13 @@ def _queued_names(db, sids: list[str]) -> dict:
 def build_snapshot(db, client) -> dict:
     """Fold Twilio's live legs into talking / waiting / starting."""
     legs = _live_twilio_legs(client)
+    # A caller leaving a message on a personal voicemail line is nobody
+    # else's business (services/personal_voicemail.py).
+    from rinq.services.personal_voicemail import personal_numbers
+    private = personal_numbers(db)
+    if private:
+        legs = [leg for leg in legs if (leg.to or '') not in private
+                and (getattr(leg, '_from', '') or '') not in private]
     leg_status = {leg.sid: leg.status for leg in legs}
     rows = _call_log_rows(db, list(leg_status))
 

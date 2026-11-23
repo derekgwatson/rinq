@@ -4,7 +4,7 @@
 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
     <div>
         <h2 style="margin: 0;">Voicemail Destinations</h2>
-        <p class="text-muted" style="margin: 5px 0 0 0;">Each box turns a voicemail into a ticket for a group, or emails it to one person only.</p>
+        <p class="text-muted" style="margin: 5px 0 0 0;">Each box turns a voicemail into a ticket for a group, and can assign it to one person.</p>
     </div>
     <a href="{{ url_for('web.admin') }}" class="btn btn-secondary">← Back to Admin</a>
 </div>
@@ -24,15 +24,10 @@
                         {% endif %}
                     {% endfor %}
                     <p style="margin: 0;">
-                        {% if dest.routing_type == 'email' and dest.email %}
-                        <span class="badge badge-success">Email</span>
-                        <span style="margin-left: 8px; color: #495057;">only to {{ dest.email }}</span>
-                        {% else %}
                         <span class="badge badge-info">Ticket</span>
                         <span style="margin-left: 8px; color: #495057;">{{ group_name.value }}</span>
                         {% if dest.ticket_assignee_email %}
                         <span style="margin-left: 8px; color: #495057;">· assigned to {{ dest.ticket_assignee_email }}</span>
-                        {% endif %}
                         {% endif %}
                     </p>
                     {% if dest.description %}
@@ -55,38 +50,16 @@
                             <input type="text" name="name" value="{{ dest.name }}" required
                                    style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
                         </div>
-                        {% set is_email = dest.routing_type == 'email' and dest.email %}
                         <div>
-                            <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em;">Sends to</label>
-                            <select name="routing_type" class="vm-routing" data-box="edit_{{ dest.id }}" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
-                                <option value="ticket" {% if not is_email %}selected{% endif %}>A ticket for a group</option>
-                                <option value="email" {% if is_email %}selected{% endif %}>An email to one person only</option>
-                            </select>
-                        </div>
-                        <div class="vm-email-fields" data-box="edit_{{ dest.id }}" {% if not is_email %}style="display: none;"{% endif %}>
-                            <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em;">Email it to</label>
-                            <select name="email" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
-                                <option value="">-- Pick a person --</option>
-                                {% set en = namespace(found=false) %}
-                                {% for s in staff %}
-                                {% if is_email and s.email == dest.email %}{% set en.found = true %}{% endif %}
-                                <option value="{{ s.email }}" {% if is_email and s.email == dest.email %}selected{% endif %}>{{ s.name_audio_text or s.email }}{% if s.extension %} ({{ s.extension }}){% endif %}</option>
-                                {% endfor %}
-                                {% if is_email and not en.found %}
-                                <option value="{{ dest.email }}" selected>{{ dest.email }}</option>
-                                {% endif %}
-                            </select>
-                        </div>
-                        <div class="vm-ticket-fields" data-box="edit_{{ dest.id }}" {% if is_email %}style="display: none;"{% endif %}>
                             <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em;">Group</label>
-                            <select name="ticket_group_id" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
+                            <select name="ticket_group_id" required style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
                                 <option value="">-- Select group --</option>
                                 {% for group in ticket_groups %}
                                 <option value="{{ group.id }}" {% if dest.ticket_group_id == group.id %}selected{% endif %}>{{ group.name }}</option>
                                 {% endfor %}
                             </select>
                         </div>
-                        <div class="vm-ticket-fields" data-box="edit_{{ dest.id }}" {% if is_email %}style="display: none;"{% endif %}>
+                        <div>
                             <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em;">Assign to (optional)</label>
                             <select name="ticket_assignee_email" style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
                                 <option value="">-- Nobody, just the group --</option>
@@ -121,38 +94,22 @@
 
     <form method="post" action="{{ url_for('web.create_voicemail_destination') }}" style="padding: 15px; background: #f8f9fa; border-radius: 8px; border-top: 1px solid #e9ecef; margin-top: 8px;">
         <h4 style="margin: 0 0 15px 0; font-size: 1em;">Add New Destination</h4>
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; align-items: end;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 10px; align-items: end;">
             <div>
                 <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.85em;">Name</label>
                 <input type="text" name="name" placeholder="e.g., Brittany Moore" required
                        style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
             </div>
             <div>
-                <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.85em;">Sends to</label>
-                <select name="routing_type" class="vm-routing" data-box="create" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-                    <option value="ticket">A ticket for a group</option>
-                    <option value="email">An email to one person only</option>
-                </select>
-            </div>
-            <div class="vm-email-fields" data-box="create" style="display: none;">
-                <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.85em;">Email it to</label>
-                <select name="email" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-                    <option value="">-- Pick a person --</option>
-                    {% for s in staff %}
-                    <option value="{{ s.email }}">{{ s.name_audio_text or s.email }}{% if s.extension %} ({{ s.extension }}){% endif %}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="vm-ticket-fields" data-box="create">
                 <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.85em;">Group</label>
-                <select name="ticket_group_id" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                <select name="ticket_group_id" required style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
                     <option value="">-- Select group --</option>
                     {% for group in ticket_groups %}
                     <option value="{{ group.id }}">{{ group.name }}</option>
                     {% endfor %}
                 </select>
             </div>
-            <div class="vm-ticket-fields" data-box="create">
+            <div>
                 <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.85em;">Assign to (optional)</label>
                 <select name="ticket_assignee_email" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
                     <option value="">-- Nobody, just the group --</option>
@@ -169,19 +126,6 @@
 
 {% block extra_js %}
 <script>
-// "Sends to": show the person picker for an email box, group + assignee for a ticket box
-document.querySelectorAll('.vm-routing').forEach(function (sel) {
-    sel.addEventListener('change', function () {
-        var box = sel.dataset.box, isEmail = sel.value === 'email';
-        document.querySelectorAll('.vm-email-fields[data-box="' + box + '"]').forEach(function (el) {
-            el.style.display = isEmail ? '' : 'none';
-        });
-        document.querySelectorAll('.vm-ticket-fields[data-box="' + box + '"]').forEach(function (el) {
-            el.style.display = isEmail ? 'none' : '';
-        });
-    });
-});
-
 function toggleEditDest(destId) {
     const editDiv = document.getElementById('edit_dest_' + destId);
     editDiv.style.display = editDiv.style.display === 'none' ? 'block' : 'none';

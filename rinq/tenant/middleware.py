@@ -22,6 +22,9 @@ TENANT_EXEMPT_PREFIXES = (
     # A desk phone's idle-screen page: no session, the tenant is in the URL
     # and is only adopted after its token checks out (web/routes.py).
     '/phone-screen/',
+    # A personal voicemail greeting, fetched by Twilio's <Play>: the random
+    # file name is the key (services/personal_voicemail.greeting_file).
+    '/personal-greeting/',
 )
 
 # Media-TwiML endpoints exempt from signature validation. Twilio fetches

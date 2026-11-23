@@ -1,0 +1,255 @@
+{# My voicemail - only rendered for the owner of a personal voicemail line
+   (services/personal_voicemail.py). Nobody else ever gets this card. #}
+<style>
+    .mvm-card { margin-bottom: 20px; }
+    .mvm-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+    .mvm-head h2 { margin: 0; }
+    .mvm-section { padding: 16px 0; border-top: 1px solid #eee; }
+    .mvm-section:first-of-type { border-top: none; }
+    .mvm-label { font-weight: 600; margin-bottom: 4px; }
+    .mvm-help { font-size: 0.85em; color: #6c757d; margin: 0 0 12px 0; }
+    .mvm-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .mvm-row audio { max-width: 100%; height: 36px; }
+    .mvm-status { font-size: 0.9em; color: #6c757d; }
+    .mvm-status.ok { color: #198754; }
+    .mvm-status.err { color: #dc3545; }
+    .mvm-rec { background: #dc3545; color: #fff; border: none; }
+    .mvm-rec.recording { animation: mvm-pulse 1s infinite; }
+    @keyframes mvm-pulse { 50% { opacity: 0.6; } }
+    .mvm-msg { padding: 14px 0; border-top: 1px solid #f0f0f0; }
+    .mvm-msg:first-child { border-top: none; }
+    .mvm-msg-top { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+    .mvm-who { font-weight: 600; }
+    .mvm-when { font-size: 0.85em; color: #6c757d; }
+    .mvm-text { margin: 6px 0 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .mvm-text.missing { color: #6c757d; font-style: italic; }
+    .mvm-empty { color: #6c757d; padding: 8px 0; }
+    .mvm-switch-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    .mvm-switch-row > div { min-width: 0; overflow-wrap: anywhere; }
+    .mvm-switch-row .toggle-switch { flex-shrink: 0; }
+</style>
+
+<div class="card mvm-card" id="voicemail">
+    <div class="mvm-head">
+        <h2>My voicemail</h2>
+        <span class="text-muted" style="font-size: 0.85em;">Only you can see this</span>
+    </div>
+
+    <div class="mvm-section">
+        <div class="mvm-label">Greeting</div>
+        <p class="mvm-help">What callers hear before the tone. Press Record, say your greeting, press Stop, then Save.</p>
+        <div class="mvm-row" id="mvmCurrent" {% if not my_voicemail.greeting_url %}style="display:none"{% endif %}>
+            <span class="mvm-status">Current:</span>
+            <audio controls preload="none" src="{{ my_voicemail.greeting_url or '' }}" id="mvmCurrentAudio"></audio>
+            <button type="button" class="btn btn-small btn-secondary" onclick="mvmClearGreeting()">Remove</button>
+        </div>
+        <p class="mvm-status" id="mvmNoGreeting" {% if my_voicemail.greeting_url %}style="display:none"{% endif %}>
+            No greeting yet - callers hear "The person you are calling is not available. Please leave a message after the tone."
+        </p>
+        <div class="mvm-row" style="margin-top: 10px;">
+            <button type="button" class="btn btn-small mvm-rec" id="mvmRecBtn" onclick="mvmToggleRecord()">&#9679; Record</button>
+            <audio controls id="mvmPreview" style="display:none"></audio>
+            <button type="button" class="btn btn-small" id="mvmSaveBtn" style="display:none" onclick="mvmSaveRecording()">Save</button>
+            <label class="btn btn-small btn-secondary" style="margin: 0; cursor: pointer;">
+                Upload a file<input type="file" accept="audio/wav,audio/x-wav,audio/mpeg,.wav,.mp3" style="display:none" onchange="mvmUpload(this)">
+            </label>
+            <span class="mvm-status" id="mvmGreetingStatus"></span>
+        </div>
+    </div>
+
+    <div class="mvm-section">
+        <div class="mvm-switch-row">
+            <div>
+                <div class="mvm-label">Email me each message</div>
+                <div class="setting-description">The message written out, with the recording attached, to {{ my_voicemail.line.owner_email }}</div>
+            </div>
+            <label class="toggle-switch">
+                <input type="checkbox" id="mvmEmail" {% if my_voicemail.line.email_copies %}checked{% endif %} onchange="mvmSetEmail(this)">
+                <span class="toggle-slider"></span>
+            </label>
+        </div>
+        <span class="mvm-status" id="mvmEmailStatus"></span>
+    </div>
+
+    <div class="mvm-section">
+        <div class="mvm-label">Messages</div>
+        <div id="mvmMessages">
+        {% for m in my_voicemail.messages %}
+            <div class="mvm-msg" id="mvmMsg{{ m.id }}">
+                <div class="mvm-msg-top">
+                    <span class="mvm-who">{{ m.who }}</span>
+                    <span class="mvm-when">{{ m.when }}{% if m.duration_seconds %} · {{ m.duration_seconds }}s{% endif %}</span>
+                </div>
+                {% if m.transcription %}
+                <p class="mvm-text">{{ m.transcription }}</p>
+                {% else %}
+                <p class="mvm-text missing">Couldn't write this one out{% if m.transcription_problem %} - {{ m.transcription_problem }}{% endif %}. Play it to hear it.</p>
+                {% endif %}
+                <div class="mvm-row">
+                    {% if m.audio_file %}
+                    <audio controls preload="none" src="{{ url_for('web.my_voicemail_audio', message_id=m.id) }}"></audio>
+                    {% endif %}
+                    <button type="button" class="btn btn-small btn-secondary" data-id="{{ m.id }}" onclick="mvmDelete(this)">Delete</button>
+                </div>
+            </div>
+        {% else %}
+            <p class="mvm-empty" id="mvmEmpty">No messages.</p>
+        {% endfor %}
+        </div>
+    </div>
+</div>
+
+<script>
+(function () {
+    const URLS = {
+        greeting: {{ url_for('web.my_voicemail_greeting')|tojson }},
+        clear: {{ url_for('web.my_voicemail_greeting_clear')|tojson }},
+        email: {{ url_for('web.my_voicemail_email_copies')|tojson }},
+        del: {{ url_for('web.my_voicemail_delete', message_id=0)|tojson }}.replace(/0\/delete$/, ''),
+    };
+    function status(id, text, cls) {
+        const el = document.getElementById(id);
+        el.textContent = text;
+        el.className = 'mvm-status' + (cls ? ' ' + cls : '');
+    }
+
+    // ---- Recording: raw microphone samples, encoded here as a WAV, because
+    // Twilio can only play WAV or MP3 (a browser's own recorder makes WebM/MP4).
+    let ctx = null, stream = null, node = null, chunks = [], rate = 0, wavBlob = null;
+
+    window.mvmToggleRecord = async function () {
+        const btn = document.getElementById('mvmRecBtn');
+        if (node) { stopRecording(); return; }
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({audio: true});
+        } catch (e) {
+            status('mvmGreetingStatus', "Couldn't use the microphone - allow it for this site, or upload a file.", 'err');
+            return;
+        }
+        ctx = new (window.AudioContext || window.webkitAudioContext)();
+        rate = ctx.sampleRate;
+        const src = ctx.createMediaStreamSource(stream);
+        node = ctx.createScriptProcessor(4096, 1, 1);
+        chunks = [];
+        node.onaudioprocess = e => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+        src.connect(node);
+        node.connect(ctx.destination);
+        btn.textContent = '■ Stop';
+        btn.classList.add('recording');
+        status('mvmGreetingStatus', 'Recording...', '');
+        document.getElementById('mvmSaveBtn').style.display = 'none';
+        document.getElementById('mvmPreview').style.display = 'none';
+    };
+
+    function stopRecording() {
+        const btn = document.getElementById('mvmRecBtn');
+        node.disconnect();
+        stream.getTracks().forEach(t => t.stop());
+        ctx.close();
+        node = null;
+        btn.textContent = '● Record again';
+        btn.classList.remove('recording');
+        wavBlob = toWav(chunks, rate, 16000);
+        const prev = document.getElementById('mvmPreview');
+        prev.src = URL.createObjectURL(wavBlob);
+        prev.style.display = '';
+        document.getElementById('mvmSaveBtn').style.display = '';
+        status('mvmGreetingStatus', 'Play it back, then Save.', '');
+    }
+
+    function toWav(parts, inRate, outRate) {
+        let len = parts.reduce((n, p) => n + p.length, 0);
+        const all = new Float32Array(len);
+        let o = 0;
+        parts.forEach(p => { all.set(p, o); o += p.length; });
+        const ratio = inRate / outRate, outLen = Math.floor(all.length / ratio);
+        const buf = new ArrayBuffer(44 + outLen * 2), v = new DataView(buf);
+        const w = (off, s) => { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); };
+        w(0, 'RIFF'); v.setUint32(4, 36 + outLen * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+        v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+        v.setUint32(24, outRate, true); v.setUint32(28, outRate * 2, true);
+        v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, outLen * 2, true);
+        for (let i = 0; i < outLen; i++) {
+            // average the samples this output sample covers (simple low-pass)
+            const a = Math.floor(i * ratio), b = Math.min(all.length, Math.floor((i + 1) * ratio));
+            let s = 0;
+            for (let j = a; j < b; j++) s += all[j];
+            s = Math.max(-1, Math.min(1, s / Math.max(1, b - a)));
+            v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+        }
+        return new Blob([v], {type: 'audio/wav'});
+    }
+
+    async function sendGreeting(blob, name) {
+        const fd = new FormData();
+        fd.append('greeting', blob, name);
+        status('mvmGreetingStatus', 'Saving...', '');
+        try {
+            const r = await fetch(URLS.greeting, {method: 'POST', body: fd});
+            const d = await r.json();
+            if (!r.ok || !d.success) throw new Error(d.error || 'save failed');
+            const cur = document.getElementById('mvmCurrentAudio');
+            cur.src = d.greeting_url;
+            document.getElementById('mvmCurrent').style.display = '';
+            document.getElementById('mvmNoGreeting').style.display = 'none';
+            document.getElementById('mvmSaveBtn').style.display = 'none';
+            document.getElementById('mvmPreview').style.display = 'none';
+            document.getElementById('mvmRecBtn').textContent = '● Record';
+            status('mvmGreetingStatus', '✓ Saved - callers hear this now', 'ok');
+        } catch (e) {
+            status('mvmGreetingStatus', "Couldn't save: " + e.message, 'err');
+        }
+    }
+    window.mvmSaveRecording = () => wavBlob && sendGreeting(wavBlob, 'greeting.wav');
+    window.mvmUpload = input => { if (input.files[0]) sendGreeting(input.files[0], input.files[0].name); input.value = ''; };
+
+    window.mvmClearGreeting = async function () {
+        const r = await fetch(URLS.clear, {method: 'POST'});
+        if (r.ok) {
+            document.getElementById('mvmCurrent').style.display = 'none';
+            document.getElementById('mvmNoGreeting').style.display = '';
+            status('mvmGreetingStatus', '✓ Removed', 'ok');
+        } else {
+            status('mvmGreetingStatus', "Couldn't remove it - try again", 'err');
+        }
+    };
+
+    window.mvmSetEmail = async function (box) {
+        const fd = new FormData();
+        fd.append('on', box.checked ? '1' : '0');
+        const r = await fetch(URLS.email, {method: 'POST', body: fd});
+        if (r.ok) {
+            status('mvmEmailStatus', '✓ Saved', 'ok');
+        } else {
+            box.checked = !box.checked;
+            status('mvmEmailStatus', "Couldn't save - try again", 'err');
+        }
+    };
+
+    // Delete: first press asks, second press deletes (no browser popups).
+    window.mvmDelete = async function (btn) {
+        if (!btn.dataset.armed) {
+            btn.dataset.armed = '1';
+            btn.textContent = 'Delete for good?';
+            btn.classList.replace('btn-secondary', 'btn-danger');
+            setTimeout(() => {
+                if (btn.isConnected) {
+                    delete btn.dataset.armed;
+                    btn.textContent = 'Delete';
+                    btn.classList.replace('btn-danger', 'btn-secondary');
+                }
+            }, 4000);
+            return;
+        }
+        const r = await fetch(URLS.del + btn.dataset.id + '/delete', {method: 'POST'});
+        if (r.ok) {
+            document.getElementById('mvmMsg' + btn.dataset.id).remove();
+            if (!document.querySelector('.mvm-msg')) {
+                document.getElementById('mvmMessages').innerHTML = '<p class="mvm-empty">No messages.</p>';
+            }
+        } else {
+            btn.textContent = "Couldn't delete - try again";
+        }
+    };
+})();
+</script>

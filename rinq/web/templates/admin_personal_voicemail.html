@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+
+{% block extra_css %}
+<style>
+    .pvm-line { padding: 16px; background: #f8f9fa; border-radius: 8px; margin-bottom: 12px; }
+    .pvm-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+    .pvm-top h4 { margin: 0 0 4px 0; }
+    .pvm-top > div { min-width: 0; overflow-wrap: anywhere; }
+    .pvm-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 12px; align-items: end; }
+    .pvm-form label { display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em; }
+    .pvm-form select, .pvm-form input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em; box-sizing: border-box; }
+    .pvm-edit { display: none; margin-top: 14px; padding: 14px; background: #fff; border: 1px solid #ddd; border-radius: 6px; }
+    .pvm-danger { margin-top: 14px; padding-top: 14px; border-top: 1px solid #f1d0d4; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 20px;">
+    <div>
+        <h2 style="margin: 0;">Personal voicemail</h2>
+        <p class="text-muted" style="margin: 5px 0 0 0;">A number that only takes messages for one person - e.g. a mobile's unanswered calls diverted to Tina.</p>
+    </div>
+    <a href="{{ url_for('web.admin') }}" class="btn btn-secondary">← Back to Admin</a>
+</div>
+
+<div class="card" style="margin-bottom: 20px;">
+    <p style="margin: 0 0 6px 0;"><strong>Kept apart from the rest of Tina.</strong></p>
+    <ul style="margin: 0; padding-left: 20px; color: #495057;">
+        <li>Calls to these numbers aren't in any report, call log or recordings page.</li>
+        <li>Messages are shown only to the line's owner, on their My Numbers page - not here.</li>
+        <li>The owner records their own greeting there, and is emailed whenever a line is changed here.</li>
+    </ul>
+</div>
+
+<div class="card">
+    {% for line in lines %}
+    {% set n = (all_numbers|selectattr('phone_number', 'equalto', line.phone_number)|first) %}
+    <div class="pvm-line">
+        <div class="pvm-top">
+            <div>
+                <h4>{{ names.get(line.owner_email.lower()) or line.owner_email }}</h4>
+                <div>{{ line.phone_number }}{% if n and n.friendly_name and n.friendly_name|replace('+','') != line.phone_number|replace('+','') %} · {{ n.friendly_name }}{% endif %}</div>
+                <div class="text-muted" style="font-size: 0.9em; margin-top: 4px;">
+                    {{ 'Own greeting' if line.greeting_token else 'Standard greeting' }} · email copies {{ 'on' if line.email_copies else 'off' }}
+                </div>
+            </div>
+            <button type="button" class="btn btn-small" onclick="document.getElementById('pvmEdit{{ line.id }}').style.display = document.getElementById('pvmEdit{{ line.id }}').style.display === 'block' ? 'none' : 'block'">Edit</button>
+        </div>
+        <div class="pvm-edit" id="pvmEdit{{ line.id }}">
+            <form method="post" action="{{ url_for('web.admin_personal_voicemail_update', line_id=line.id) }}" class="pvm-form">
+                <div>
+                    <label>Number</label>
+                    <select name="phone_number" required>
+                        {% for num in all_numbers %}
+                        {% if num.phone_number == line.phone_number or num in free_numbers %}
+                        <option value="{{ num.phone_number }}" {% if num.phone_number == line.phone_number %}selected{% endif %}>{{ num.phone_number }}{% if num.friendly_name and num.friendly_name|replace('+','') != num.phone_number|replace('+','') %} - {{ num.friendly_name }}{% endif %}</option>
+                        {% endif %}
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label>Whose line (gets the messages)</label>
+                    <select name="owner_email" required>
+                        {% set ns = namespace(found=false) %}
+                        {% for s in staff %}
+                        {% if s.email|lower == line.owner_email|lower %}{% set ns.found = true %}{% endif %}
+                        <option value="{{ s.email }}" {% if s.email|lower == line.owner_email|lower %}selected{% endif %}>{{ s.name_audio_text or s.email }}</option>
+                        {% endfor %}
+                        {% if not ns.found %}<option value="{{ line.owner_email }}" selected>{{ line.owner_email }}</option>{% endif %}
+                    </select>
+                </div>
+                <div><button type="submit" class="btn">Save</button></div>
+            </form>
+            <form method="post" action="{{ url_for('web.admin_personal_voicemail_delete', line_id=line.id) }}" class="pvm-form pvm-danger">
+                <div>
+                    <label>Remove this line - deletes every message on it. Type {{ line.phone_number }} to confirm</label>
+                    <input type="text" name="confirm" autocomplete="off" placeholder="{{ line.phone_number }}">
+                </div>
+                <div><button type="submit" class="btn btn-danger">Remove line</button></div>
+            </form>
+        </div>
+    </div>
+    {% else %}
+    <p class="text-muted">No personal voicemail lines yet.</p>
+    {% endfor %}
+
+    <form method="post" action="{{ url_for('web.admin_personal_voicemail_create') }}" class="pvm-form" style="margin-top: 8px; padding-top: 16px; border-top: 1px solid #e9ecef;">
+        <div>
+            <label>Number</label>
+            <select name="phone_number" required>
+                <option value="">-- Pick a number --</option>
+                {% for num in free_numbers %}
+                <option value="{{ num.phone_number }}">{{ num.phone_number }}{% if num.friendly_name and num.friendly_name|replace('+','') != num.phone_number|replace('+','') %} - {{ num.friendly_name }}{% endif %}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label>Whose line</label>
+            <select name="owner_email" required>
+                <option value="">-- Pick a person --</option>
+                {% for s in staff %}
+                <option value="{{ s.email }}">{{ s.name_audio_text or s.email }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div><button type="submit" class="btn">Add line</button></div>
+    </form>
+    <p class="text-muted" style="font-size: 0.85em; margin: 10px 0 0 0;">Adding a line takes the number off any call flow it was on.</p>
+</div>
+{% endblock %}

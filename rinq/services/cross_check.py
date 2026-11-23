@@ -171,7 +171,11 @@ def run(db, twilio_client, start: date, end: date) -> dict:
         result['error'] = str(e)[:300]
         return result
 
-    ours = {p['phone_number'] for p in db.get_phone_numbers() if p.get('phone_number')}
+    # Personal voicemail lines are kept out of call_log on purpose
+    # (services/personal_voicemail.py), so they are no part of this check.
+    from rinq.services.personal_voicemail import personal_numbers
+    ours = {p['phone_number'] for p in db.get_phone_numbers()
+            if p.get('phone_number')} - personal_numbers(db)
     windows = _outage_windows(db)
     outages_hit = {}
 

@@ -1062,6 +1062,15 @@ def voice_incoming():
 
     db = get_db()
 
+    # A personal voicemail line (services/personal_voicemail.py): greeting,
+    # tone, message - and nothing written to call_log, so no report shows it.
+    from rinq.services import personal_voicemail as personal_vm
+    personal_line = personal_vm.line_for_number(db, called_number)
+    if personal_line:
+        tenant = get_current_tenant() or {}
+        return Response(personal_vm.call_twiml(tenant.get('id'), personal_line),
+                        mimetype='application/xml')
+
     # Get full routing info for this number
     routing = db.get_call_routing(called_number)
 
@@ -1145,20 +1154,6 @@ def voice_incoming():
             response_parts.remove(greeting_play)
             return {'welcome': greeting_text}
         return None
-
-    # Straight to voicemail, any hour: a number that only takes messages
-    # (e.g. a mobile's unanswered calls diverted here). The flow's greeting,
-    # already queued above, is the prompt; without one Tina says the generic one.
-    if call_flow and call_flow.get('open_action') == 'voicemail':
-        db.log_activity(
-            action="call_straight_to_voicemail",
-            target=called_number,
-            details=f"From: {from_number}, Flow: {call_flow.get('name')}",
-            performed_by="twilio"
-        )
-        return _go_to_voicemail(response_parts, call_flow, called_number, from_number,
-                                call_sid, db, routing, reason='voicemail_only',
-                                prompt_given=bool(greeting_play))
 
     # Check business status (includes holiday detection)
     status = _check_business_status(schedule)
@@ -4501,9 +4496,8 @@ def voicemail_handler():
 
     # Route voicemail if destination configured
     if voicemail_dest:
-        # A box files a ticket, or (routing_type 'email' with an address)
-        # emails one person. The first "Email" option was never built and was
-        # removed 2026-11-04; this one is real (2026-11-23, Rohan).
+        # Every voicemail box files a ticket (an "Email" option existed but was
+        # never built — it silently dropped the voicemail — and was removed 2026-11-04).
         try:
             import time
 
@@ -4568,17 +4562,6 @@ def voicemail_handler():
                         else:
                             # Nothing was said. The service is working.
                             transcription_alerts.note_success(db)
-
-            # An "email to a person" box: the message goes to that person only
-            # (e.g. Rohan's mobile, whose carrier has no visual voicemail). No
-            # ticket - nobody else reads it.
-            if voicemail_dest.get('routing_type') == 'email' and voicemail_dest.get('email'):
-                _email_voicemail_to_person(
-                    db, voicemail_dest, recording_sid, from_number, to_number,
-                    recording_duration, transcription_text, transcription_problem,
-                    audio_content)
-                return Response('<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
-                                mimetype='application/xml')
 
             # Format the ticket
             flow_name = call_flow.get('name', 'Unknown') if call_flow else 'Unknown'
@@ -4691,70 +4674,6 @@ Call Flow: {flow_name}
     # Return empty response - call is done
     return Response('<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
                    mimetype='application/xml')
-
-
-def _email_voicemail_to_person(db, box, recording_sid, from_number, to_number,
-                               duration, transcription_text, transcription_problem,
-                               audio_content):
-    """Email one voicemail to the person a box belongs to.
-
-    A failed send is logged as voicemail_email_failed and alerts nobody else:
-    the recording stays in Twilio and recording_log, so it can be re-sent.
-    """
-    from rinq.integrations import get_email_service, get_customer_lookup
-    from rinq.services.phone import to_local, is_lookupable_number
-    from zoneinfo import ZoneInfo
-
-    withheld = not is_lookupable_number(from_number or '')
-    caller = 'a withheld number' if withheld else to_local(from_number)
-    name = None
-    try:
-        lookup = get_customer_lookup()
-        found = lookup.find_by_phone(from_number) if (lookup and not withheld) else None
-        name = (found or {}).get('name')
-    except Exception as e:
-        logger.warning(f"Voicemail email: caller lookup failed for {from_number}: {e}")
-    who = f"{name} ({caller})" if name else caller
-
-    when = datetime.now(ZoneInfo('Australia/Sydney')).strftime('%a %-d %b, %-I:%M%p').replace('AM', 'am').replace('PM', 'pm')
-
-    if transcription_text:
-        message = transcription_text.strip()
-    elif transcription_problem:
-        message = f"(Couldn't write this one out - {transcription_problem}. Please play the recording.)"
-    else:
-        message = "(Couldn't write this one out. Please play the recording.)"
-
-    subject = f"Voicemail from {who}"
-    body = (
-        f"From: {who}\n"
-        f"When: {when}\n"
-        f"Length: {duration or '?'} seconds\n\n"
-        f"Message:\n{message}\n\n"
-        f"The recording is attached.\n"
-    )
-
-    email = get_email_service()
-    message_id = email.send_email(
-        to=box['email'], subject=subject, text_body=body,
-        attachments=[{
-            'filename': f"voicemail_{recording_sid}.mp3",
-            'content_type': 'audio/mpeg',
-            'content_base64': audio_content,
-        }],
-    ) if email else None
-
-    if message_id:
-        logger.info(f"Voicemail {recording_sid} emailed to {box['email']}")
-        db.log_activity(action="voicemail_emailed", target=to_number,
-                        details=f"Recording {recording_sid} emailed to {box['email']}",
-                        performed_by="tina")
-    else:
-        logger.error(f"Voicemail {recording_sid}: email to {box['email']} failed")
-        db.log_activity(action="voicemail_email_failed", target=to_number,
-                        details=f"Recording {recording_sid}: email to {box['email']} failed"
-                                + ("" if email else " (no email service configured)"),
-                        performed_by="tina")
 
 
 @api_bp.route('/voice/transcription', methods=['POST'])
@@ -6686,3 +6605,9 @@ _register_ai_test_routes(api_bp)
 # =============================================================================
 from rinq.api.callback_routes import register as _register_callback_routes
 _register_callback_routes(api_bp)
+
+# =============================================================================
+# Personal voicemail lines — kept apart from Tina's logs (personal_voicemail_routes.py)
+# =============================================================================
+from rinq.api.personal_voicemail_routes import register as _register_personal_vm_routes
+_register_personal_vm_routes(api_bp)
