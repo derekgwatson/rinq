@@ -206,3 +206,41 @@ def test_voicemail_queue_says_voicemail(make_store):
     from rinq.api.routes import _ai_call_flow_for_queue
     store = make_store(no_answer='voicemail')
     assert _ai_call_flow_for_queue(store.db, store.queue_id) is None
+
+
+# --- Straight to voicemail (a mobile's unanswered calls diverted to Tina) ---
+
+def _straight_to_voicemail(store, greeting=True):
+    data = {'open_action': 'voicemail', 'schedule_id': None}
+    if greeting:
+        audio_id = store.db.create_audio_file(
+            {'name': 'Rohan greeting', 'file_type': 'greeting',
+             'file_url': '/static/audio/rohan.mp3'}, 'test')
+        data['greeting_audio_id'] = audio_id
+    store.db.update_call_flow(store.flow_id, data, 'test')
+
+
+def test_straight_to_voicemail_plays_the_greeting_then_records(client, make_store):
+    store = make_store().with_staff(PHIL)
+    _straight_to_voicemail(store)
+    twiml = ring(client, store)
+    assert 'rohan.mp3' in twiml
+    assert '<Record' in twiml
+    assert '<Enqueue' not in twiml and ROSIE_ANSWER_URL not in twiml
+    assert 'Sorry, no one is available' not in twiml   # the greeting IS the prompt
+    assert twiml.index('rohan.mp3') < twiml.index('<Record')
+
+
+def test_straight_to_voicemail_ignores_the_hours(client, make_store):
+    store = make_store(open=False, closed_action='ai_receptionist').with_staff(PHIL)
+    _straight_to_voicemail(store)
+    store.db.update_call_flow(store.flow_id, {'schedule_id': store.schedule_id}, 'test')
+    twiml = ring(client, store)
+    assert '<Record' in twiml and ROSIE_ANSWER_URL not in twiml
+
+
+def test_straight_to_voicemail_without_a_greeting_says_the_generic_one(client, make_store):
+    store = make_store()
+    _straight_to_voicemail(store, greeting=False)
+    twiml = ring(client, store)
+    assert '<Record' in twiml

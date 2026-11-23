@@ -15,6 +15,34 @@ logger = logging.getLogger(__name__)
 def _audit_tag(user):
     return f"session:{user.email}"
 
+def _voicemail_box_fields(name):
+    """Read a voicemail box form. Returns (fields, error message or None).
+
+    A box either files a ticket for a group (optionally assigned to someone)
+    or emails ONE person and files nothing. The email column is only written
+    for an email box, so a ticket box keeps whatever address it already had.
+    """
+    if not name:
+        return None, "Name is required"
+    routing_type = 'email' if request.form.get('routing_type') == 'email' else 'ticket'
+    description = request.form.get('description', '').strip() or None
+    if routing_type == 'email':
+        email = request.form.get('email', '').strip().lower()
+        if not email or '@' not in email:
+            return None, "Pick the person this box emails"
+        return {'routing_type': 'email', 'email': email, 'description': description,
+                'ticket_group_id': None, 'ticket_assignee_email': None}, None
+    try:
+        ticket_group_id = int(request.form.get('ticket_group_id', '').strip())
+    except ValueError:
+        ticket_group_id = None
+    if not ticket_group_id:
+        return None, "Pick the group that gets this box's voicemail tickets"
+    return {'routing_type': 'ticket', 'description': description,
+            'ticket_group_id': ticket_group_id,
+            'ticket_assignee_email': request.form.get('ticket_assignee_email', '').strip().lower() or None}, None
+
+
 def register(bp):
     """Register call flow admin routes on the given blueprint."""
 
@@ -44,6 +72,11 @@ def register(bp):
         closed_message_parts = request.form.get('closed_message_parts', '').strip() or None
     
         open_action = request.form.get('open_action', 'queue')
+        if open_action == 'voicemail':
+            # "Straight to voicemail" has its own box picker (the closed-hours
+            # one is hidden for it, but still posts).
+            voicemail_destination_id = request.form.get('open_voicemail_destination_id', '').strip()
+            schedule_id = None
         extension_prompt_audio_id = request.form.get('extension_prompt_audio_id')
         extension_invalid_audio_id = request.form.get('extension_invalid_audio_id')
     
@@ -132,6 +165,10 @@ def register(bp):
         closed_forward_number = request.form.get('closed_forward_number', '').strip()
         open_forward_number = request.form.get('open_forward_number', '').strip()
         voicemail_destination_id = request.form.get('voicemail_destination_id', '').strip()
+        if open_action == 'voicemail':
+            # See create_call_flow: own box picker, and no hours apply.
+            voicemail_destination_id = request.form.get('open_voicemail_destination_id', '').strip()
+            schedule_id = None
         no_answer_audio_id = request.form.get('no_answer_audio_id')
         extension_prompt_audio_id = request.form.get('extension_prompt_audio_id')
         extension_invalid_audio_id = request.form.get('extension_invalid_audio_id')
@@ -287,27 +324,9 @@ def register(bp):
     def create_voicemail_destination():
         """Create a new voicemail destination."""
         name = request.form.get('name', '').strip()
-        # Every box files a ticket; an "Email" type was never built and was removed.
-        routing_type = 'ticket'
-        description = request.form.get('description', '').strip() or None
-        ticket_group_id_str = request.form.get('ticket_group_id', '').strip()
-        ticket_assignee_email = request.form.get('ticket_assignee_email', '').strip().lower() or None
-    
-        # Convert ticket_group_id to int or None
-        ticket_group_id = None
-        if ticket_group_id_str:
-            try:
-                ticket_group_id = int(ticket_group_id_str)
-            except ValueError:
-                pass
-    
-        # Validate
-        if not name:
-            flash("Name is required", "error")
-            return redirect(url_for('web.admin_voicemail_destinations'))
-
-        if not ticket_group_id:
-            flash("Pick the group that gets this box's voicemail tickets", "error")
+        fields, error = _voicemail_box_fields(name)
+        if error:
+            flash(error, "error")
             return redirect(url_for('web.admin_voicemail_destinations'))
 
         user = get_current_user()
@@ -315,17 +334,12 @@ def register(bp):
 
         try:
             db.create_voicemail_destination(
-                data={
-                    'name': name,
-                    'routing_type': routing_type,
-                    'description': description,
-                    'ticket_group_id': ticket_group_id,
-                    'ticket_assignee_email': ticket_assignee_email,
-                },
+                data={'name': name, **fields},
                 created_by=_audit_tag(user)
             )
     
-            detail = f"group_id={ticket_group_id}, assignee={ticket_assignee_email}"
+            detail = (f"email to {fields['email']}" if fields['routing_type'] == 'email'
+                      else f"group_id={fields['ticket_group_id']}, assignee={fields['ticket_assignee_email']}")
             db.log_activity(
                 action="create_voicemail_destination",
                 target=name,
@@ -347,27 +361,9 @@ def register(bp):
     def update_voicemail_destination(destination_id):
         """Update a voicemail destination."""
         name = request.form.get('name', '').strip()
-        # Every box files a ticket; an "Email" type was never built and was removed.
-        routing_type = 'ticket'
-        description = request.form.get('description', '').strip() or None
-        ticket_group_id_str = request.form.get('ticket_group_id', '').strip()
-        ticket_assignee_email = request.form.get('ticket_assignee_email', '').strip().lower() or None
-    
-        # Convert ticket_group_id to int or None
-        ticket_group_id = None
-        if ticket_group_id_str:
-            try:
-                ticket_group_id = int(ticket_group_id_str)
-            except ValueError:
-                pass
-    
-        # Validate
-        if not name:
-            flash("Name is required", "error")
-            return redirect(url_for('web.admin_voicemail_destinations'))
-
-        if not ticket_group_id:
-            flash("Pick the group that gets this box's voicemail tickets", "error")
+        fields, error = _voicemail_box_fields(name)
+        if error:
+            flash(error, "error")
             return redirect(url_for('web.admin_voicemail_destinations'))
 
         user = get_current_user()
@@ -381,17 +377,12 @@ def register(bp):
         try:
             db.update_voicemail_destination(
                 destination_id=destination_id,
-                data={
-                    'name': name,
-                    'routing_type': routing_type,
-                    'description': description,
-                    'ticket_group_id': ticket_group_id,
-                    'ticket_assignee_email': ticket_assignee_email,
-                },
+                data={'name': name, **fields},
                 updated_by=_audit_tag(user)
             )
     
-            detail = f"group_id={ticket_group_id}, assignee={ticket_assignee_email}"
+            detail = (f"email to {fields['email']}" if fields['routing_type'] == 'email'
+                      else f"group_id={fields['ticket_group_id']}, assignee={fields['ticket_assignee_email']}")
             db.log_activity(
                 action="update_voicemail_destination",
                 target=name,
