@@ -262,7 +262,18 @@ def index():
                          assignments=assignments,
                          ext_directory_number=ext_directory_number,
                          current_user=user,
+                         my_voicemail=_my_voicemail(db, user.email),
                          **_my_call_settings(db, user.email, staff_ext))
+
+
+def _my_voicemail(db, email):
+    """The owner's personal voicemail card, or None (everyone else)."""
+    from rinq.web.personal_voicemail_routes import my_voicemail_context
+    try:
+        return my_voicemail_context(db, email)
+    except Exception as e:
+        logger.exception(f"My voicemail card failed for {email}: {e}")
+        return None
 
 
 def _my_call_settings(db, email: str, staff_ext) -> dict:
@@ -2793,3 +2804,6 @@ _register_audio_routes(web_bp)
 
 from rinq.web.admin_storage_routes import register as _register_storage_routes
 _register_storage_routes(web_bp)
+
+from rinq.web.personal_voicemail_routes import register as _register_personal_vm_routes
+_register_personal_vm_routes(web_bp)

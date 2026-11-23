@@ -1062,6 +1062,15 @@ def voice_incoming():
 
     db = get_db()
 
+    # A personal voicemail line (services/personal_voicemail.py): greeting,
+    # tone, message - and nothing written to call_log, so no report shows it.
+    from rinq.services import personal_voicemail as personal_vm
+    personal_line = personal_vm.line_for_number(db, called_number)
+    if personal_line:
+        tenant = get_current_tenant() or {}
+        return Response(personal_vm.call_twiml(tenant.get('id'), personal_line),
+                        mimetype='application/xml')
+
     # Get full routing info for this number
     routing = db.get_call_routing(called_number)
 
@@ -6596,3 +6605,9 @@ _register_ai_test_routes(api_bp)
 # =============================================================================
 from rinq.api.callback_routes import register as _register_callback_routes
 _register_callback_routes(api_bp)
+
+# =============================================================================
+# Personal voicemail lines — kept apart from Tina's logs (personal_voicemail_routes.py)
+# =============================================================================
+from rinq.api.personal_voicemail_routes import register as _register_personal_vm_routes
+_register_personal_vm_routes(api_bp)
