@@ -74,3 +74,42 @@ def test_an_unknown_queue_goes_to_voicemail(client, make_store):
     twiml = _hand_back(client, store, queue_id=99999)
     assert '<Enqueue' not in twiml
     assert ROSIE_ANSWER_URL not in twiml
+
+
+def _whole_team_rang_out(client, store, sid='CAcustomer1'):
+    r = client.post(f'/api/voice/queue/{store.queue_id}/rejected-voicemail',
+                    data={'CallSid': sid, 'From': CALLER, 'To': store.number})
+    assert r.status_code == 200, r.get_data(as_text=True)
+    return r.get_data(as_text=True)
+
+
+def test_whole_team_ringing_out_after_a_hand_back_is_voicemail_not_stuart(client, make_store):
+    # The second way out of the queue: every phone rang out or rejected.
+    # It sent callers to Stuart too, so a handed-back caller met him again.
+    store = make_store(no_answer='ai_receptionist').with_staff(PHIL)
+    ring(client, store)
+    _wait(client, store)
+    _hold_runs_out(client, store)
+    _hand_back(client, store)
+    twiml = _whole_team_rang_out(client, store)
+    assert ROSIE_ANSWER_URL not in twiml
+    assert '<Record' in twiml
+
+
+def test_whole_team_ringing_out_on_an_ordinary_call_still_gets_stuart(client, make_store):
+    store = make_store(no_answer='ai_receptionist').with_staff(PHIL)
+    ring(client, store, sid='CAother')
+    _wait(client, store, sid='CAother')
+    assert ROSIE_ANSWER_URL in _whole_team_rang_out(client, store, sid='CAother')
+
+
+def test_asked_to_wait_hand_back_also_goes_back_in_the_queue(client, make_store):
+    # Meredith (#460): "I'd really rather wait please."
+    store = make_store(no_answer='ai_receptionist').with_staff(PHIL)
+    ring(client, store)
+    _wait(client, store)
+    _hold_runs_out(client, store)
+    r = client.post(f'/api/voice/stuart-handback?queue_id={store.queue_id}&reason=asked_to_wait',
+                    data={'CallSid': 'CAcustomer1', 'From': CALLER, 'To': store.number})
+    assert f'>queue_{store.queue_id}</Enqueue>' in r.get_data(as_text=True)
+    assert store.db.get_queued_call_by_sid('CAcustomer1')['transfer_type'] == 'stuart'

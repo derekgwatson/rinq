@@ -372,7 +372,8 @@ def register(bp):
     @bp.route('/voice/stuart-handback', methods=['POST'])
     def voice_stuart_handback():
         """Stuart couldn't hear the caller (Rosie's relay: a call that never
-        got going, still silent after a check-in, store open) - put them
+        got going, still silent after a check-in, store open), or they asked
+        to wait on hold for a person (reason=asked_to_wait) - put them
         back in their store's queue and ring the team again. If nobody
         answers this time, queue_leave sends them to voicemail, never back
         to Stuart (transfer_type 'stuart'). Derek, 2026-11-23, after
@@ -394,10 +395,12 @@ def register(bp):
                          f"{request.args.get('queue_id')!r} - voicemail")
             return _build_voicemail_twiml(None, call_sid, from_number=caller)
 
+        why = ("they asked to wait for the team" if request.args.get('reason') == 'asked_to_wait'
+               else "Stuart couldn't hear them")
         db.requeue_call(call_sid, queue['id'], queue.get('name'), caller, called,
                         transferred_by='stuart', transfer_type='stuart')
         db.log_activity(action="stuart_handback", target=f"queue_{queue['id']}",
-                        details=f"From: {caller} - Stuart couldn't hear them, back to {queue.get('name')}",
+                        details=f"From: {caller} - {why}, back to {queue.get('name')}",
                         performed_by="twilio")
         logger.info(f"Stuart hand-back: {call_sid} back to queue {queue['id']} ({queue.get('name')})")
 

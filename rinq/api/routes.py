@@ -2924,10 +2924,12 @@ def queue_rejected_voicemail(queue_id):
     db = get_db()
     # Whole team rang out or rejected: a Stuart store gets Stuart, same as when
     # the hold runs out (this path sent Shoalhaven callers to voicemail until
-    # 2026-10-28)
-    call_flow = _ai_call_flow_for_queue(db, queue_id)
+    # 2026-10-28) - unless Stuart is why they're here (stuart-handback: he
+    # couldn't hear them, or they asked to wait for a person). Never back to him.
+    queued_call = db.get_queued_call_by_sid(call_sid)
+    from_stuart = (queued_call or {}).get('transfer_type') == 'stuart'
+    call_flow = None if from_stuart else _ai_call_flow_for_queue(db, queue_id)
     if call_flow:
-        queued_call = db.get_queued_call_by_sid(call_sid)
         called_number = (queued_call or {}).get('called_number') or request.form.get('To', '')
         logger.info(f"Queue {queue_id}: no one answered {call_sid} - sending to AI receptionist")
         response_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>']
