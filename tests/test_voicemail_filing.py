@@ -157,154 +157,24 @@ def test_the_assignee_can_be_changed_and_cleared(make_store):
     assert store.db.get_voicemail_destination(store.vm_id)['ticket_assignee_email'] is None
 
 
-def test_an_email_box_with_no_address_still_files_a_ticket(client, make_store, tickets, emails):
-    # A box carrying the email type but no address must never lose a message.
+def test_a_box_left_on_the_old_email_type_still_files_a_ticket(client, make_store, tickets):
+    # "Email" routing was never built: it logged and dropped the voicemail.
+    # It's gone, so a box still carrying that type must not lose messages.
     store = make_store()
-    _set_box(store, store.vm_id, routing_type='email', email=None, ticket_group_id=42)
+    _set_box(store, store.vm_id, routing_type='email', ticket_group_id=42)
     _voicemail(client, store.number)
     assert [t['group_id'] for t in tickets] == [42]
-    assert emails == []
 
 
-# --- "Email to one person" boxes (Rohan's mobile, 2026-11-23) ---------------
-
-ROHAN = 'rohan.watson@watsonblinds.com.au'
-
-
-@pytest.fixture
-def emails(monkeypatch):
-    """The email service, recording every email Tina sent. Caller lookup is
-    stubbed: one known number."""
-    import rinq.integrations as integrations
-
-    class Sent(list):
-        pass
-
-    sent = Sent()
-
-    class FakeEmail:
-        ok = True
-
-        def send_email(self, **kwargs):
-            sent.append(kwargs)
-            return 'msg-1' if FakeEmail.ok else None
-
-    class FakeLookup:
-        def find_by_phone(self, number):
-            return {'name': 'Jo Bloggs'} if number == '+61400111222' else None
-
-    sent.fake = FakeEmail
-    monkeypatch.setattr(integrations, 'get_email_service', lambda: FakeEmail())
-    monkeypatch.setattr(integrations, 'get_customer_lookup', lambda: FakeLookup())
-    return sent
-
-
-def _activity(store, action):
-    with store.db._get_conn() as conn:
-        return [r[0] for r in conn.execute(
-            "SELECT details FROM activity_log WHERE action = ?", (action,)).fetchall()]
-
-
-def test_an_email_box_emails_only_its_person_and_files_no_ticket(client, make_store, tickets, emails):
-    store = make_store()
-    _set_box(store, store.vm_id, routing_type='email', email=ROHAN)
-    _voicemail(client, store.number)
-    assert tickets == []
-    assert len(emails) == 1
-    e = emails[0]
-    assert e['to'] == ROHAN
-    assert e['subject'] == 'Voicemail from Jo Bloggs (0400111222)'
-    assert 'Hi, ringing about my blinds' in e['text_body']
-    assert 'Length: 12 seconds' in e['text_body']
-    assert e['attachments'][0]['filename'] == 'voicemail_RE11111111111111111111111111111111.mp3'
-    assert e['attachments'][0]['content_type'] == 'audio/mpeg'
-    assert _activity(store, 'voicemail_emailed')
-
-
-def test_an_email_box_says_when_there_is_no_written_message(client, make_store, tickets, emails):
-    store = make_store()
-    _set_box(store, store.vm_id, routing_type='email', email=ROHAN)
-    _voicemail(client, store.number, text='')
-    assert "Couldn't write this one out" in emails[0]['text_body']
-
-
-def test_a_withheld_caller_is_named_as_withheld(client, make_store, tickets, emails):
-    store = make_store()
-    _set_box(store, store.vm_id, routing_type='email', email=ROHAN)
-    r = client.post('/api/voice/voicemail', data={
-        'RecordingUrl': 'https://api.twilio.com/Recordings/RE22222222222222222222222222222222',
-        'RecordingSid': 'RE22222222222222222222222222222222', 'RecordingDuration': '5',
-        'From': 'anonymous', 'To': store.number, 'CallSid': 'CAanon', 'TranscriptionText': 'hi',
-        'AccountSid': 'ACwatson'})
-    assert r.status_code == 200
-    assert emails[0]['subject'] == 'Voicemail from a withheld number'
-
-
-def test_a_failed_email_is_logged_and_still_files_no_ticket(client, make_store, tickets, emails):
-    # Rohan's messages must never land in a shared queue, even when the email fails.
-    store = make_store()
-    _set_box(store, store.vm_id, routing_type='email', email=ROHAN)
-    emails.fake.ok = False
-    _voicemail(client, store.number)
-    assert tickets == []
-    assert _activity(store, 'voicemail_email_failed')
-
-
-def test_twilio_retrying_the_webhook_sends_one_email(client, make_store, tickets, emails):
-    store = make_store()
-    _set_box(store, store.vm_id, routing_type='email', email=ROHAN)
-    _voicemail(client, store.number)
-    _voicemail(client, store.number)
-    assert len(emails) == 1
-
-
-def _render_boxes(app, boxes):
+def test_the_admin_page_offers_no_email_option(app):
     from flask import render_template_string
     src = open('rinq/web/templates/admin_voicemail_destinations.html').read()
     src = src.replace('{% extends "base.html" %}', '')
     with app.test_request_context():
-        return render_template_string(
-            src, voicemail_destinations=boxes,
+        html = render_template_string(
+            src, voicemail_destinations=[{'id': 1, 'name': 'B', 'ticket_group_id': 18,
+                                          'ticket_assignee_email': 'b@x.com', 'description': None}],
             ticket_groups=[{'id': 18, 'name': 'Showroom'}],
-            staff=[{'email': 'b@x.com', 'name_audio_text': 'Brittany Moore', 'extension': '2700'},
-                   {'email': ROHAN, 'name_audio_text': 'Rohan Watson', 'extension': '6947'}])
-
-
-def test_the_admin_page_shows_ticket_and_email_boxes(app):
-    html = _render_boxes(app, [
-        {'id': 1, 'name': 'B', 'routing_type': 'ticket', 'email': None, 'ticket_group_id': 18,
-         'ticket_assignee_email': 'b@x.com', 'description': None},
-        {'id': 2, 'name': 'Rohan', 'routing_type': 'email', 'email': ROHAN,
-         'ticket_group_id': None, 'ticket_assignee_email': None, 'description': None}])
+            staff=[{'email': 'b@x.com', 'name_audio_text': 'Brittany Moore', 'extension': '2700'}])
     assert 'Showroom' in html and 'assigned to b@x.com' in html
-    assert f'only to {ROHAN}' in html
-    assert 'An email to one person only' in html
-
-
-def test_an_old_ticket_box_with_an_address_still_reads_as_a_ticket(app):
-    # Batemans Bay's box carries bb@ from before tickets; it files tickets.
-    html = _render_boxes(app, [
-        {'id': 1, 'name': 'BB', 'routing_type': 'ticket', 'email': 'bb@x.com', 'ticket_group_id': 18,
-         'ticket_assignee_email': None, 'description': None}])
-    assert 'only to bb@x.com' not in html
-
-
-def test_box_form_email_needs_a_person_and_clears_the_ticket_fields(app):
-    from rinq.web.admin_flow_routes import _voicemail_box_fields
-    with app.test_request_context(method='POST', data={'routing_type': 'email', 'email': ''}):
-        assert _voicemail_box_fields('Rohan') == (None, 'Pick the person this box emails')
-    with app.test_request_context(method='POST', data={
-            'routing_type': 'email', 'email': ' Rohan.Watson@watsonblinds.com.au ',
-            'ticket_group_id': '18'}):
-        fields, err = _voicemail_box_fields('Rohan')
-    assert err is None
-    assert fields['email'] == ROHAN and fields['ticket_group_id'] is None
-
-
-def test_box_form_ticket_needs_a_group_and_leaves_the_address_alone(app):
-    from rinq.web.admin_flow_routes import _voicemail_box_fields
-    with app.test_request_context(method='POST', data={'routing_type': 'ticket'}):
-        assert _voicemail_box_fields('B')[1] == "Pick the group that gets this box's voicemail tickets"
-    with app.test_request_context(method='POST', data={'ticket_group_id': '18'}):
-        fields, err = _voicemail_box_fields('B')
-    assert fields['routing_type'] == 'ticket' and 'email' not in fields
+    assert 'routing_type' not in html and '>Email<' not in html
