@@ -2274,7 +2274,10 @@ def queue_leave(queue_id):
                 # until 2026-10-28, so the Shoalhaven pilot's real callers
                 # never reached him.
                 queue = db.get_queue(queue_id)
-                call_flow = _ai_call_flow_for_queue(db, queue_id)
+                # A caller Stuart couldn't hear, handed back (stuart-handback):
+                # never back to him - he's why they're here
+                from_stuart = (queued_call or {}).get('transfer_type') == 'stuart'
+                call_flow = None if from_stuart else _ai_call_flow_for_queue(db, queue_id)
                 if call_flow:
                     called_number = (queued_call or {}).get('called_number') or request.form.get('To', '')
                     db.log_activity(

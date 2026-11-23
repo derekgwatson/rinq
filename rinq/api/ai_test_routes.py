@@ -369,6 +369,49 @@ def register(bp):
         return _go_to_voicemail(parts, routing.get('call_flow'), called, caller, call_sid, db,
                                 routing, reason='no_answer', prompt_given=True)
 
+    @bp.route('/voice/stuart-handback', methods=['POST'])
+    def voice_stuart_handback():
+        """Stuart couldn't hear the caller (Rosie's relay: a call that never
+        got going, still silent after a check-in, store open) - put them
+        back in their store's queue and ring the team again. If nobody
+        answers this time, queue_leave sends them to voicemail, never back
+        to Stuart (transfer_type 'stuart'). Derek, 2026-11-23, after
+        Elizabeth (hard of hearing) hung up on Stuart's check-ins.
+
+        Twilio fetches this from Rosie's <Redirect> - signature-checked by the
+        middleware like every /api/voice/ webhook.
+        """
+        from rinq.api.routes import _ring_agents_for_queue, _build_voicemail_twiml
+        db = get_db()
+        call_sid = request.form.get('CallSid', '')
+        caller, called = request.form.get('From', ''), request.form.get('To', '')
+        try:
+            queue = db.get_queue(int(request.args.get('queue_id', '')))
+        except (TypeError, ValueError):
+            queue = None
+        if not queue:
+            logger.error(f"Stuart hand-back for {call_sid}: no such queue "
+                         f"{request.args.get('queue_id')!r} - voicemail")
+            return _build_voicemail_twiml(None, call_sid, from_number=caller)
+
+        db.requeue_call(call_sid, queue['id'], queue.get('name'), caller, called,
+                        transferred_by='stuart', transfer_type='stuart')
+        db.log_activity(action="stuart_handback", target=f"queue_{queue['id']}",
+                        details=f"From: {caller} - Stuart couldn't hear them, back to {queue.get('name')}",
+                        performed_by="twilio")
+        logger.info(f"Stuart hand-back: {call_sid} back to queue {queue['id']} ({queue.get('name')})")
+
+        base_url = config.webhook_base_url
+        wait_url = f"{base_url}/api/voice/queue/{queue['id']}/wait"
+        leave_url = f"{base_url}/api/voice/queue/{queue['id']}/leave"
+        # The row exists, so queue_wait won't ring anyone - ring the store here
+        # (as the showroom transfer does). No one to ring = voicemail.
+        _ring_agents_for_queue(queue['id'], queue.get('name'), caller, called, call_sid,
+                               base_url=base_url)
+        queue_name = f"queue_{queue['id']}"
+        return _twiml(f'    <Enqueue waitUrl="{xml_escape(wait_url)}" waitUrlMethod="POST" '
+                      f'action="{xml_escape(leave_url)}">{xml_escape(queue_name)}</Enqueue>')
+
     @bp.route('/voice/ai-takeover/answer', methods=['POST'])
     def voice_ai_takeover_answer():
         """The staff member answered while Stuart was talking: move the caller
