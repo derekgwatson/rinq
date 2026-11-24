@@ -224,9 +224,27 @@ def switch_tenant(tenant_id):
     return redirect('/')
 
 
+def _status_caller_trusted() -> bool:
+    """Who may see the full /health and /info (security check 2026-11-24).
+
+    The internet gets up/down only; /info listed every API endpoint. Trusted =
+    a signed-in user, the real bot key, or a request straight to the gunicorn
+    socket (no X-Forwarded-For: cron and local scripts).
+    """
+    from flask import request, session
+    from rinq.tenant.middleware import _is_valid_bot_key
+    if not request.headers.get('X-Forwarded-For'):
+        return True
+    if session.get('user_id'):
+        return True
+    return _is_valid_bot_key(request.headers.get('X-API-Key'))
+
+
 @app.route('/health')
 def health():
-    """Health check endpoint."""
+    """Health check endpoint. Outsiders get the status only."""
+    if not _status_caller_trusted():
+        return jsonify({'status': 'healthy'})
     return jsonify({
         'status': 'healthy',
         'bot': config.name,
@@ -251,7 +269,9 @@ def api_version():
 
 @app.route('/info')
 def info():
-    """Bot information endpoint."""
+    """Bot information endpoint. Needs a login or the bot key."""
+    if not _status_caller_trusted():
+        return jsonify({'error': 'authentication required'}), 401
     return jsonify({
         'name': config.name,
         'description': config.description,
