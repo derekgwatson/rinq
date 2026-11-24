@@ -266,3 +266,17 @@ def test_one_off_closure_recording_still_plays_before_stuart(client, make_store,
     twiml = ring(client, store)
     assert ROSIE_ANSWER_URL in twiml
     assert 'closed_sat.mp3' in twiml
+
+
+@pytest.mark.parametrize('when, closed', [
+    (datetime(2026, 10, 28, 10, 30), False),  # morning - still open
+    (datetime(2026, 10, 28, 12, 59), False),
+    (datetime(2026, 10, 28, 13, 0), True),    # "closed from 1pm" (Xmas party, Derek 2026-11-24)
+    (datetime(2026, 10, 28, 15, 0), True),
+])
+def test_one_off_closure_with_times_only_closes_that_window(client, make_store, frozen_clock, when, closed):
+    store = make_store(hours=STORE_HOURS).with_staff(PHIL)
+    store.db.add_schedule_holiday(store.schedule_id, 'Christmas party', '2026-10-28', False, 'test',
+                                  start_time='13:00', end_time='16:30')
+    frozen_clock.set(when)
+    assert (not _is_open(ring(client, store))) is closed

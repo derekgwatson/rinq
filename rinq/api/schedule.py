@@ -59,8 +59,9 @@ def get_next_open_time(schedule: dict, now, tz) -> dict | None:
                     break
             else:
                 if holiday.get('date') == check_date_str:
-                    is_closed_by_holiday = True
-                    break
+                    if not holiday.get('start_time') or not holiday.get('end_time'):
+                        is_closed_by_holiday = True
+                        break
 
         if is_closed_by_holiday:
             continue
@@ -196,6 +197,13 @@ def check_business_status(schedule: dict) -> dict:
                 return {'is_open': False, 'matched_holiday': holiday, 'reason': 'holiday', 'next_open': next_open}
         else:
             if holiday.get('date') == today_str:
+                # A one-off closure with times (e.g. "closed from 1pm") only
+                # covers that window; without times it covers the whole day.
+                start_time = holiday.get('start_time')
+                end_time = holiday.get('end_time')
+                if start_time and end_time and not (
+                        start_time.zfill(5) <= current_time <= end_time.zfill(5)):
+                    continue
                 logger.info(f"Holiday match (specific): {holiday.get('name')}")
                 next_open = get_next_open_time(schedule, now, tz)
                 return {'is_open': False, 'matched_holiday': holiday, 'reason': 'holiday', 'next_open': next_open}
