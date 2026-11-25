@@ -5,6 +5,7 @@ open and calculating the next opening time for closed-hours messaging.
 """
 
 import json
+import re
 import logging
 from datetime import datetime, timedelta
 
@@ -132,6 +133,28 @@ def next_open_for_stuart(next_open: dict | None) -> str:
     if label in ('later today', 'tomorrow'):
         return f"{label} ({weekday}) at {time_text}"
     return f"{weekday} {when.day} {when.strftime('%B')} at {time_text}"
+
+
+def closure_for_stuart(holiday: dict | None) -> dict:
+    """Why the store is shut, for Stuart to say - a one-off or yearly closure
+    in what would be open hours ("our staff Christmas party", "Australia
+    Day"). Its name is spoken to callers, so it's written for them; anything
+    in brackets is a note for staff and is dropped. closed_early when it only
+    covers part of the day ("closed from 1pm"). A WEEKLY closure is part of
+    the store's normal week (Canberra's Saturday) and Stuart already knows it,
+    so nothing is sent. {} when there's nothing to say. Derek 2026-11-26: on
+    a Friday afternoon a bare "the store's closed" sounds like something's
+    wrong."""
+    if not holiday or holiday.get('recurrence') == 'weekly':
+        return {}
+    name = re.sub(r'\s*\([^)]*\)', '', holiday.get('name') or '')
+    name = re.sub(r'\s+', ' ', name).strip()
+    if not name:
+        return {}
+    params = {'closed_for': name}
+    if holiday.get('start_time') and holiday.get('end_time'):
+        params['closed_early'] = '1'
+    return params
 
 
 def check_business_status(schedule: dict) -> dict:

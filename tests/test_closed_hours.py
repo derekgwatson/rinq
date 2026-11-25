@@ -280,3 +280,41 @@ def test_one_off_closure_with_times_only_closes_that_window(client, make_store, 
                                   start_time='13:00', end_time='16:30')
     frozen_clock.set(when)
     assert (not _is_open(ring(client, store))) is closed
+
+
+def test_stuart_is_told_why_a_one_off_closure_has_shut_the_store(client, make_store, frozen_clock):
+    """Derek 2026-11-26 (staff Christmas party): on a Friday afternoon a bare
+    "the store's closed" sounds like something's wrong - Stuart is told the
+    closure's name (brackets are staff notes, dropped) and that it only
+    covers part of the day."""
+    from urllib.parse import unquote_plus
+    store, _ = _stuart_store_with_welcome(make_store)
+    store.db.add_schedule_holiday(store.schedule_id, 'our staff Christmas party (closed from 1pm)',
+                                  '2026-10-28', False, 'test', start_time='13:00', end_time='16:30')
+    frozen_clock.set(datetime(2026, 10, 28, 14, 0))
+    twiml = unquote_plus(ring(client, store))
+    assert ROSIE_ANSWER_URL in twiml
+    assert 'closed_for=our staff Christmas party' in twiml
+    assert '(closed from 1pm)' not in twiml
+    assert 'closed_early=1' in twiml
+
+
+def test_a_whole_day_closure_is_not_closed_early(client, make_store, frozen_clock):
+    from urllib.parse import unquote_plus
+    store, _ = _stuart_store_with_welcome(make_store)
+    store.db.add_schedule_holiday(store.schedule_id, 'Australia Day', '2026-10-28', False, 'test')
+    frozen_clock.set(datetime(2026, 10, 28, 10, 30))
+    twiml = unquote_plus(ring(client, store))
+    assert 'closed_for=Australia Day' in twiml
+    assert 'closed_early' not in twiml
+
+
+def test_ordinary_after_hours_and_weekly_closures_send_no_reason(client, make_store, frozen_clock):
+    store, audio_id = _stuart_store_with_welcome(make_store)
+    frozen_clock.set(datetime(2026, 10, 28, 18, 0))
+    assert 'closed_for' not in ring(client, store)
+    store.db.add_schedule_holiday(store.schedule_id, 'Wednesday showroom only', None, False, 'test',
+                                  recurrence='weekly', day_of_week=2,
+                                  start_time='12:00', end_time='13:00')
+    frozen_clock.set(datetime(2026, 10, 28, 12, 30))
+    assert 'closed_for' not in ring(client, store, sid='CAweekly')
