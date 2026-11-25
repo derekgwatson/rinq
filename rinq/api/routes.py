@@ -58,6 +58,7 @@ from rinq.api.identity import (
 from rinq.api.schedule import (
     get_next_open_time as _get_next_open_time,
     next_open_for_stuart as _next_open_for_stuart,
+    closure_for_stuart as _closure_for_stuart,
     check_business_status as _check_business_status,
 )
 
@@ -1439,6 +1440,7 @@ def voice_incoming():
                 extra.update(_welcome_for_stuart() or {})
             # Our schedule knows the holidays; Stuart's hours don't
             extra['next_open'] = _next_open_for_stuart(next_open)
+            extra.update(_closure_for_stuart(matched_holiday))
 
             return _redirect_to_ai_receptionist(
                 response_parts, called_number, from_number, call_sid, db, routing,
@@ -1979,7 +1981,8 @@ def _handle_closed_call(response_parts, call_flow, schedule, matched_holiday,
 
         return _redirect_to_ai_receptionist(
             response_parts, called_number, from_number, call_sid, db, routing,
-            reason="closed", extra_params={'next_open': _next_open_for_stuart(next_open)}
+            reason="closed", extra_params={'next_open': _next_open_for_stuart(next_open),
+                                           **_closure_for_stuart(matched_holiday)}
         )
 
     # Voicemail (default for closed hours)
