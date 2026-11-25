@@ -378,8 +378,12 @@ def register(bp):
         audio_files = db.get_audio_files()
 
         from rinq.services.transfer_service import TRANSFER_RING_ALL_KEY
-        from rinq.api.ai_test_routes import extension_ai_enabled
+        from rinq.api.ai_test_routes import extension_ai_enabled, get_pretend, spoken_pretend, test_stores
+        pretend = get_pretend(db)
         return render_template('admin_settings.html',
+                               pretend=pretend,
+                               pretend_said=spoken_pretend(pretend) if pretend else '',
+                               pretend_stores=test_stores(db),
                                settings=settings,
                                audio_files=audio_files,
                                transfer_ring_all=db.get_bot_setting(TRANSFER_RING_ALL_KEY, '0') == '1',
@@ -407,6 +411,32 @@ def register(bp):
         else:
             flash('Unanswered extensions are back to how they were before.', 'success')
         return redirect(url_for('web.admin_settings'))
+
+    @bp.route('/admin/settings/test-line-pretend', methods=['POST'])
+    @admin_required
+    def admin_settings_set_test_line_pretend():
+        """The 9000 test line's "Pretend it's...": play a chosen store at a
+        chosen moment for the next hour, or stop. Real calls never read it."""
+        from rinq.api.ai_test_routes import (PRETEND_MINUTES, clear_pretend, set_pretend,
+                                             spoken_pretend)
+        user = get_current_user()
+        db = get_db()
+        if request.form.get('stop') == '1':
+            clear_pretend(db, f'session:{user.email}')
+            db.log_activity('ai_test_pretend', 'off', "Test line back to the real time", user.email)
+            flash('The test line is back to the real time.', 'success')
+            return redirect(url_for('web.admin_settings', _anchor='test-line'))
+        try:
+            fake = set_pretend(db, (request.form.get('store') or '').strip(),
+                               (request.form.get('at') or '').strip(), f'session:{user.email}')
+        except ValueError:
+            flash('Pick a store and a date and time.', 'error')
+            return redirect(url_for('web.admin_settings', _anchor='test-line'))
+        said = spoken_pretend(fake)
+        db.log_activity('ai_test_pretend', 'on', f"Test line pretending it's {said}", user.email)
+        flash(f"Ring 9000: Stuart will answer as {said}, for the next {PRETEND_MINUTES} minutes.",
+              'success')
+        return redirect(url_for('web.admin_settings', _anchor='test-line'))
 
     @bp.route('/admin/settings/transfer-ring-all', methods=['POST'])
     @admin_required

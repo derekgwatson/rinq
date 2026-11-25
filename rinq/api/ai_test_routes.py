@@ -25,8 +25,10 @@ from (address book), so it rings the person testing, never a real store.
 Registered via register(api_bp) at import time.
 """
 
+import json
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, urlencode
 from xml.sax.saxutils import escape as xml_escape
 
@@ -152,36 +154,117 @@ def is_staff_mobile(db, number: str) -> bool:
         return False
 
 
-def store_welcome(db) -> str:
-    """The test store's own welcome greeting (Admin -> Audio), for Stuart to say."""
-    try:
-        for f in db.get_audio_files(file_type='greeting') or []:
-            if AI_TEST_STORE.lower() in (f.get('name') or '').lower() and f.get('tts_text'):
-                return f['tts_text'].strip()
-    except Exception as e:
-        logger.warning(f"AI test: couldn't read the {AI_TEST_STORE} welcome: {e}")
-    return ''
+# "Pretend it's..." (Derek 2026-11-26): the test line plays a chosen store at
+# a chosen moment, so a closure or after-hours call can be heard before the
+# day - e.g. Batemans Bay at 10am on the Christmas party Friday. Set on
+# Admin -> Settings; it ends by itself after PRETEND_MINUTES so it can't be
+# left on. Only the 9000 line ever reads it - real calls never do.
+PRETEND_KEY = 'ai_test_pretend'
+PRETEND_MINUTES = 60
 
 
-def test_store_closed(db) -> dict | None:
-    """Is the test store closed right now, by its own schedule (holidays
-    included)? Then the test call plays out as an after-hours one - Stuart
-    says the store's closed and nobody is rung (Derek 2026-11-18: after hours
-    the test line greeted "I'll help while I grab someone"). Returns the
-    closed status, or None when open or the schedule can't be found."""
-    from rinq.api.schedule import check_business_status
+def _store_routing(db, store: str) -> dict | None:
+    """The routing (call flow + schedule) of the store's call flow, found by
+    its name, or None."""
+    for phone in db.get_phone_numbers() or []:
+        routing = db.get_call_routing(phone.get('phone_number')) or {}
+        flow = routing.get('call_flow') or {}
+        if (flow.get('name') or '').strip().lower() == (store or '').strip().lower():
+            return routing
+    return None
+
+
+def test_stores(db) -> list[str]:
+    """The stores the test line can play: every call flow on a phone number
+    that has opening hours."""
+    names = set()
     try:
         for phone in db.get_phone_numbers() or []:
             routing = db.get_call_routing(phone.get('phone_number')) or {}
             flow = routing.get('call_flow') or {}
-            if (flow.get('name') or '').strip().lower() != AI_TEST_STORE.lower():
-                continue
-            if not routing.get('schedule'):
-                return None
-            status = check_business_status(routing['schedule'])
-            return None if status.get('is_open') else status
+            if flow.get('name') and routing.get('schedule'):
+                names.add(flow['name'].strip())
     except Exception as e:
-        logger.warning(f"AI test: couldn't read {AI_TEST_STORE}'s hours - testing as open: {e}")
+        logger.warning(f"AI test: couldn't list the stores: {e}")
+    return sorted(names)
+
+
+def get_pretend(db, now_utc: datetime | None = None) -> dict | None:
+    """The test line's "Pretend it's..." while it lasts: {'store', 'at'
+    (the store's local time, 'YYYY-MM-DDTHH:MM'), 'until' (UTC)}. None when
+    it isn't set, has run out, or can't be read."""
+    try:
+        raw = db.get_bot_setting(PRETEND_KEY, '')
+        if not raw:
+            return None
+        fake = json.loads(raw)
+        datetime.strptime(fake['at'], '%Y-%m-%dT%H:%M')
+        until = datetime.fromisoformat(fake['until'])
+        if (now_utc or datetime.now(timezone.utc)) >= until or not fake.get('store'):
+            return None
+        return fake
+    except Exception as e:
+        logger.warning(f"AI test: couldn't read the pretend time - using the real time: {e}")
+        return None
+
+
+def set_pretend(db, store: str, at: str, by: str, now_utc: datetime | None = None) -> dict:
+    """Start pretending. at is 'YYYY-MM-DDTHH:MM' (what a datetime-local box
+    sends). Raises ValueError for an unknown store or a time that won't read."""
+    if store not in test_stores(db):
+        raise ValueError(f"{store!r} isn't one of the stores")
+    datetime.strptime(at, '%Y-%m-%dT%H:%M')
+    until = (now_utc or datetime.now(timezone.utc)) + timedelta(minutes=PRETEND_MINUTES)
+    fake = {'store': store, 'at': at, 'until': until.isoformat()}
+    db.set_bot_setting(PRETEND_KEY, json.dumps(fake), by)
+    return fake
+
+
+def clear_pretend(db, by: str) -> None:
+    db.set_bot_setting(PRETEND_KEY, '', by)
+
+
+def spoken_pretend(fake: dict) -> str:
+    """'Batemans Bay, Friday 27 November at 10am' - said at the start of a
+    pretend test call, so the tester knows what they're hearing."""
+    at = datetime.strptime(fake['at'], '%Y-%m-%dT%H:%M')
+    time_text = f"{at.hour % 12 or 12}{f':{at.minute:02d}' if at.minute else ''}{'am' if at.hour < 12 else 'pm'}"
+    return f"{fake['store']}, {at:%A} {at.day} {at:%B} at {time_text}"
+
+
+def store_welcome(db, store: str = AI_TEST_STORE) -> str:
+    """The store's own welcome greeting, for Stuart to say: its call flow's
+    typed welcome (as a real call), else a greeting named after the store."""
+    try:
+        routing = _store_routing(db, store) or {}
+        greeting_id = (routing.get('call_flow') or {}).get('greeting_audio_id')
+        greeting = db.get_audio_file(greeting_id) if greeting_id else None
+        if greeting and (greeting.get('tts_text') or '').strip():
+            return greeting['tts_text'].strip()
+        for f in db.get_audio_files(file_type='greeting') or []:
+            if store.lower() in (f.get('name') or '').lower() and f.get('tts_text'):
+                return f['tts_text'].strip()
+    except Exception as e:
+        logger.warning(f"AI test: couldn't read the {store} welcome: {e}")
+    return ''
+
+
+def test_store_closed(db, store: str = AI_TEST_STORE, at: datetime | None = None) -> dict | None:
+    """Is the test store closed right now, by its own schedule (holidays
+    included)? Then the test call plays out as an after-hours one - Stuart
+    says the store's closed and nobody is rung (Derek 2026-11-18: after hours
+    the test line greeted "I'll help while I grab someone"). Returns the
+    closed status, or None when open or the schedule can't be found.
+    at: the pretend moment (naive store-local time), else now."""
+    from rinq.api.schedule import check_business_status
+    try:
+        routing = _store_routing(db, store)
+        if not routing or not routing.get('schedule'):
+            return None
+        status = check_business_status(routing['schedule'], at=at)
+        return None if status.get('is_open') else status
+    except Exception as e:
+        logger.warning(f"AI test: couldn't read {store}'s hours - testing as open: {e}")
     return None
 
 
@@ -264,26 +347,35 @@ def register(bp):
             logger.warning(f"AI test: enrichment failed for {pretend}: {e}")
             caller_info = {}
 
+        # "Pretend it's..." - a chosen store at a chosen moment (Admin -> Settings)
+        fake = get_pretend(db)
+        store = fake['store'] if fake else AI_TEST_STORE
+        fake_at = datetime.strptime(fake['at'], '%Y-%m-%dT%H:%M') if fake else None
+
         params = {
             'call_sid': call_sid,
             'caller_number': pretend,
             'called_number': called_number,
-            'queue_name': AI_TEST_STORE,
+            'queue_name': store,
             'test': '1',
         }
+        if fake:
+            # Stuart takes the time from here for the whole call
+            params['pretend_now'] = fake['at']
         # No customer name/email/orders in the URL - it lands in web server
         # and Twilio request logs. Rosie looks the caller up itself (Clara).
 
         # Answer-first: Stuart says the store's own welcome, and the person
         # testing (found by the number they rang from) is rung as the store
-        welcome = store_welcome(db)
+        welcome = store_welcome(db, store)
         if welcome:
             params['welcome'] = welcome
-        closed = test_store_closed(db)
+        closed = test_store_closed(db, store, fake_at)
         if closed:
-            from rinq.api.schedule import next_open_for_stuart
+            from rinq.api.schedule import closure_for_stuart, next_open_for_stuart
             params['reason'] = 'closed'
             params['next_open'] = next_open_for_stuart(closed.get('next_open'))
+            params.update(closure_for_stuart(closed.get('matched_holiday')))
         tester = None
         try:
             tester = db.get_address_book_by_mobile(own_number) if own_number and not closed else None
@@ -313,12 +405,16 @@ def register(bp):
         )
 
         found = caller_info.get('customer_name')
-        if pretend == WITHHELD:
-            say = "Test call from a withheld number. Connecting you to the receptionist."
-        elif found:
-            say = f"Test call as {found}. Connecting you to the receptionist."
+        if fake:
+            say = f"Pretending it's {spoken_pretend(fake)}. "
         else:
-            say = "That number isn't a known customer. Connecting you to the receptionist."
+            say = ""
+        if pretend == WITHHELD:
+            say += "Test call from a withheld number. Connecting you to the receptionist."
+        elif found:
+            say += f"Test call as {found}. Connecting you to the receptionist."
+        else:
+            say += "That number isn't a known customer. Connecting you to the receptionist."
         return _twiml(
             f'    <Say voice="{VOICE}">{xml_escape(say)}</Say>',
             f'    <Redirect method="POST">{xml_escape(answer_url + "?" + urlencode(params))}</Redirect>',

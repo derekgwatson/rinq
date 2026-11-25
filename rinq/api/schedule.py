@@ -157,8 +157,11 @@ def closure_for_stuart(holiday: dict | None) -> dict:
     return params
 
 
-def check_business_status(schedule: dict) -> dict:
+def check_business_status(schedule: dict, at: datetime | None = None) -> dict:
     """Check if we're currently within business hours.
+
+    at: judge this moment instead of now (naive = the schedule's own local
+    time). Only the 9000 test line's "Pretend it's..." passes one.
 
     Returns:
         Dict with:
@@ -178,7 +181,12 @@ def check_business_status(schedule: dict) -> dict:
     except pytz.UnknownTimeZoneError:
         tz = pytz.timezone('Australia/Sydney')
 
-    now = datetime.now(tz)
+    if at is None:
+        now = datetime.now(tz)
+    elif at.tzinfo is None:
+        now = tz.localize(at)
+    else:
+        now = at.astimezone(tz)
     today_str = now.strftime('%Y-%m-%d')
     today_mmdd = now.strftime('%m-%d')
     day_name = now.strftime('%a').lower()

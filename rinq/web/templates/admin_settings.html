@@ -201,6 +201,41 @@
         </form>
     </div>
 
+    <!-- 9000 test line: pretend a store and a moment -->
+    <div class="settings-section" id="test-line" style="margin-top: 24px;">
+        <h3>Test line (9000): pretend it's another time</h3>
+        {% if pretend %}
+        <p class="settings-description">
+            <strong>On: ring 9000 and Stuart answers as {{ pretend_said }}</strong> &mdash; open or
+            closed by that store's real hours and closures at that moment, and that's the time he
+            goes by for the whole call. It switches itself off in an hour. Real calls aren't affected.
+        </p>
+        {% else %}
+        <p class="settings-description">
+            <strong>Off: the test line plays Shoalhaven at the real time.</strong> Pick a store and a
+            moment to hear what a caller would get then &mdash; a closure, after hours, a Saturday.
+            Only the 9000 test line is affected, and it switches itself off after an hour.
+        </p>
+        {% endif %}
+        <form method="POST" action="{{ url_for('web.admin_settings_set_test_line_pretend') }}"
+              class="setting-row" style="flex-wrap: wrap;">
+            <select name="store" required aria-label="Store">
+                {% for s in pretend_stores %}
+                <option value="{{ s }}" {{ 'selected' if pretend and pretend.store == s }}>{{ s }}</option>
+                {% endfor %}
+            </select>
+            <input type="datetime-local" name="at" required aria-label="Date and time"
+                   value="{{ pretend.at if pretend else '' }}">
+            <button type="submit" class="btn btn-primary">{{ 'Change' if pretend else 'Start pretending' }}</button>
+        </form>
+        {% if pretend %}
+        <form method="POST" action="{{ url_for('web.admin_settings_set_test_line_pretend') }}">
+            <input type="hidden" name="stop" value="1">
+            <button type="submit" class="btn">Back to the real time</button>
+        </form>
+        {% endif %}
+    </div>
+
     <!-- Unanswered extensions: Stuart takes a message -->
     <div class="settings-section" style="margin-top: 24px;">
         <h3>Unanswered extensions</h3>
