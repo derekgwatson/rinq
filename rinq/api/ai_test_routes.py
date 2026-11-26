@@ -73,7 +73,18 @@ def extension_ai_enabled(db) -> bool:
 # having a bit of trouble on my end. Please leave your name and number after
 # the tone, and someone from the team will call you back." Static audio is
 # not in git (gotcha 4) - it lives in rinq/static on the server.
-STUART_TROUBLE_CLIP = 'stuart_lost_connection.mp3'
+# Sophie's is the same words in her voice (ElevenLabs 5GZaeOOG7yqLdoTRsaa6,
+# 2026-11-27). Rosie puts ?assistant=sophie on the relay-ended URL when she is
+# the one talking; anything else (or nothing) is Stuart.
+TROUBLE_CLIPS = {
+    'stuart': 'stuart_lost_connection.mp3',
+    'sophie': 'sophie_lost_connection.mp3',
+}
+STUART_TROUBLE_CLIP = TROUBLE_CLIPS['stuart']
+
+
+def trouble_clip(assistant: str | None) -> str:
+    return TROUBLE_CLIPS.get((assistant or '').lower(), STUART_TROUBLE_CLIP)
 
 
 def _twiml(*lines: str) -> Response:
@@ -457,9 +468,9 @@ def register(bp):
         db.log_activity(action="ai_relay_fallback", target=called,
                         details=f"From: {caller}, Rosie unavailable - sent to voicemail",
                         performed_by="twilio")
-        # One message, in Stuart's own voice, then the tone - no switch to
-        # another voice and no second greeting
-        clip = f"{config.webhook_base_url}/static/{STUART_TROUBLE_CLIP}"
+        # One message, in the voice the caller was already hearing (Stuart or
+        # Sophie), then the tone - no switch of voice and no second greeting
+        clip = f"{config.webhook_base_url}/static/{trouble_clip(request.args.get('assistant'))}"
         parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>',
                  f'    <Play>{xml_escape(clip)}</Play>']
         return _go_to_voicemail(parts, routing.get('call_flow'), called, caller, call_sid, db,
