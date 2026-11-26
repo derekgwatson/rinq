@@ -179,9 +179,11 @@ def delete_line(db, tenant_id, line_id) -> str | None:
 
 
 def _remove_contents_files(tenant_id, db, line):
-    """The audio of every message on the line, and its greeting - the files
-    removing a line has always deleted (nothing at Twilio or Drive)."""
-    for m in _rows(db, "SELECT audio_file FROM personal_voicemails WHERE line_id = ?", (line['id'],)):
+    """The audio of every message on the line (here and at Twilio), and its
+    greeting."""
+    for m in _rows(db, "SELECT recording_sid, audio_file FROM personal_voicemails "
+                       "WHERE line_id = ?", (line['id'],)):
+        _delete_at_twilio(m)
         _remove_file(tenant_id, 'messages', m.get('audio_file'))
     if line.get('greeting_token'):
         _remove_file(tenant_id, 'greetings', f"{line['greeting_token']}.{line['greeting_ext']}")
@@ -214,6 +216,23 @@ def clear_line_contents(db, tenant_id, line_id, by) -> tuple[int, bool]:
         conn.commit()
     update_line(db, line_id, by, greeting_token=None, greeting_ext=None)
     return deleted
+
+
+def _delete_at_twilio(message) -> None:
+    """Delete a message's recording from Twilio too, as store voicemails are.
+    Only once its audio is stored here: before that, Twilio's copy is the
+    only one (the background worker may still need it). A Twilio failure is
+    logged and never stops the delete here."""
+    sid = (message or {}).get('recording_sid')
+    if not sid or not message.get('audio_file'):
+        return
+    try:
+        from rinq.services.twilio_service import get_twilio_service
+        result = get_twilio_service().delete_recording(sid)
+        if not result.get('success'):
+            logger.warning(f"Personal voicemail: Twilio kept recording {sid}: {result.get('error')}")
+    except Exception as e:
+        logger.warning(f"Personal voicemail: couldn't delete recording {sid} at Twilio: {e}")
 
 
 def _remove_file(tenant_id, folder, name):
@@ -413,6 +432,7 @@ def message_audio_path(tenant_id, message) -> str | None:
 def delete_message(db, tenant_id, message) -> None:
     """Gone for good: the audio and the words. The row stays, emptied, so a
     late Twilio retry of the same recording can't bring it back."""
+    _delete_at_twilio(message)
     _remove_file(tenant_id, 'messages', message.get('audio_file'))
     with db._get_conn() as conn:
         conn.execute("""UPDATE personal_voicemails

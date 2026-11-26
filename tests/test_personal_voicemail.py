@@ -511,3 +511,67 @@ def test_with_no_flow_recorded_nothing_is_guessed(client, line, outside_world):
     client.post(f'/admin/personal-voicemail/{line.id}/delete', data={'confirm': line.number})
     assert _flow_of(line.db, line.number) is None
     assert 'nothing recorded what it was on before' in _flashes(client)
+
+
+# ------------------- deleting also deletes Twilio's copy (review 2026-11-26, F5)
+
+@pytest.fixture
+def twilio_deletes(monkeypatch):
+    """Twilio's delete-recording call, recorded. `fail` makes it refuse."""
+    import rinq.services.twilio_service as ts
+    state = SimpleNamespace(deleted=[], fail=False)
+
+    def delete_recording(sid):
+        state.deleted.append(sid)
+        return {'success': False, 'error': 'Twilio said no'} if state.fail else {'success': True}
+
+    monkeypatch.setattr(ts, 'get_twilio_service',
+                        lambda: SimpleNamespace(delete_recording=delete_recording))
+    return state
+
+
+def test_delete_for_good_also_deletes_twilios_copy(client, line, outside_world, twilio_deletes):
+    _leave_message(client, line.number)
+    msg = line.pv.messages(line.db, line.id)[0]
+    _login(client, ROHAN)
+    assert client.post(f'/my-voicemail/message/{msg["id"]}/delete').status_code == 200
+    assert twilio_deletes.deleted == [SID]
+
+
+def test_twilio_refusing_the_delete_still_deletes_it_here(client, line, outside_world,
+                                                          twilio_deletes):
+    twilio_deletes.fail = True
+    _leave_message(client, line.number)
+    msg = line.pv.messages(line.db, line.id)[0]
+    _login(client, ROHAN)
+    assert client.post(f'/my-voicemail/message/{msg["id"]}/delete').status_code == 200
+    assert twilio_deletes.deleted == [SID]
+    assert line.pv.messages(line.db, line.id) == []
+
+
+def test_a_message_not_yet_finished_keeps_its_twilio_copy(line, twilio_deletes):
+    # Claimed but no audio stored yet: Twilio's copy is the only one
+    msg_id = line.pv.claim_message(line.db, {'id': line.id}, SID, '+61400111222', None, '14')
+    line.pv.delete_message(line.db, 'watson', line.pv.get_message(line.db, msg_id))
+    assert twilio_deletes.deleted == []
+
+
+def test_removing_a_line_deletes_its_messages_at_twilio(client, line, outside_world,
+                                                         twilio_deletes):
+    second = 'RE' + '2' * 32
+    _leave_message(client, line.number)
+    _leave_message(client, line.number, sid=second)
+    line.pv.claim_message(line.db, {'id': line.id}, 'RE' + '3' * 32, None, None, '5')  # unfinished
+    _login(client, CLARE, role='admin')
+    client.post(f'/admin/personal-voicemail/{line.id}/delete', data={'confirm': line.number})
+    assert line.pv.get_line(line.db, line.id) is None
+    assert sorted(twilio_deletes.deleted) == sorted([SID, second])
+
+
+def test_an_owner_change_deletes_the_old_messages_at_twilio(client, line, outside_world,
+                                                             twilio_deletes):
+    _leave_message(client, line.number)
+    _login(client, CLARE, role='admin')
+    client.post(f'/admin/personal-voicemail/{line.id}/update',
+                data={'phone_number': line.number, 'owner_email': CLARE})
+    assert twilio_deletes.deleted == [SID]
