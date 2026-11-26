@@ -193,26 +193,95 @@ def call_twiml(tenant_id, line) -> str:
         prompt = ('    <Say voice="Polly.Olivia-Neural">The person you are calling is not '
                   'available. Please leave a message after the tone.</Say>')
     action = f"{config.webhook_base_url}/api/voice/personal-voicemail/recorded"
+    # The status callback carries no To/From, so it names the line. It is
+    # the second delivery that lets a message the first one didn't finish
+    # still reach the owner.
+    status_cb = f"{action}?line={int(line['id'])}"
     return ('<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n'
             '    <Pause length="1"/>\n'
             f'{prompt}\n'
             f'    <Record action="{xml_escape(action)}" maxLength="{MAX_MESSAGE_SECONDS}" '
-            'playBeep="true" />\n'
+            f'playBeep="true" recordingStatusCallback="{xml_escape(status_cb)}" '
+            'recordingStatusCallbackEvent="completed absent" />\n'
             '</Response>')
 
 
 def claim_message(db, line, recording_sid, from_number, forwarded_from, duration) -> int | None:
-    """Insert the message row; None if this recording was already taken
-    (Twilio retries its webhook)."""
+    """The message row for this recording - created by whichever of Twilio's
+    two callbacks arrives first, and filled in by the other (the status
+    callback carries no caller). None only if it couldn't be stored."""
+    seconds = int(duration) if str(duration or '').isdigit() else None
     with db._get_conn() as conn:
-        cur = conn.execute("""
+        conn.execute("""
             INSERT OR IGNORE INTO personal_voicemails (line_id, recording_sid, from_number,
                 forwarded_from, duration_seconds, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
-        """, (line['id'], recording_sid, from_number, forwarded_from,
-              int(duration) if str(duration or '').isdigit() else None, _now()))
+        """, (line['id'], recording_sid, from_number, forwarded_from, seconds, _now()))
+        # A deleted message stays emptied - a late callback can't refill it
+        conn.execute("""
+            UPDATE personal_voicemails
+            SET from_number = COALESCE(from_number, ?),
+                forwarded_from = COALESCE(forwarded_from, ?),
+                duration_seconds = COALESCE(duration_seconds, ?)
+            WHERE recording_sid = ? AND deleted_at IS NULL
+        """, (from_number, forwarded_from, seconds, recording_sid))
         conn.commit()
-        return cur.lastrowid if cur.rowcount else None
+        row = conn.execute("SELECT id FROM personal_voicemails WHERE recording_sid = ?",
+                           (recording_sid,)).fetchone()
+        return row[0] if row else None
+
+
+def get_message(db, message_id) -> dict | None:
+    return _row(db, "SELECT * FROM personal_voicemails WHERE id = ?", (message_id,))
+
+
+# A worker that hasn't finished in this long is presumed dead (a restart
+# mid-message) and a later callback may take the message over.
+PROCESSING_LEASE_SECONDS = 600
+
+
+def take_for_processing(db, message_id) -> bool:
+    """Claim the right to finish this message - True for exactly one taker.
+    Not if it's done, deleted, or another worker is on it right now."""
+    from datetime import timedelta
+    stale = (datetime.now(timezone.utc) - timedelta(seconds=PROCESSING_LEASE_SECONDS)).isoformat()
+    with db._get_conn() as conn:
+        cur = conn.execute("""
+            UPDATE personal_voicemails SET processing_started_at = ?
+            WHERE id = ? AND processed_at IS NULL AND deleted_at IS NULL
+              AND (processing_started_at IS NULL OR processing_started_at < ?)
+        """, (_now(), message_id, stale))
+        conn.commit()
+        return cur.rowcount == 1
+
+
+def note_status_callback(db, message_id) -> None:
+    """Twilio's recording-status callback has arrived: no more are coming."""
+    with db._get_conn() as conn:
+        conn.execute("UPDATE personal_voicemails SET status_seen_at = COALESCE(status_seen_at, ?) "
+                     "WHERE id = ?", (_now(), message_id))
+        conn.commit()
+
+
+def release_for_retry(db, message_id) -> bool:
+    """Give the message back unfinished so Twilio's status callback can
+    finish it - True if released. False when that callback has already
+    arrived (nothing else is coming), so the caller must finish it now.
+    One statement, so the two can't both walk away."""
+    with db._get_conn() as conn:
+        cur = conn.execute("""
+            UPDATE personal_voicemails SET processing_started_at = NULL
+            WHERE id = ? AND status_seen_at IS NULL
+        """, (message_id,))
+        conn.commit()
+        return cur.rowcount == 1
+
+
+def mark_processed(db, message_id) -> None:
+    with db._get_conn() as conn:
+        conn.execute("UPDATE personal_voicemails SET processed_at = ? WHERE id = ?",
+                     (_now(), message_id))
+        conn.commit()
 
 
 def finish_message(db, tenant_id, message_id, audio: bytes | None, **fields) -> None:

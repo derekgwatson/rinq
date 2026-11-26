@@ -59,6 +59,16 @@ def outside_world(monkeypatch):
     return SimpleNamespace(emails=sent, tickets=tickets)
 
 
+@pytest.fixture(autouse=True)
+def background_inline(monkeypatch):
+    """The download/transcribe/email thread runs inline, so a test sees its
+    result as soon as the webhook returns."""
+    import rinq.api.personal_voicemail_routes as pvr
+    monkeypatch.setattr(pvr, '_spawn', lambda fn: fn())
+    monkeypatch.setattr(pvr.time, 'sleep', lambda s: None)
+    return pvr
+
+
 @pytest.fixture
 def line(make_store):
     """The store number turned into Rohan's personal line."""
@@ -150,6 +160,96 @@ def test_email_copies_off_means_no_email(client, line, outside_world):
 def test_a_withheld_caller(client, line, outside_world):
     _leave_message(client, line.number, caller='anonymous')
     assert outside_world.emails[0]['subject'] == 'Voicemail from a withheld number'
+
+
+# ------------------------------------------- answered at once, finished later
+
+def _status_callback(client, line_id, sid=SID, status='completed'):
+    """Twilio's recordingStatusCallback: no To/From, the line is in the URL."""
+    r = client.post(f'/api/voice/personal-voicemail/recorded?line={line_id}', data={
+        'RecordingSid': sid, 'RecordingStatus': status, 'RecordingDuration': '14',
+        'CallSid': 'CAvm', 'AccountSid': 'ACwatson'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+
+
+def test_the_tone_also_asks_twilio_for_a_second_callback(client, line):
+    twiml = ring(client, line.store)
+    assert f'recordingStatusCallback="http' in twiml
+    assert f'/api/voice/personal-voicemail/recorded?line={line.id}"' in twiml
+
+
+def test_twilio_is_answered_before_the_slow_work(client, line, outside_world,
+                                                 background_inline, monkeypatch):
+    """Review 2026-11-26 (F4): the download + Whisper + email used to run
+    inside Twilio's 15 s callback. Now the reply comes first."""
+    jobs = []
+    monkeypatch.setattr(background_inline, '_spawn', jobs.append)
+    r = client.post('/api/voice/personal-voicemail/recorded', data={
+        'RecordingSid': SID, 'RecordingDuration': '14', 'From': '+61400111222',
+        'To': line.number, 'CallSid': 'CAvm', 'AccountSid': 'ACwatson'})
+    assert '<Hangup/>' in r.get_data(as_text=True)
+    assert outside_world.emails == [] and len(jobs) == 1
+    jobs[0]()   # the thread - no request context needed
+    m = line.pv.messages(line.db, line.id)[0]
+    assert m['transcription'] == 'Hi Rohan, call me about the order'
+    assert [e['to'] for e in outside_world.emails] == [ROHAN]
+
+
+def test_a_recording_not_ready_is_finished_by_the_status_callback(client, line, outside_world,
+                                                                   monkeypatch):
+    import requests
+    monkeypatch.setattr(requests, 'get', lambda *a, **k: SimpleNamespace(status_code=404, content=b''))
+    _leave_message(client, line.number)
+    assert outside_world.emails == []          # not given up on: no "couldn't fetch" email
+    monkeypatch.setattr(requests, 'get', lambda *a, **k: SimpleNamespace(
+        status_code=200, content=b'ID3fake-mp3'))
+    _status_callback(client, line.id)
+    m = line.pv.messages(line.db, line.id)[0]
+    assert m['transcription'] == 'Hi Rohan, call me about the order'
+    assert line.pv.message_audio_path('watson', m)
+    assert [e['subject'] for e in outside_world.emails] == ['Voicemail from Jo Bloggs (0400111222)']
+
+
+def test_a_worker_that_died_is_taken_over_by_a_later_callback(client, line, outside_world,
+                                                              background_inline, monkeypatch):
+    monkeypatch.setattr(background_inline, '_spawn', lambda fn: None)   # killed mid-message
+    _leave_message(client, line.number)
+    assert outside_world.emails == []
+    # Too soon: the first worker might still be going
+    monkeypatch.setattr(background_inline, '_spawn', lambda fn: fn())
+    _status_callback(client, line.id)
+    assert outside_world.emails == []
+    with line.db._get_conn() as conn:
+        conn.execute("UPDATE personal_voicemails SET processing_started_at = '2000-01-01T00:00:00+00:00'")
+        conn.commit()
+    _leave_message(client, line.number)        # Twilio's next delivery
+    assert [e['to'] for e in outside_world.emails] == [ROHAN]
+    assert len(line.pv.messages(line.db, line.id)) == 1
+
+
+def test_status_callback_first_then_the_action_sends_one_email(client, line, outside_world):
+    _status_callback(client, line.id)
+    _leave_message(client, line.number)
+    assert len(line.pv.messages(line.db, line.id)) == 1
+    assert len(outside_world.emails) == 1
+
+
+def test_no_recording_at_twilio_still_tells_the_owner(client, line, outside_world, monkeypatch):
+    import requests
+    monkeypatch.setattr(requests, 'get', lambda *a, **k: SimpleNamespace(status_code=404, content=b''))
+    _leave_message(client, line.number)
+    _status_callback(client, line.id, status='absent')
+    assert len(outside_world.emails) == 1
+    assert 'Please play the recording' in outside_world.emails[0]['text_body']
+
+
+def test_a_deleted_message_is_not_brought_back_by_a_late_callback(client, line, outside_world):
+    _leave_message(client, line.number)
+    m = line.pv.messages(line.db, line.id)[0]
+    line.pv.delete_message(line.db, 'watson', m)
+    _status_callback(client, line.id)
+    assert line.pv.messages(line.db, line.id) == []
+    assert len(outside_world.emails) == 1
 
 
 # ---------------------------------------------------------------- who sees it
