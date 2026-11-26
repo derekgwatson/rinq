@@ -59,6 +59,16 @@ def outside_world(monkeypatch):
     return SimpleNamespace(emails=sent, tickets=tickets)
 
 
+@pytest.fixture(autouse=True)
+def background_inline(monkeypatch):
+    """The download/transcribe/email thread runs inline, so a test sees its
+    result as soon as the webhook returns."""
+    import rinq.api.personal_voicemail_routes as pvr
+    monkeypatch.setattr(pvr, '_spawn', lambda fn: fn())
+    monkeypatch.setattr(pvr.time, 'sleep', lambda s: None)
+    return pvr
+
+
 @pytest.fixture
 def line(make_store):
     """The store number turned into Rohan's personal line."""
@@ -150,6 +160,96 @@ def test_email_copies_off_means_no_email(client, line, outside_world):
 def test_a_withheld_caller(client, line, outside_world):
     _leave_message(client, line.number, caller='anonymous')
     assert outside_world.emails[0]['subject'] == 'Voicemail from a withheld number'
+
+
+# ------------------------------------------- answered at once, finished later
+
+def _status_callback(client, line_id, sid=SID, status='completed'):
+    """Twilio's recordingStatusCallback: no To/From, the line is in the URL."""
+    r = client.post(f'/api/voice/personal-voicemail/recorded?line={line_id}', data={
+        'RecordingSid': sid, 'RecordingStatus': status, 'RecordingDuration': '14',
+        'CallSid': 'CAvm', 'AccountSid': 'ACwatson'})
+    assert r.status_code == 200, r.get_data(as_text=True)
+
+
+def test_the_tone_also_asks_twilio_for_a_second_callback(client, line):
+    twiml = ring(client, line.store)
+    assert f'recordingStatusCallback="http' in twiml
+    assert f'/api/voice/personal-voicemail/recorded?line={line.id}"' in twiml
+
+
+def test_twilio_is_answered_before_the_slow_work(client, line, outside_world,
+                                                 background_inline, monkeypatch):
+    """Review 2026-11-26 (F4): the download + Whisper + email used to run
+    inside Twilio's 15 s callback. Now the reply comes first."""
+    jobs = []
+    monkeypatch.setattr(background_inline, '_spawn', jobs.append)
+    r = client.post('/api/voice/personal-voicemail/recorded', data={
+        'RecordingSid': SID, 'RecordingDuration': '14', 'From': '+61400111222',
+        'To': line.number, 'CallSid': 'CAvm', 'AccountSid': 'ACwatson'})
+    assert '<Hangup/>' in r.get_data(as_text=True)
+    assert outside_world.emails == [] and len(jobs) == 1
+    jobs[0]()   # the thread - no request context needed
+    m = line.pv.messages(line.db, line.id)[0]
+    assert m['transcription'] == 'Hi Rohan, call me about the order'
+    assert [e['to'] for e in outside_world.emails] == [ROHAN]
+
+
+def test_a_recording_not_ready_is_finished_by_the_status_callback(client, line, outside_world,
+                                                                   monkeypatch):
+    import requests
+    monkeypatch.setattr(requests, 'get', lambda *a, **k: SimpleNamespace(status_code=404, content=b''))
+    _leave_message(client, line.number)
+    assert outside_world.emails == []          # not given up on: no "couldn't fetch" email
+    monkeypatch.setattr(requests, 'get', lambda *a, **k: SimpleNamespace(
+        status_code=200, content=b'ID3fake-mp3'))
+    _status_callback(client, line.id)
+    m = line.pv.messages(line.db, line.id)[0]
+    assert m['transcription'] == 'Hi Rohan, call me about the order'
+    assert line.pv.message_audio_path('watson', m)
+    assert [e['subject'] for e in outside_world.emails] == ['Voicemail from Jo Bloggs (0400111222)']
+
+
+def test_a_worker_that_died_is_taken_over_by_a_later_callback(client, line, outside_world,
+                                                              background_inline, monkeypatch):
+    monkeypatch.setattr(background_inline, '_spawn', lambda fn: None)   # killed mid-message
+    _leave_message(client, line.number)
+    assert outside_world.emails == []
+    # Too soon: the first worker might still be going
+    monkeypatch.setattr(background_inline, '_spawn', lambda fn: fn())
+    _status_callback(client, line.id)
+    assert outside_world.emails == []
+    with line.db._get_conn() as conn:
+        conn.execute("UPDATE personal_voicemails SET processing_started_at = '2000-01-01T00:00:00+00:00'")
+        conn.commit()
+    _leave_message(client, line.number)        # Twilio's next delivery
+    assert [e['to'] for e in outside_world.emails] == [ROHAN]
+    assert len(line.pv.messages(line.db, line.id)) == 1
+
+
+def test_status_callback_first_then_the_action_sends_one_email(client, line, outside_world):
+    _status_callback(client, line.id)
+    _leave_message(client, line.number)
+    assert len(line.pv.messages(line.db, line.id)) == 1
+    assert len(outside_world.emails) == 1
+
+
+def test_no_recording_at_twilio_still_tells_the_owner(client, line, outside_world, monkeypatch):
+    import requests
+    monkeypatch.setattr(requests, 'get', lambda *a, **k: SimpleNamespace(status_code=404, content=b''))
+    _leave_message(client, line.number)
+    _status_callback(client, line.id, status='absent')
+    assert len(outside_world.emails) == 1
+    assert 'Please play the recording' in outside_world.emails[0]['text_body']
+
+
+def test_a_deleted_message_is_not_brought_back_by_a_late_callback(client, line, outside_world):
+    _leave_message(client, line.number)
+    m = line.pv.messages(line.db, line.id)[0]
+    line.pv.delete_message(line.db, 'watson', m)
+    _status_callback(client, line.id)
+    assert line.pv.messages(line.db, line.id) == []
+    assert len(outside_world.emails) == 1
 
 
 # ---------------------------------------------------------------- who sees it
@@ -281,3 +381,65 @@ def test_live_calls_hide_a_caller_leaving_a_message(line, monkeypatch):
     snap = live_calls.build_snapshot(line.db, SimpleNamespace())
     assert snap['twilio_live'] == 0   # not even counted
     assert line.number not in repr(snap) and '0400111222' not in repr(snap)
+
+
+# ------------------------------- the number's call flow (review 2026-11-26, F3)
+
+def _flashes(client):
+    with client.session_transaction() as s:
+        return ' | '.join(m for _, m in s.get('_flashes', []))
+
+
+def _flow_of(db, number):
+    return (db.get_phone_number_by_number(number) or {}).get('call_flow_id')
+
+
+def test_removing_a_line_puts_its_number_back_on_its_call_flow(client, line, outside_world):
+    _login(client, CLARE, role='admin')
+    client.post(f'/admin/personal-voicemail/{line.id}/delete', data={'confirm': line.number})
+    assert _flow_of(line.db, line.number) == line.store.flow_id
+    assert 'back on call flow "Shoalhaven"' in _flashes(client)
+
+
+def test_adding_a_line_on_a_live_store_number_warns(client, make_store, outside_world):
+    store = make_store()
+    _login(client, CLARE, role='admin')
+    page = client.get('/admin/personal-voicemail').get_data(as_text=True)
+    assert '(in use: call flow &#34;Shoalhaven&#34;)' in page or '(in use: call flow "Shoalhaven")' in page
+    client.post('/admin/personal-voicemail/create',
+                data={'phone_number': store.number, 'owner_email': ROHAN})
+    assert 'was on call flow "Shoalhaven"' in _flashes(client)
+
+
+def test_moving_a_line_to_a_store_number_warns_and_gives_the_old_one_back(client, line, outside_world):
+    from types import SimpleNamespace as NS
+    db = line.db
+    flow_id = db.create_call_flow({'name': 'Wagga', 'open_action': 'queue',
+                                   'open_queue_id': line.store.queue_id}, 'test')
+    db.upsert_phone_number({'sid': 'PNwagga', 'phone_number': '+61269310000', 'friendly_name': 'Wagga',
+                            'forward_to': None, 'is_active': 1, 'synced_at': None})
+    db.set_phone_number_call_flow('PNwagga', flow_id, 'test')
+    wagga = NS(number='+61269310000', flow_id=flow_id)
+    _login(client, CLARE, role='admin')
+    client.post(f'/admin/personal-voicemail/{line.id}/update',
+                data={'phone_number': wagga.number, 'owner_email': ROHAN})
+    flashes = _flashes(client)
+    assert f'{wagga.number} was on call flow "Wagga"' in flashes
+    assert _flow_of(line.db, wagga.number) is None
+    assert _flow_of(line.db, line.number) == line.store.flow_id      # Shoalhaven back
+    # ...and removing it now gives Wagga back too
+    client.post(f'/admin/personal-voicemail/{line.id}/delete', data={'confirm': wagga.number})
+    assert _flow_of(line.db, wagga.number) == wagga.flow_id
+
+
+def test_with_no_flow_recorded_nothing_is_guessed(client, line, outside_world):
+    """A line made before the previous flow was remembered: the number is
+    left with no call flow and the admin is told, rather than Tina picking one."""
+    with line.db._get_conn() as conn:
+        conn.execute("UPDATE personal_voicemail_lines SET previous_call_flow_id = NULL, "
+                     "previous_voicemail_destination_id = NULL")
+        conn.commit()
+    _login(client, CLARE, role='admin')
+    client.post(f'/admin/personal-voicemail/{line.id}/delete', data={'confirm': line.number})
+    assert _flow_of(line.db, line.number) is None
+    assert 'nothing recorded what it was on before' in _flashes(client)

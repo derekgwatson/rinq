@@ -12,6 +12,28 @@ from datetime import datetime, timedelta
 logger = logging.getLogger(__name__)
 
 
+def _spoken_time(time_str: str) -> str:
+    """'8:30' -> '8 30 AY EM' (written so Twilio's voice says it right)."""
+    try:
+        hour, minute = time_str.split(':')
+        hour_int = int(hour)
+        minute_int = int(minute)
+        if hour_int < 12:
+            period = 'AY EM'
+            display_hour = hour_int if hour_int != 0 else 12
+        elif hour_int == 12:
+            period = 'PEE EM'
+            display_hour = 12
+        else:
+            period = 'PEE EM'
+            display_hour = hour_int - 12
+        if minute_int == 0:
+            return f'{display_hour} {period}'
+        return f'{display_hour} {minute_int:02d} {period}'
+    except (ValueError, AttributeError):
+        return time_str
+
+
 def get_next_open_time(schedule: dict, now, tz) -> dict | None:
     """Calculate when the business next opens based on the schedule.
 
@@ -44,8 +66,11 @@ def get_next_open_time(schedule: dict, now, tz) -> dict | None:
         check_mmdd = check_date.strftime('%m-%d')
         check_dow = check_date.weekday()
 
-        # Check if this day is blocked by a closure/holiday
+        # Check if this day is blocked by a closure/holiday. A closure with
+        # times only covers its window - collected here to push the opening
+        # back past it.
         is_closed_by_holiday = False
+        timed_closures = []
         for holiday in holidays:
             recurrence = holiday.get('recurrence', 'once')
             if recurrence == 'weekly':
@@ -54,6 +79,7 @@ def get_next_open_time(schedule: dict, now, tz) -> dict | None:
                     if not holiday.get('start_time') or not holiday.get('end_time'):
                         is_closed_by_holiday = True
                         break
+                    timed_closures.append(holiday)
             elif holiday.get('is_recurring'):
                 if holiday.get('date') == check_mmdd:
                     is_closed_by_holiday = True
@@ -63,6 +89,7 @@ def get_next_open_time(schedule: dict, now, tz) -> dict | None:
                     if not holiday.get('start_time') or not holiday.get('end_time'):
                         is_closed_by_holiday = True
                         break
+                    timed_closures.append(holiday)
 
         if is_closed_by_holiday:
             continue
@@ -74,33 +101,41 @@ def get_next_open_time(schedule: dict, now, tz) -> dict | None:
         open_time_str = day_hours.get('open', '').strip()
         if not open_time_str:
             continue
+        close_time = (day_hours.get('close') or '23:59').strip().zfill(5)
 
-        # If today, only count if the opening time is still in the future
-        if days_ahead == 0:
-            current_time = now.strftime('%H:%M')
-            if open_time_str.zfill(5) <= current_time:
+        # The first moment worth looking at: the opening time, or - today,
+        # once the store has opened - right now (a part-day closure may be
+        # what shut it, and it reopens when that ends).
+        current_time = now.strftime('%H:%M')
+        moment = open_time_str.zfill(5)
+        if days_ahead == 0 and moment <= current_time:
+            moment = current_time
+
+        # Walk past any part-day closure covering that moment: "closed
+        # 9-11 for training" reopens at 11, not tomorrow.
+        # (Both ends count as closed, as in check_business_status.)
+        moved = False
+        used = set()
+        while True:
+            covering = [i for i, h in enumerate(timed_closures) if i not in used
+                        and h['start_time'].zfill(5) <= moment <= h['end_time'].zfill(5)]
+            if not covering:
+                break
+            used.update(covering)
+            moment = max([moment] + [timed_closures[i]['end_time'].zfill(5) for i in covering])
+            moved = True
+
+        if moved:
+            if moment >= close_time:
+                continue  # the closure runs to closing time
+            reopen_str = moment
+        else:
+            # If today, only count if the opening time is still in the future
+            if days_ahead == 0 and open_time_str.zfill(5) <= current_time:
                 continue
+            reopen_str = open_time_str
 
-        # Format the time for speech
-        try:
-            hour, minute = open_time_str.split(':')
-            hour_int = int(hour)
-            minute_int = int(minute)
-            if hour_int < 12:
-                period = 'AY EM'
-                display_hour = hour_int if hour_int != 0 else 12
-            elif hour_int == 12:
-                period = 'PEE EM'
-                display_hour = 12
-            else:
-                period = 'PEE EM'
-                display_hour = hour_int - 12
-            if minute_int == 0:
-                time_spoken = f'{display_hour} {period}'
-            else:
-                time_spoken = f'{display_hour} {minute_int:02d} {period}'
-        except (ValueError, AttributeError):
-            time_spoken = open_time_str
+        time_spoken = _spoken_time(reopen_str)
 
         if days_ahead == 0:
             day_label = 'later today'
@@ -109,7 +144,7 @@ def get_next_open_time(schedule: dict, now, tz) -> dict | None:
         else:
             day_label = check_date.strftime('%A')
 
-        return {'day_label': day_label, 'time': time_spoken, 'time_raw': open_time_str,
+        return {'day_label': day_label, 'time': time_spoken, 'time_raw': reopen_str,
                 'date': check_date.strftime('%Y-%m-%d')}
 
     return None
@@ -139,10 +174,13 @@ def closure_for_stuart(holiday: dict | None) -> dict:
     """Why the store is shut, for Stuart to say - a one-off or yearly closure
     in what would be open hours ("our staff Christmas party", "Australia
     Day"). Its name is spoken to callers, so it's written for them; anything
-    in brackets is a note for staff and is dropped. closed_early when it only
-    covers part of the day ("closed from 1pm"). A WEEKLY closure is part of
-    the store's normal week (Canberra's Saturday) and Stuart already knows it,
-    so nothing is sent. {} when there's nothing to say. Derek 2026-11-26: on
+    in brackets is a note for staff and is dropped. closed_early when it runs
+    from part-way through the day to closing time ("closed from 1pm") -
+    check_business_status works that out; a late opening or a closure that
+    ends before closing isn't "closed early", and next_open says when the
+    store reopens. A WEEKLY closure is part of the store's normal week
+    (Canberra's Saturday) and Stuart already knows it, so nothing is sent.
+    {} when there's nothing to say. Derek 2026-11-26: on
     a Friday afternoon a bare "the store's closed" sounds like something's
     wrong."""
     if not holiday or holiday.get('recurrence') == 'weekly':
@@ -152,9 +190,26 @@ def closure_for_stuart(holiday: dict | None) -> dict:
     if not name:
         return {}
     params = {'closed_for': name}
-    if holiday.get('start_time') and holiday.get('end_time'):
+    if holiday.get('closed_early'):
         params['closed_early'] = '1'
     return params
+
+
+def _runs_to_close_from_midday(schedule: dict, day_name: str, start_time: str, end_time: str) -> bool:
+    """Is a part-day closure "closed early" - it starts after the store has
+    opened and runs to closing time? A late opening (starts before opening)
+    or a closure that ends before closing isn't."""
+    try:
+        hours = schedule.get('business_hours')
+        hours = json.loads(hours) if isinstance(hours, str) else (hours or {})
+        day = hours.get(day_name) or {}
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        return False
+    if not (day.get('open') or '').strip() or not (day.get('close') or '').strip():
+        return False
+    open_t = day['open'].strip().zfill(5)
+    close_t = day['close'].strip().zfill(5)
+    return start_time.zfill(5) > open_t and end_time.zfill(5) >= close_t
 
 
 def check_business_status(schedule: dict, at: datetime | None = None) -> dict:
@@ -237,6 +292,9 @@ def check_business_status(schedule: dict, at: datetime | None = None) -> dict:
                     continue
                 logger.info(f"Holiday match (specific): {holiday.get('name')}")
                 next_open = get_next_open_time(schedule, now, tz)
+                if start_time and end_time:
+                    holiday = {**holiday, 'closed_early': _runs_to_close_from_midday(
+                        schedule, day_name, start_time, end_time)}
                 return {'is_open': False, 'matched_holiday': holiday, 'reason': 'holiday', 'next_open': next_open}
 
     business_hours_json = schedule.get('business_hours')

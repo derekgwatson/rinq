@@ -86,41 +86,88 @@ def personal_numbers(db) -> set:
         return set()  # table not there yet (pre-migration)
 
 
+def _take_number(conn, phone_number) -> tuple:
+    """Take the number off its call flow and voicemail box (it belongs to a
+    personal line now); returns what it was on, to put back later."""
+    row = conn.execute("SELECT call_flow_id, voicemail_destination_id FROM phone_numbers "
+                       "WHERE phone_number = ?", (phone_number,)).fetchone()
+    conn.execute("UPDATE phone_numbers SET call_flow_id = NULL, voicemail_destination_id = NULL "
+                 "WHERE phone_number = ?", (phone_number,))
+    return (row[0], row[1]) if row else (None, None)
+
+
+def _give_back_number(conn, phone_number, flow_id, box_id) -> str:
+    """Put a number back on the call flow / box it had before it became a
+    personal line. 'restored'; 'kept' if someone has already given it a new
+    one; 'none_recorded' if nothing was recorded (a line made before
+    migration 090, or a number that had no flow) - nothing is guessed."""
+    row = conn.execute("SELECT call_flow_id, voicemail_destination_id FROM phone_numbers "
+                       "WHERE phone_number = ?", (phone_number,)).fetchone()
+    if not row:
+        return 'none_recorded'
+    if row[0] or row[1]:
+        return 'kept'
+    if flow_id and not conn.execute("SELECT 1 FROM call_flows WHERE id = ?", (flow_id,)).fetchone():
+        flow_id = None   # deleted since
+    if box_id and not conn.execute("SELECT 1 FROM voicemail_destinations WHERE id = ?",
+                                   (box_id,)).fetchone():
+        box_id = None
+    if not flow_id and not box_id:
+        return 'none_recorded'
+    conn.execute("UPDATE phone_numbers SET call_flow_id = ?, voicemail_destination_id = ? "
+                 "WHERE phone_number = ?", (flow_id, box_id, phone_number))
+    return 'restored'
+
+
 def create_line(db, phone_number, owner_email, by) -> int:
     now = _now()
     with db._get_conn() as conn:
+        # The number now belongs to this line, not to a call flow or box -
+        # remember which, so removing the line puts them back.
+        prev_flow, prev_box = _take_number(conn, phone_number)
         cur = conn.execute("""
             INSERT INTO personal_voicemail_lines (phone_number, owner_email, created_at,
-                created_by, updated_at, updated_by)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (phone_number, owner_email.strip().lower(), now, by, now, by))
-        # The number now belongs to this line, not to a call flow or box.
-        conn.execute("UPDATE phone_numbers SET call_flow_id = NULL, voicemail_destination_id = NULL "
-                     "WHERE phone_number = ?", (phone_number,))
+                created_by, updated_at, updated_by, previous_call_flow_id,
+                previous_voicemail_destination_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (phone_number, owner_email.strip().lower(), now, by, now, by, prev_flow, prev_box))
         conn.commit()
         return cur.lastrowid
 
 
-def update_line(db, line_id, by, **fields) -> None:
+def update_line(db, line_id, by, **fields) -> str | None:
+    """Change a line. On a number change the old number goes back to what it
+    was on before (see _give_back_number - returned), and the new one is
+    taken off its flow. None when the number didn't change."""
     allowed = {'phone_number', 'owner_email', 'email_copies', 'greeting_token', 'greeting_ext'}
     fields = {k: v for k, v in fields.items() if k in allowed}
     if not fields:
-        return
-    sets = ', '.join(f"{k} = ?" for k in fields)
+        return None
+    old = get_line(db, line_id)
+    moved = bool(old and 'phone_number' in fields and fields['phone_number'] != old['phone_number'])
+    given_back = None
     with db._get_conn() as conn:
+        if moved:
+            given_back = _give_back_number(conn, old['phone_number'], old.get('previous_call_flow_id'),
+                                           old.get('previous_voicemail_destination_id'))
+            prev_flow, prev_box = _take_number(conn, fields['phone_number'])
+            conn.execute("UPDATE personal_voicemail_lines SET previous_call_flow_id = ?, "
+                         "previous_voicemail_destination_id = ? WHERE id = ?",
+                         (prev_flow, prev_box, line_id))
+        sets = ', '.join(f"{k} = ?" for k in fields)
         conn.execute(f"UPDATE personal_voicemail_lines SET {sets}, updated_at = ?, updated_by = ? "
                      f"WHERE id = ?", (*fields.values(), _now(), by, line_id))
-        if 'phone_number' in fields:
-            conn.execute("UPDATE phone_numbers SET call_flow_id = NULL, voicemail_destination_id = NULL "
-                         "WHERE phone_number = ?", (fields['phone_number'],))
         conn.commit()
+    return given_back
 
 
-def delete_line(db, tenant_id, line_id) -> None:
-    """Remove a line and everything in it - messages and audio included."""
+def delete_line(db, tenant_id, line_id) -> str | None:
+    """Remove a line and everything in it - messages and audio included -
+    and put its number back on what it was on before (returned, see
+    _give_back_number)."""
     line = get_line(db, line_id)
     if not line:
-        return
+        return None
     for m in _rows(db, "SELECT audio_file FROM personal_voicemails WHERE line_id = ?", (line_id,)):
         _remove_file(tenant_id, 'messages', m.get('audio_file'))
     if line.get('greeting_token'):
@@ -128,7 +175,10 @@ def delete_line(db, tenant_id, line_id) -> None:
     with db._get_conn() as conn:
         conn.execute("DELETE FROM personal_voicemails WHERE line_id = ?", (line_id,))
         conn.execute("DELETE FROM personal_voicemail_lines WHERE id = ?", (line_id,))
+        given_back = _give_back_number(conn, line['phone_number'], line.get('previous_call_flow_id'),
+                                       line.get('previous_voicemail_destination_id'))
         conn.commit()
+    return given_back
 
 
 def _remove_file(tenant_id, folder, name):
@@ -193,26 +243,95 @@ def call_twiml(tenant_id, line) -> str:
         prompt = ('    <Say voice="Polly.Olivia-Neural">The person you are calling is not '
                   'available. Please leave a message after the tone.</Say>')
     action = f"{config.webhook_base_url}/api/voice/personal-voicemail/recorded"
+    # The status callback carries no To/From, so it names the line. It is
+    # the second delivery that lets a message the first one didn't finish
+    # still reach the owner.
+    status_cb = f"{action}?line={int(line['id'])}"
     return ('<?xml version="1.0" encoding="UTF-8"?>\n<Response>\n'
             '    <Pause length="1"/>\n'
             f'{prompt}\n'
             f'    <Record action="{xml_escape(action)}" maxLength="{MAX_MESSAGE_SECONDS}" '
-            'playBeep="true" />\n'
+            f'playBeep="true" recordingStatusCallback="{xml_escape(status_cb)}" '
+            'recordingStatusCallbackEvent="completed absent" />\n'
             '</Response>')
 
 
 def claim_message(db, line, recording_sid, from_number, forwarded_from, duration) -> int | None:
-    """Insert the message row; None if this recording was already taken
-    (Twilio retries its webhook)."""
+    """The message row for this recording - created by whichever of Twilio's
+    two callbacks arrives first, and filled in by the other (the status
+    callback carries no caller). None only if it couldn't be stored."""
+    seconds = int(duration) if str(duration or '').isdigit() else None
     with db._get_conn() as conn:
-        cur = conn.execute("""
+        conn.execute("""
             INSERT OR IGNORE INTO personal_voicemails (line_id, recording_sid, from_number,
                 forwarded_from, duration_seconds, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
-        """, (line['id'], recording_sid, from_number, forwarded_from,
-              int(duration) if str(duration or '').isdigit() else None, _now()))
+        """, (line['id'], recording_sid, from_number, forwarded_from, seconds, _now()))
+        # A deleted message stays emptied - a late callback can't refill it
+        conn.execute("""
+            UPDATE personal_voicemails
+            SET from_number = COALESCE(from_number, ?),
+                forwarded_from = COALESCE(forwarded_from, ?),
+                duration_seconds = COALESCE(duration_seconds, ?)
+            WHERE recording_sid = ? AND deleted_at IS NULL
+        """, (from_number, forwarded_from, seconds, recording_sid))
         conn.commit()
-        return cur.lastrowid if cur.rowcount else None
+        row = conn.execute("SELECT id FROM personal_voicemails WHERE recording_sid = ?",
+                           (recording_sid,)).fetchone()
+        return row[0] if row else None
+
+
+def get_message(db, message_id) -> dict | None:
+    return _row(db, "SELECT * FROM personal_voicemails WHERE id = ?", (message_id,))
+
+
+# A worker that hasn't finished in this long is presumed dead (a restart
+# mid-message) and a later callback may take the message over.
+PROCESSING_LEASE_SECONDS = 600
+
+
+def take_for_processing(db, message_id) -> bool:
+    """Claim the right to finish this message - True for exactly one taker.
+    Not if it's done, deleted, or another worker is on it right now."""
+    from datetime import timedelta
+    stale = (datetime.now(timezone.utc) - timedelta(seconds=PROCESSING_LEASE_SECONDS)).isoformat()
+    with db._get_conn() as conn:
+        cur = conn.execute("""
+            UPDATE personal_voicemails SET processing_started_at = ?
+            WHERE id = ? AND processed_at IS NULL AND deleted_at IS NULL
+              AND (processing_started_at IS NULL OR processing_started_at < ?)
+        """, (_now(), message_id, stale))
+        conn.commit()
+        return cur.rowcount == 1
+
+
+def note_status_callback(db, message_id) -> None:
+    """Twilio's recording-status callback has arrived: no more are coming."""
+    with db._get_conn() as conn:
+        conn.execute("UPDATE personal_voicemails SET status_seen_at = COALESCE(status_seen_at, ?) "
+                     "WHERE id = ?", (_now(), message_id))
+        conn.commit()
+
+
+def release_for_retry(db, message_id) -> bool:
+    """Give the message back unfinished so Twilio's status callback can
+    finish it - True if released. False when that callback has already
+    arrived (nothing else is coming), so the caller must finish it now.
+    One statement, so the two can't both walk away."""
+    with db._get_conn() as conn:
+        cur = conn.execute("""
+            UPDATE personal_voicemails SET processing_started_at = NULL
+            WHERE id = ? AND status_seen_at IS NULL
+        """, (message_id,))
+        conn.commit()
+        return cur.rowcount == 1
+
+
+def mark_processed(db, message_id) -> None:
+    with db._get_conn() as conn:
+        conn.execute("UPDATE personal_voicemails SET processed_at = ? WHERE id = ?",
+                     (_now(), message_id))
+        conn.commit()
 
 
 def finish_message(db, tenant_id, message_id, audio: bytes | None, **fields) -> None:

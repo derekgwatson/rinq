@@ -140,6 +140,37 @@ def register(bp):
 
     # ------------------------------------------------------------ admin
 
+    def _live_flow_name(db, number):
+        """The call flow (or voicemail box) callers to this number reach
+        today - what making it a personal line would take away. None if
+        it's on neither."""
+        n = db.get_phone_number_by_number(number) or {}
+        if n.get('call_flow_id'):
+            flow = db.get_call_flow(n['call_flow_id']) or {}
+            return f"call flow \"{flow.get('name') or n['call_flow_id']}\""
+        if n.get('voicemail_destination_id'):
+            box = db.get_voicemail_destination(n['voicemail_destination_id']) or {}
+            return f"voicemail box \"{box.get('name') or n['voicemail_destination_id']}\""
+        return None
+
+    def _warn_taken(number, was_on, owner):
+        if was_on:
+            flash(f"{number} was on {was_on} - its callers now hear {owner}'s voicemail "
+                  f"instead. Removing the line puts it back.", 'warning')
+
+    def _report_given_back(db, number, outcome):
+        """Say what happened to a number that stopped being a personal line;
+        returns a note for the activity log."""
+        if outcome == 'restored':
+            flash(f"{number} is back on {_live_flow_name(db, number) or 'its call flow'}", 'success')
+            return f"{number} put back on its previous call flow"
+        if outcome == 'none_recorded':
+            flash(f"{number} now has no call flow - nothing recorded what it was on before it "
+                  f"became a personal line. Set one on the Phone numbers page if it should "
+                  f"take calls.", 'warning')
+            return f"{number} left with no call flow (no previous flow recorded)"
+        return None
+
     def _staff_and_numbers(db, lines, keep_number=None):
         staff = [s for s in db.get_all_staff_extensions() if s.get('email')]
         taken = {l['phone_number'] for l in lines} - {keep_number}
@@ -153,9 +184,13 @@ def register(bp):
         lines = pv.list_lines(db)
         staff, numbers = _staff_and_numbers(db, lines)
         names = {s['email'].lower(): s.get('name_audio_text') for s in staff}
+        # What each free number's callers reach today, shown in the pickers
+        # so a store's live number isn't picked by mistake (labels are often
+        # bare digits - gotcha 39)
+        live_on = {n['phone_number']: _live_flow_name(db, n['phone_number']) for n in numbers}
         return render_template('admin_personal_voicemail.html', lines=lines, staff=staff,
                                all_numbers=db.get_phone_numbers(), free_numbers=numbers,
-                               names=names, current_user=get_current_user())
+                               live_on=live_on, names=names, current_user=get_current_user())
 
     def _form_line():
         number = request.form.get('phone_number', '').strip()
@@ -179,9 +214,12 @@ def register(bp):
         elif pv.line_for_owner(db, owner):
             flash(f"{owner} already has a personal voicemail line", 'error')
         else:
+            was_on = _live_flow_name(db, number)
             pv.create_line(db, number, owner, f"session:{user.email}")
             db.log_activity(action="personal_voicemail_line_created", target=number,
-                            details=f"Owner: {owner}", performed_by=f"session:{user.email}")
+                            details=f"Owner: {owner}" + (f"; taken off {was_on}" if was_on else ""),
+                            performed_by=f"session:{user.email}")
+            _warn_taken(number, was_on, owner)
             pv.notify_owner_of_change(
                 [owner], f"A personal voicemail line was set up for you on {number}. "
                          f"Your greeting and messages are on Tina's My Numbers page.", user.email)
@@ -212,9 +250,18 @@ def register(bp):
         if owner != line['owner_email'].lower():
             changes.append(f"Owner (who gets the messages): {line['owner_email']} -> {owner}")
         if changes:
-            pv.update_line(db, line_id, f"session:{user.email}", phone_number=number, owner_email=owner)
+            was_on = _live_flow_name(db, number) if number != line['phone_number'] else None
+            given_back = pv.update_line(db, line_id, f"session:{user.email}",
+                                        phone_number=number, owner_email=owner)
+            log = list(changes)
+            if was_on:
+                log.append(f"{number} taken off {was_on}")
+            note = _report_given_back(db, line['phone_number'], given_back)
+            if note:
+                log.append(note)
             db.log_activity(action="personal_voicemail_line_changed", target=number,
-                            details='; '.join(changes), performed_by=f"session:{user.email}")
+                            details='; '.join(log), performed_by=f"session:{user.email}")
+            _warn_taken(number, was_on, owner)
             pv.notify_owner_of_change([line['owner_email'], owner], '\n'.join(changes), user.email)
             flash("Saved - the owner has been emailed about the change", 'success')
         return redirect(url_for('web.admin_personal_voicemail'))
@@ -228,9 +275,11 @@ def register(bp):
         if request.form.get('confirm', '').strip() != line['phone_number']:
             flash("Type the line's number to confirm - removing it deletes every message on it", 'error')
             return redirect(url_for('web.admin_personal_voicemail'))
-        pv.delete_line(db, _tenant_id(), line_id)
+        given_back = pv.delete_line(db, _tenant_id(), line_id)
+        note = _report_given_back(db, line['phone_number'], given_back)
         db.log_activity(action="personal_voicemail_line_removed", target=line['phone_number'],
-                        details=f"Owner: {line['owner_email']}", performed_by=f"session:{user.email}")
+                        details=f"Owner: {line['owner_email']}" + (f"; {note}" if note else ""),
+                        performed_by=f"session:{user.email}")
         pv.notify_owner_of_change(
             [line['owner_email']],
             f"Your personal voicemail line ({line['phone_number']}) was removed, with its messages.",
