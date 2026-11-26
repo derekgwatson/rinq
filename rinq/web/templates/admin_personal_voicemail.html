@@ -11,6 +11,8 @@
     .pvm-form select, .pvm-form input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em; box-sizing: border-box; }
     .pvm-edit { display: none; margin-top: 14px; padding: 14px; background: #fff; border: 1px solid #ddd; border-radius: 6px; }
     .pvm-danger { margin-top: 14px; padding-top: 14px; border-top: 1px solid #f1d0d4; }
+    .pvm-owner-warn { grid-column: 1 / -1; padding: 10px 12px; background: #fff3cd; border: 1px solid #ffe08a; border-radius: 5px; color: #664d03; font-size: 0.9em; }
+    .pvm-owner-warn[hidden] { display: none; }
 </style>
 {% endblock %}
 
@@ -60,7 +62,7 @@
                 </div>
                 <div>
                     <label>Whose line (gets the messages)</label>
-                    <select name="owner_email" required>
+                    <select name="owner_email" required data-owner="{{ line.owner_email|lower }}" data-warn="pvmOwnerWarn{{ line.id }}" onchange="pvmOwnerChanged(this)">
                         {% set ns = namespace(found=false) %}
                         {% for s in staff %}
                         {% if s.email|lower == line.owner_email|lower %}{% set ns.found = true %}{% endif %}
@@ -70,8 +72,11 @@
                     </select>
                 </div>
                 <div><button type="submit" class="btn">Save</button></div>
+                <div class="pvm-owner-warn" id="pvmOwnerWarn{{ line.id }}" hidden>
+                    {% if would_delete.get(line.id) %}Changing the owner deletes {{ would_delete[line.id] }} - the new owner starts with an empty line. This can't be undone.{% else %}The new owner gets this line from now on. There are no messages or greeting on it to delete.{% endif %}
+                </div>
             </form>
-            <p class="text-muted" style="font-size: 0.85em; margin: 0 0 12px 0;">Changing the number takes the new one off any call flow it was on. The old number goes back to the call flow it had before, if Tina recorded one.</p>
+            <p class="text-muted" style="font-size: 0.85em; margin: 0 0 12px 0;">Changing the owner deletes the line's messages and greeting, as removing it does. Changing the number takes the new one off any call flow it was on. The old number goes back to the call flow it had before, if Tina recorded one.</p>
             <form method="post" action="{{ url_for('web.admin_personal_voicemail_delete', line_id=line.id) }}" class="pvm-form pvm-danger">
                 <div>
                     <label>Remove this line - deletes every message on it. Type {{ line.phone_number }} to confirm</label>
@@ -108,4 +113,14 @@
     </form>
     <p class="text-muted" style="font-size: 0.85em; margin: 10px 0 0 0;">Adding a line takes the number off any call flow it was on. Removing the line puts it back.</p>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Changing a line's owner deletes what's on it - say so before Save, not after
+function pvmOwnerChanged(sel) {
+    var warn = document.getElementById(sel.dataset.warn);
+    if (warn) warn.hidden = sel.value.toLowerCase() === sel.dataset.owner;
+}
+</script>
 {% endblock %}

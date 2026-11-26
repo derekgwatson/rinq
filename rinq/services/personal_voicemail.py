@@ -168,10 +168,7 @@ def delete_line(db, tenant_id, line_id) -> str | None:
     line = get_line(db, line_id)
     if not line:
         return None
-    for m in _rows(db, "SELECT audio_file FROM personal_voicemails WHERE line_id = ?", (line_id,)):
-        _remove_file(tenant_id, 'messages', m.get('audio_file'))
-    if line.get('greeting_token'):
-        _remove_file(tenant_id, 'greetings', f"{line['greeting_token']}.{line['greeting_ext']}")
+    _remove_contents_files(tenant_id, db, line)
     with db._get_conn() as conn:
         conn.execute("DELETE FROM personal_voicemails WHERE line_id = ?", (line_id,))
         conn.execute("DELETE FROM personal_voicemail_lines WHERE id = ?", (line_id,))
@@ -179,6 +176,44 @@ def delete_line(db, tenant_id, line_id) -> str | None:
                                        line.get('previous_voicemail_destination_id'))
         conn.commit()
     return given_back
+
+
+def _remove_contents_files(tenant_id, db, line):
+    """The audio of every message on the line, and its greeting - the files
+    removing a line has always deleted (nothing at Twilio or Drive)."""
+    for m in _rows(db, "SELECT audio_file FROM personal_voicemails WHERE line_id = ?", (line['id'],)):
+        _remove_file(tenant_id, 'messages', m.get('audio_file'))
+    if line.get('greeting_token'):
+        _remove_file(tenant_id, 'greetings', f"{line['greeting_token']}.{line['greeting_ext']}")
+
+
+def contents_count(db, line) -> tuple[int, bool]:
+    """(messages still on the line, whether it has its own greeting) - what
+    changing its owner would delete."""
+    row = _row(db, "SELECT COUNT(*) AS n FROM personal_voicemails "
+                   "WHERE line_id = ? AND deleted_at IS NULL", (line['id'],))
+    return (row['n'] if row else 0), bool(line.get('greeting_token'))
+
+
+def clear_line_contents(db, tenant_id, line_id, by) -> tuple[int, bool]:
+    """A new owner starts with an empty line: the old owner's messages and
+    greeting are deleted, as removing the line would. Message rows stay,
+    emptied (as delete_message), so a late Twilio retry of an old recording
+    can't land on the new owner's line. Returns what was deleted."""
+    line = get_line(db, line_id)
+    if not line:
+        return 0, False
+    deleted = contents_count(db, line)
+    _remove_contents_files(tenant_id, db, line)
+    with db._get_conn() as conn:
+        conn.execute("""UPDATE personal_voicemails
+                        SET deleted_at = COALESCE(deleted_at, ?), audio_file = NULL,
+                            transcription = NULL, from_number = NULL, caller_name = NULL,
+                            forwarded_from = NULL
+                        WHERE line_id = ?""", (_now(), line_id))
+        conn.commit()
+    update_line(db, line_id, by, greeting_token=None, greeting_ext=None)
+    return deleted
 
 
 def _remove_file(tenant_id, folder, name):

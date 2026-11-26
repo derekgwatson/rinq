@@ -25,6 +25,10 @@ def _login(client, email, role='user'):
     master.add_user_to_tenant('watson', user['id'], role=role)
     with client.session_transaction() as s:
         s['user_id'], s['user_email'], s['tenant_id'] = user['id'], email, 'watson'
+    # make_store's pushed context shares `g` across requests - drop the last
+    # login's cached user so a second login in one test takes effect
+    from flask import g
+    g.pop('_current_user', None)
 
 
 @pytest.fixture
@@ -335,6 +339,70 @@ def test_an_admin_change_emails_the_owner(client, line, outside_world):
     assert r.status_code == 302
     assert {e['to'] for e in outside_world.emails} == {ROHAN, CLARE}
     assert all('changed your personal voicemail' in e['text_body'] for e in outside_world.emails)
+
+
+# ------------------------- a new owner starts empty (review 2026-11-26, F1)
+
+def _record_greeting(client, owner):
+    import io
+    _login(client, owner)
+    wav = b'RIFF\x24\x00\x00\x00WAVEfmt ' + b'\x00' * 40
+    r = client.post('/my-voicemail/greeting',
+                    data={'greeting': (io.BytesIO(wav), 'greeting.wav')},
+                    content_type='multipart/form-data')
+    assert r.status_code == 200
+
+
+def test_a_new_owner_does_not_get_the_old_owners_messages_or_greeting(
+        client, line, outside_world, twilio_ready):
+    import os
+    _leave_message(client, line.number)
+    _record_greeting(client, ROHAN)
+    old = line.pv.messages(line.db, line.id)[0]
+    audio = line.pv.message_audio_path('watson', old)
+    greeting = line.pv.get_line(line.db, line.id)
+    greeting_path = line.pv.greeting_file('watson', greeting['greeting_token'], greeting['greeting_ext'])
+    assert audio and greeting_path
+
+    _login(client, CLARE, role='admin')
+    client.post(f'/admin/personal-voicemail/{line.id}/update',
+                data={'phone_number': line.number, 'owner_email': CLARE})
+    assert 'deleted' in _flashes(client)
+
+    # Clare's My Numbers card is empty, and the old message can't be played
+    assert line.pv.messages(line.db, line.id) == []
+    html = client.get('/').get_data(as_text=True)
+    assert 'My voicemail' in html and 'call me about the order' not in html
+    assert client.get(f'/my-voicemail/message/{old["id"]}/audio').status_code == 404
+    assert not os.path.exists(audio)
+    # Rohan's voice isn't Clare's greeting
+    after = line.pv.get_line(line.db, line.id)
+    assert after['greeting_token'] is None
+    assert not os.path.exists(greeting_path)
+    assert '/personal-greeting/' not in ring(client, line.store)
+    # A late Twilio retry of the old recording doesn't land on Clare's line
+    _leave_message(client, line.number)
+    assert line.pv.messages(line.db, line.id) == []
+
+
+def test_resaving_the_same_owner_deletes_nothing(client, line, outside_world):
+    _leave_message(client, line.number)
+    _record_greeting(client, ROHAN)
+    _login(client, CLARE, role='admin')
+    client.post(f'/admin/personal-voicemail/{line.id}/update',
+                data={'phone_number': line.number, 'owner_email': ROHAN.upper()})
+    assert len(line.pv.messages(line.db, line.id)) == 1
+    assert line.pv.get_line(line.db, line.id)['greeting_token']
+
+
+def test_the_admin_page_warns_before_an_owner_change(client, line, outside_world):
+    _leave_message(client, line.number)
+    _leave_message(client, line.number, sid='RE' + '2' * 32)
+    _record_greeting(client, ROHAN)
+    _login(client, CLARE, role='admin')
+    html = client.get('/admin/personal-voicemail').get_data(as_text=True)
+    assert 'Changing the owner deletes 2 messages and the greeting' in html
+    assert 'confirm(' not in html and 'alert(' not in html
 
 
 def test_removing_a_line_needs_the_number_typed(client, line, outside_world):
