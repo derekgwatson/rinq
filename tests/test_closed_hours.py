@@ -318,3 +318,52 @@ def test_ordinary_after_hours_and_weekly_closures_send_no_reason(client, make_st
                                   start_time='12:00', end_time='13:00')
     frozen_clock.set(datetime(2026, 10, 28, 12, 30))
     assert 'closed_for' not in ring(client, store, sid='CAweekly')
+
+
+# --- Part-day closures: when does the store reopen? (review 2026-11-26) ---
+
+def _schedule(*holidays):
+    import json
+    return {'timezone': 'Australia/Sydney', 'business_hours': json.dumps(STORE_HOURS),
+            'holidays': list(holidays)}
+
+
+def _one_off(start, end, name='Staff training', date='2026-10-28'):
+    return {'name': name, 'date': date, 'recurrence': 'once', 'is_recurring': False,
+            'start_time': start, 'end_time': end}
+
+
+@pytest.mark.parametrize('closure, at, reopens, closed_early', [
+    # Closed 9-11 for training (a late opening): reopens at 11 today
+    (('09:00', '11:00'), datetime(2026, 10, 28, 9, 30), ('2026-10-28', '11:00', 'later today'), False),
+    # Starts before opening, ends after it: reopens at the closure's end
+    (('07:00', '10:00'), datetime(2026, 10, 28, 8, 30), ('2026-10-28', '10:00', 'later today'), False),
+    (('07:00', '10:00'), datetime(2026, 10, 28, 7, 30), ('2026-10-28', '10:00', 'later today'), False),
+    # Rung before the closure even starts: still reopens at its end
+    (('08:00', '11:00'), datetime(2026, 10, 28, 7, 0), ('2026-10-28', '11:00', 'later today'), False),
+    # Lunch-time meeting: reopens at 1pm
+    (('12:00', '13:00'), datetime(2026, 10, 28, 12, 15), ('2026-10-28', '13:00', 'later today'), False),
+    # Closed from 1pm to closing: closed early, reopens tomorrow
+    (('13:00', '16:30'), datetime(2026, 10, 28, 14, 0), ('2026-10-29', '09:00', 'tomorrow'), True),
+])
+def test_a_part_day_closure_reopens_when_it_ends(closure, at, reopens, closed_early):
+    from rinq.api.schedule import check_business_status
+    status = check_business_status(_schedule(_one_off(*closure)), at=at)
+    assert status['is_open'] is False
+    nxt = status['next_open']
+    assert (nxt['date'], nxt['time_raw'].zfill(5), nxt['day_label']) == reopens
+    if status['matched_holiday']:
+        assert bool(status['matched_holiday'].get('closed_early')) is closed_early
+
+
+def test_a_late_opening_caller_hears_the_store_reopens_later_today(client, make_store, frozen_clock):
+    """Closed 9-11 for training, caller at 9:30: Stuart is told the store
+    reopens at 11 today - not tomorrow - and it isn't 'closed early'."""
+    from urllib.parse import unquote_plus
+    store, _ = _stuart_store_with_welcome(make_store)
+    store.db.add_schedule_holiday(store.schedule_id, 'staff training', '2026-10-28', False, 'test',
+                                  start_time='09:00', end_time='11:00')
+    frozen_clock.set(datetime(2026, 10, 28, 9, 30))
+    twiml = unquote_plus(ring(client, store))
+    assert 'next_open=later today (Wednesday) at 11am' in twiml
+    assert 'closed_early' not in twiml
