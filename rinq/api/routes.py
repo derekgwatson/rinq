@@ -1850,16 +1850,20 @@ def _go_to_voicemail(response_parts, call_flow, called_number, from_number, call
 
 def _handle_closed_call(response_parts, call_flow, schedule, matched_holiday,
                         called_number, from_number, call_sid, db, routing, is_test=False,
-                        next_open=None):
+                        next_open=None, voicemail_only=False):
     """Handle a call that arrives when business is closed.
 
     Action priority:
     1. Closure-specific action (matched_holiday.action)
     2. Schedule default action (schedule.default_closure_action)
     3. Call flow closed_action (call_flow.closed_action or 'voicemail')
+
+    voicemail_only: skip all three and take a message (the closed audio,
+    then the tone) - for a caller Stuart has handed back after closing time,
+    who must neither go back to Stuart nor be hung up on.
     """
     # Determine effective action with priority: closure > schedule default > call flow
-    closure_action = None
+    closure_action = 'voicemail' if voicemail_only else None
     if matched_holiday:
         closure_action = matched_holiday.get('action')
     if not closure_action and schedule:

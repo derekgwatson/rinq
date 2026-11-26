@@ -113,3 +113,56 @@ def test_asked_to_wait_hand_back_also_goes_back_in_the_queue(client, make_store)
                     data={'CallSid': 'CAcustomer1', 'From': CALLER, 'To': store.number})
     assert f'>queue_{store.queue_id}</Enqueue>' in r.get_data(as_text=True)
     assert store.db.get_queued_call_by_sid('CAcustomer1')['transfer_type'] == 'stuart'
+
+
+# ---- handed back after closing time (review 2026-11-26, F6)
+# The call started while the store was open (so Stuart could hand back), but
+# closing time passed while the caller was with him. Waiting out the whole
+# queue for a team that has gone home only delays voicemail - go straight there.
+
+def _rang_before_close_handed_back_after(client, make_store, frozen_clock, **store_kw):
+    from datetime import datetime
+    from conftest import STORE_HOURS
+    store = make_store(hours=STORE_HOURS, no_answer='ai_receptionist', **store_kw).with_staff(PHIL)
+    frozen_clock.set(datetime(2026, 10, 28, 16, 25))     # Wed, open till 4:30
+    ring(client, store)
+    _wait(client, store)
+    _hold_runs_out(client, store)
+    frozen_clock.set(datetime(2026, 10, 28, 16, 35))     # closed now
+    return store
+
+
+def test_hand_back_after_closing_goes_straight_to_voicemail(client, make_store, outside,
+                                                            frozen_clock):
+    store = _rang_before_close_handed_back_after(client, make_store, frozen_clock)
+    rung_before = len(outside.calls_created)
+    twiml = _hand_back(client, store)
+    assert '<Enqueue' not in twiml
+    assert '<Record' in twiml and '/api/voice/voicemail' in twiml
+    assert 'closed' in twiml.lower()
+    assert ROSIE_ANSWER_URL not in twiml
+    assert len(outside.calls_created) == rung_before      # nobody rung after hours
+
+
+def test_hand_back_after_closing_never_returns_to_stuart(client, make_store, frozen_clock):
+    # Even where after-hours calls normally go to Stuart - he just handed them back
+    store = _rang_before_close_handed_back_after(client, make_store, frozen_clock,
+                                                 closed_action='ai_receptionist')
+    twiml = _hand_back(client, store)
+    assert ROSIE_ANSWER_URL not in twiml and '<Enqueue' not in twiml
+    assert '<Record' in twiml
+
+
+def test_asked_to_wait_after_closing_also_goes_to_voicemail(client, make_store, frozen_clock):
+    store = _rang_before_close_handed_back_after(client, make_store, frozen_clock)
+    r = client.post(f'/api/voice/stuart-handback?queue_id={store.queue_id}&reason=asked_to_wait',
+                    data={'CallSid': 'CAcustomer1', 'From': CALLER, 'To': store.number})
+    twiml = r.get_data(as_text=True)
+    assert '<Enqueue' not in twiml and '<Record' in twiml
+
+
+def test_hand_back_just_before_closing_still_waits_for_the_team(client, make_store, frozen_clock):
+    from datetime import datetime
+    store = _rang_before_close_handed_back_after(client, make_store, frozen_clock)
+    frozen_clock.set(datetime(2026, 10, 28, 16, 30))     # the closing minute still counts
+    assert f'>queue_{store.queue_id}</Enqueue>' in _hand_back(client, store)

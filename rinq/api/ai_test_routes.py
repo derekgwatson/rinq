@@ -478,7 +478,8 @@ def register(bp):
         Twilio fetches this from Rosie's <Redirect> - signature-checked by the
         middleware like every /api/voice/ webhook.
         """
-        from rinq.api.routes import _ring_agents_for_queue, _build_voicemail_twiml
+        from rinq.api.routes import (_ring_agents_for_queue, _build_voicemail_twiml,
+                                     _handle_closed_call)
         db = get_db()
         call_sid = request.form.get('CallSid', '')
         caller, called = request.form.get('From', ''), request.form.get('To', '')
@@ -493,6 +494,24 @@ def register(bp):
 
         why = ("they asked to wait for the team" if request.args.get('reason') == 'asked_to_wait'
                else "Stuart couldn't hear them")
+
+        # The call reached Stuart while the store was open, but closing time
+        # may have passed since. Then nobody is coming - don't make them wait
+        # out the queue first: the store's after-hours voicemail, as a call
+        # arriving now would get (never Stuart again - he just handed back).
+        closed = _closed_now(db, called)
+        if closed:
+            routing, status = closed
+            db.log_activity(action="stuart_handback", target=f"queue_{queue['id']}",
+                            details=f"From: {caller} - {why}, store closed now: voicemail",
+                            performed_by="twilio")
+            logger.info(f"Stuart hand-back: {call_sid} - store closed since, voicemail")
+            return _handle_closed_call(
+                ['<?xml version="1.0" encoding="UTF-8"?>', '<Response>'],
+                routing.get('call_flow'), routing.get('schedule'), status.get('matched_holiday'),
+                called, caller, call_sid, db, routing,
+                next_open=status.get('next_open'), voicemail_only=True)
+
         db.requeue_call(call_sid, queue['id'], queue.get('name'), caller, called,
                         transferred_by='stuart', transfer_type='stuart')
         db.log_activity(action="stuart_handback", target=f"queue_{queue['id']}",
@@ -510,6 +529,21 @@ def register(bp):
         queue_name = f"queue_{queue['id']}"
         return _twiml(f'    <Enqueue waitUrl="{xml_escape(wait_url)}" waitUrlMethod="POST" '
                       f'action="{xml_escape(leave_url)}">{xml_escape(queue_name)}</Enqueue>')
+
+    def _closed_now(db, called):
+        """(routing, status) if the store this number rings is closed right
+        now; None if open, or if its hours can't be read (then the hand-back
+        goes ahead as it always has)."""
+        from rinq.api.schedule import check_business_status
+        try:
+            routing = db.get_call_routing(called)
+            if not routing or not routing.get('call_flow') or not routing.get('schedule'):
+                return None
+            status = check_business_status(routing['schedule'])
+        except Exception as e:
+            logger.warning(f"Stuart hand-back: couldn't check opening hours for {called}: {e}")
+            return None
+        return None if status.get('is_open') else (routing, status)
 
     @bp.route('/voice/ai-takeover/answer', methods=['POST'])
     def voice_ai_takeover_answer():
