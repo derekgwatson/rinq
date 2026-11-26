@@ -171,6 +171,15 @@ def register(bp):
             return f"{number} left with no call flow (no previous flow recorded)"
         return None
 
+    def _contents_phrase(n, greeting):
+        """'2 messages and the greeting' - what an owner change deletes."""
+        parts = []
+        if n:
+            parts.append(f"{n} message{'s' if n != 1 else ''}")
+        if greeting:
+            parts.append("the greeting")
+        return ' and '.join(parts)
+
     def _staff_and_numbers(db, lines, keep_number=None):
         staff = [s for s in db.get_all_staff_extensions() if s.get('email')]
         taken = {l['phone_number'] for l in lines} - {keep_number}
@@ -188,9 +197,12 @@ def register(bp):
         # so a store's live number isn't picked by mistake (labels are often
         # bare digits - gotcha 39)
         live_on = {n['phone_number']: _live_flow_name(db, n['phone_number']) for n in numbers}
+        # What changing each line's owner would delete - a count, never the messages
+        would_delete = {l['id']: _contents_phrase(*pv.contents_count(db, l)) for l in lines}
         return render_template('admin_personal_voicemail.html', lines=lines, staff=staff,
                                all_numbers=db.get_phone_numbers(), free_numbers=numbers,
-                               live_on=live_on, names=names, current_user=get_current_user())
+                               live_on=live_on, names=names, would_delete=would_delete,
+                               current_user=get_current_user())
 
     def _form_line():
         number = request.form.get('phone_number', '').strip()
@@ -247,12 +259,25 @@ def register(bp):
         changes = []
         if number != line['phone_number']:
             changes.append(f"Number: {line['phone_number']} -> {number}")
-        if owner != line['owner_email'].lower():
+        new_owner = owner != line['owner_email'].lower()
+        if new_owner:
             changes.append(f"Owner (who gets the messages): {line['owner_email']} -> {owner}")
         if changes:
             was_on = _live_flow_name(db, number) if number != line['phone_number'] else None
+            wiped = None
+            if new_owner:
+                # The new owner starts empty - the old owner's messages and
+                # greeting go, as removing the line does (review 2026-11-26, F1)
+                n, greeting = pv.clear_line_contents(db, _tenant_id(), line_id,
+                                                     f"session:{user.email}")
+                wiped = _contents_phrase(n, greeting)
+                if wiped:
+                    changes.append(f"{line['owner_email']}'s {wiped} deleted")
             given_back = pv.update_line(db, line_id, f"session:{user.email}",
                                         phone_number=number, owner_email=owner)
+            if wiped:
+                flash(f"{line['owner_email']}'s {wiped} deleted - {owner} starts with an empty line",
+                      'warning')
             log = list(changes)
             if was_on:
                 log.append(f"{number} taken off {was_on}")
