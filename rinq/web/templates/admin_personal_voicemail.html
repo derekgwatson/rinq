@@ -53,7 +53,7 @@
                     <select name="phone_number" required>
                         {% for num in all_numbers %}
                         {% if num.phone_number == line.phone_number or num in free_numbers %}
-                        <option value="{{ num.phone_number }}" {% if num.phone_number == line.phone_number %}selected{% endif %}>{{ num.phone_number }}{% if num.friendly_name and num.friendly_name|replace('+','') != num.phone_number|replace('+','') %} - {{ num.friendly_name }}{% endif %}</option>
+                        <option value="{{ num.phone_number }}" {% if num.phone_number == line.phone_number %}selected{% endif %}>{{ num.phone_number }}{% if num.friendly_name and num.friendly_name|replace('+','') != num.phone_number|replace('+','') %} - {{ num.friendly_name }}{% endif %}{% if num.phone_number != line.phone_number and live_on.get(num.phone_number) %} (in use: {{ live_on[num.phone_number] }}){% endif %}</option>
                         {% endif %}
                         {% endfor %}
                     </select>
@@ -71,6 +71,7 @@
                 </div>
                 <div><button type="submit" class="btn">Save</button></div>
             </form>
+            <p class="text-muted" style="font-size: 0.85em; margin: 0 0 12px 0;">Changing the number takes the new one off any call flow it was on. The old number goes back to the call flow it had before, if Tina recorded one.</p>
             <form method="post" action="{{ url_for('web.admin_personal_voicemail_delete', line_id=line.id) }}" class="pvm-form pvm-danger">
                 <div>
                     <label>Remove this line - deletes every message on it. Type {{ line.phone_number }} to confirm</label>
@@ -90,7 +91,7 @@
             <select name="phone_number" required>
                 <option value="">-- Pick a number --</option>
                 {% for num in free_numbers %}
-                <option value="{{ num.phone_number }}">{{ num.phone_number }}{% if num.friendly_name and num.friendly_name|replace('+','') != num.phone_number|replace('+','') %} - {{ num.friendly_name }}{% endif %}</option>
+                <option value="{{ num.phone_number }}">{{ num.phone_number }}{% if num.friendly_name and num.friendly_name|replace('+','') != num.phone_number|replace('+','') %} - {{ num.friendly_name }}{% endif %}{% if live_on.get(num.phone_number) %} (in use: {{ live_on[num.phone_number] }}){% endif %}</option>
                 {% endfor %}
             </select>
         </div>
@@ -105,6 +106,6 @@
         </div>
         <div><button type="submit" class="btn">Add line</button></div>
     </form>
-    <p class="text-muted" style="font-size: 0.85em; margin: 10px 0 0 0;">Adding a line takes the number off any call flow it was on.</p>
+    <p class="text-muted" style="font-size: 0.85em; margin: 10px 0 0 0;">Adding a line takes the number off any call flow it was on. Removing the line puts it back.</p>
 </div>
 {% endblock %}

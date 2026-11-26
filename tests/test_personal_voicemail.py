@@ -381,3 +381,65 @@ def test_live_calls_hide_a_caller_leaving_a_message(line, monkeypatch):
     snap = live_calls.build_snapshot(line.db, SimpleNamespace())
     assert snap['twilio_live'] == 0   # not even counted
     assert line.number not in repr(snap) and '0400111222' not in repr(snap)
+
+
+# ------------------------------- the number's call flow (review 2026-11-26, F3)
+
+def _flashes(client):
+    with client.session_transaction() as s:
+        return ' | '.join(m for _, m in s.get('_flashes', []))
+
+
+def _flow_of(db, number):
+    return (db.get_phone_number_by_number(number) or {}).get('call_flow_id')
+
+
+def test_removing_a_line_puts_its_number_back_on_its_call_flow(client, line, outside_world):
+    _login(client, CLARE, role='admin')
+    client.post(f'/admin/personal-voicemail/{line.id}/delete', data={'confirm': line.number})
+    assert _flow_of(line.db, line.number) == line.store.flow_id
+    assert 'back on call flow "Shoalhaven"' in _flashes(client)
+
+
+def test_adding_a_line_on_a_live_store_number_warns(client, make_store, outside_world):
+    store = make_store()
+    _login(client, CLARE, role='admin')
+    page = client.get('/admin/personal-voicemail').get_data(as_text=True)
+    assert '(in use: call flow &#34;Shoalhaven&#34;)' in page or '(in use: call flow "Shoalhaven")' in page
+    client.post('/admin/personal-voicemail/create',
+                data={'phone_number': store.number, 'owner_email': ROHAN})
+    assert 'was on call flow "Shoalhaven"' in _flashes(client)
+
+
+def test_moving_a_line_to_a_store_number_warns_and_gives_the_old_one_back(client, line, outside_world):
+    from types import SimpleNamespace as NS
+    db = line.db
+    flow_id = db.create_call_flow({'name': 'Wagga', 'open_action': 'queue',
+                                   'open_queue_id': line.store.queue_id}, 'test')
+    db.upsert_phone_number({'sid': 'PNwagga', 'phone_number': '+61269310000', 'friendly_name': 'Wagga',
+                            'forward_to': None, 'is_active': 1, 'synced_at': None})
+    db.set_phone_number_call_flow('PNwagga', flow_id, 'test')
+    wagga = NS(number='+61269310000', flow_id=flow_id)
+    _login(client, CLARE, role='admin')
+    client.post(f'/admin/personal-voicemail/{line.id}/update',
+                data={'phone_number': wagga.number, 'owner_email': ROHAN})
+    flashes = _flashes(client)
+    assert f'{wagga.number} was on call flow "Wagga"' in flashes
+    assert _flow_of(line.db, wagga.number) is None
+    assert _flow_of(line.db, line.number) == line.store.flow_id      # Shoalhaven back
+    # ...and removing it now gives Wagga back too
+    client.post(f'/admin/personal-voicemail/{line.id}/delete', data={'confirm': wagga.number})
+    assert _flow_of(line.db, wagga.number) == wagga.flow_id
+
+
+def test_with_no_flow_recorded_nothing_is_guessed(client, line, outside_world):
+    """A line made before the previous flow was remembered: the number is
+    left with no call flow and the admin is told, rather than Tina picking one."""
+    with line.db._get_conn() as conn:
+        conn.execute("UPDATE personal_voicemail_lines SET previous_call_flow_id = NULL, "
+                     "previous_voicemail_destination_id = NULL")
+        conn.commit()
+    _login(client, CLARE, role='admin')
+    client.post(f'/admin/personal-voicemail/{line.id}/delete', data={'confirm': line.number})
+    assert _flow_of(line.db, line.number) is None
+    assert 'nothing recorded what it was on before' in _flashes(client)
