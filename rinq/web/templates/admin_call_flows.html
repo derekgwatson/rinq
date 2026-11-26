@@ -99,14 +99,14 @@
 
                     {% if flow.open_action in ('queue', None) %}
                         {% if flow.open_no_answer_action == 'ai_receptionist' %}
-                            <span class="badge badge-success" title="AI answers when staff don't pick up">🤖 Stuart (no answer)</span>
+                            <span class="badge badge-success" title="AI answers when staff don't pick up">🤖 Rosie (no answer)</span>
                         {% elif flow.open_no_answer_action == 'voicemail' %}
                             <span class="badge badge-secondary">📧 Voicemail (no answer)</span>
                         {% endif %}
                     {% endif %}
 
                     {% if flow.closed_action == 'ai_receptionist' %}
-                        <span class="badge badge-success" title="AI answers after hours">🤖 Stuart (closed)</span>
+                        <span class="badge badge-success" title="AI answers after hours">🤖 Rosie (closed)</span>
                     {% elif flow.closed_action == 'voicemail' %}
                         {% set vm_dest = namespace(name=None, type=None, detail=None) %}
                         {% for dest in voicemail_destinations if dest.id == flow.voicemail_destination_id %}
@@ -217,7 +217,7 @@
                         <p style="margin: 0 0 10px 0; font-size: 0.85em; color: #6c757d;">What happens if staff don't pick up during business hours.</p>
                         <select name="open_no_answer_action" id="edit_no_answer_action_{{ flow.id }}" onchange="updateVoicemailVisibility({{ flow.id }})"
                                 style="width: 100%; max-width: 300px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
-                            <option value="ai_receptionist" {% if flow.open_no_answer_action == 'ai_receptionist' %}selected{% endif %}>🤖 AI Receptionist (Stuart)</option>
+                            <option value="ai_receptionist" {% if flow.open_no_answer_action == 'ai_receptionist' %}selected{% endif %}>🤖 AI Receptionist (Rosie)</option>
                             <option value="voicemail" {% if flow.open_no_answer_action == 'voicemail' %}selected{% endif %}>📧 Voicemail</option>
                         </select>
                         <div id="edit_no_answer_audio_{{ flow.id }}" style="margin-top: 10px; {% if flow.open_no_answer_action != 'voicemail' %}display: none;{% endif %}">
@@ -270,7 +270,7 @@
                             <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em;">Action</label>
                             <select name="closed_action" id="edit_closed_action_{{ flow.id }}" onchange="updateEditClosedFields({{ flow.id }})"
                                     style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
-                                <option value="ai_receptionist" {% if flow.closed_action == 'ai_receptionist' %}selected{% endif %}>🤖 AI Receptionist (Stuart)</option>
+                                <option value="ai_receptionist" {% if flow.closed_action == 'ai_receptionist' %}selected{% endif %}>🤖 AI Receptionist (Rosie)</option>
                                 <option value="message" {% if flow.closed_action == 'message' %}selected{% endif %}>Play message and hang up</option>
                                 <option value="voicemail" {% if flow.closed_action == 'voicemail' %}selected{% endif %}>Take voicemail</option>
                                 <option value="forward" {% if flow.closed_action == 'forward' %}selected{% endif %}>Forward to number</option>
@@ -429,7 +429,7 @@
                 <h4 style="margin: 0 0 10px 0; font-size: 1em; color: #155724;">📞 When No Answer (open hours)</h4>
                 <p style="margin: 0 0 10px 0; font-size: 0.85em; color: #6c757d;">What happens if staff don't pick up during business hours.</p>
                 <select name="open_no_answer_action" style="width: 100%; max-width: 300px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
-                    <option value="ai_receptionist">🤖 AI Receptionist (Stuart)</option>
+                    <option value="ai_receptionist">🤖 AI Receptionist (Rosie)</option>
                     <option value="voicemail" selected>📧 Voicemail</option>
                 </select>
             </div>
@@ -472,7 +472,7 @@
                     <label style="display: block; font-weight: 600; margin-bottom: 5px; font-size: 0.9em;">Action</label>
                     <select name="closed_action" id="closed_action" onchange="updateClosedFields()"
                             style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 1em;">
-                        <option value="ai_receptionist">🤖 AI Receptionist (Stuart)</option>
+                        <option value="ai_receptionist">🤖 AI Receptionist (Rosie)</option>
                         <option value="message">Play message and hang up</option>
                         <option value="voicemail">Take voicemail</option>
                         <option value="forward">Forward to number</option>

@@ -169,7 +169,7 @@
     margin-top: 4px;
 }
 
-/* Stuart (AI receptionist) live transcript - shown while a call he's
+/* Rosie (AI receptionist) live transcript - shown while a call he's
    answering rings you, and after you take it over. One panel per caller,
    stacked newest last (built by startAiTranscript) */
 .ai-transcripts { max-width: 640px; }
@@ -2546,13 +2546,13 @@
             </div>
         </div>
 
-        <!-- One panel per caller Stuart is talking with; startAiTranscript
+        <!-- One panel per caller Rosie is talking with; startAiTranscript
              clones the template below into this container -->
         <div class="ai-transcripts" id="aiTranscripts"></div>
         <template id="aiTranscriptTemplate">
             <div class="ai-transcript" aria-live="polite">
                 <div class="ai-transcript-head">
-                    <span class="ai-transcript-title">Stuart (AI) is talking with them</span>
+                    <span class="ai-transcript-title">Rosie (AI) is talking with them</span>
                     <span class="ai-transcript-caller"></span>
                     <span class="ai-transcript-reason"></span>
                 </div>
@@ -3299,15 +3299,15 @@ async function initPhone() {
             setStatus('Error: ' + (error.message || error), 'offline');
         });
 
-        // ---- Stuart (AI receptionist) live transcript ------------------------
-        // When Stuart answers a caller first and rings you meanwhile, show what
+        // ---- Rosie (AI receptionist) live transcript ------------------------
+        // When Rosie answers a caller first and rings you meanwhile, show what
         // he and the caller are saying. It stays up after the ringing stops, for
-        // as long as the caller is still with Stuart, with a "Take this call"
+        // as long as the caller is still with Rosie, with a "Take this call"
         // button - so you can step in at any time, not just while it rings.
         //
         // ONE PANEL PER CALLER: each ring gets its own panel (cloned from
         // #aiTranscriptTemplate into #aiTranscripts) that follows its own call
-        // and closes on its own. A second Stuart call adds a panel and leaves
+        // and closes on its own. A second Rosie call adds a panel and leaves
         // the first alone. Only a new ring for the SAME caller (the ring that
         // "Take this call" asks for) replaces that caller's panel.
         const aiPanels = new Set();  // live followers: {el, customerSid, stopped}
@@ -3362,7 +3362,7 @@ async function initPhone() {
                     div.className = `ai-line ${e.role === 'caller' ? 'caller' : 'receptionist'}`;
                     const who = document.createElement('span');
                     who.className = 'who';
-                    who.textContent = e.role === 'caller' ? 'Caller:' : 'Stuart:';
+                    who.textContent = e.role === 'caller' ? 'Caller:' : 'Rosie:';
                     div.appendChild(who);
                     div.appendChild(document.createTextNode(e.text || ''));
                     lines.appendChild(div);
@@ -3412,9 +3412,9 @@ async function initPhone() {
                         callerNumber = data.caller_number || callerNumber;
                         box.classList.add('active');
                         if (wasAnswered) {
-                            title.textContent = 'What Stuart (AI) and the caller said';
+                            title.textContent = 'What Rosie (AI) and the caller said';
                         } else {
-                            title.textContent = 'Stuart (AI) is talking with them';
+                            title.textContent = 'Rosie (AI) is talking with them';
                         }
                         render(data);
                         const followable = !ringing && data.takeable;
@@ -3426,9 +3426,9 @@ async function initPhone() {
                             takeBtn.disabled = false;
                         }
                         if (!ringing && !data.takeable) {
-                            // Stuart finished, or someone else took it: keep the
+                            // Rosie finished, or someone else took it: keep the
                             // last lines up briefly, then clear
-                            title.textContent = 'Stuart (AI) has finished with this caller';
+                            title.textContent = 'Rosie (AI) has finished with this caller';
                             setTimeout(() => { if (!panel.stopped) close(); }, 15000);
                             return;
                         }
@@ -3447,7 +3447,7 @@ async function initPhone() {
                 setTimeout(tick, 2000);
             };
             aiPanels.add(panel);
-            container.appendChild(box);  // hidden until Stuart's transcript is found
+            container.appendChild(box);  // hidden until Rosie's transcript is found
             tick();
         }
 

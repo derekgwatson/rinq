@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 PHONE = Path(__file__).resolve().parents[1] / 'rinq' / 'web' / 'templates' / 'phone.html'
-BLOCK_START = '// ---- Stuart (AI receptionist) live transcript'
+BLOCK_START = '// ---- Rosie (AI receptionist) live transcript'
 BLOCK_END = "device.on('incoming', async (call) => {"
 
 

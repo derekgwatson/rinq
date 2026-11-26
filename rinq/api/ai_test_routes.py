@@ -493,7 +493,7 @@ def register(bp):
             return _build_voicemail_twiml(None, call_sid, from_number=caller)
 
         why = ("they asked to wait for the team" if request.args.get('reason') == 'asked_to_wait'
-               else "Stuart couldn't hear them")
+               else "Rosie couldn't hear them")
 
         # The call reached Stuart while the store was open, but closing time
         # may have passed since. Then nobody is coming - don't make them wait
@@ -644,7 +644,7 @@ def register(bp):
         db = get_db()
         if db.get_call_log_field(customer, 'call_type') != 'ai_receptionist' or \
                 db.get_call_log_field(customer, 'status') != 'ai_answered':
-            return jsonify({'success': False, 'error': 'That caller is no longer with Stuart.'}), 409
+            return jsonify({'success': False, 'error': 'That caller is no longer with Rosie.'}), 409
         user = get_current_user()
         if not user or not getattr(user, 'email', None):
             return jsonify({'success': False, 'error': 'Not signed in'}), 401

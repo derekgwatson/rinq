@@ -301,7 +301,7 @@ input:checked + .toggle-slider:before {
             <option value="">All</option>
             <option value="inbound" {% if filter_type == 'inbound' %}selected{% endif %}>Inbound</option>
             <option value="outbound" {% if filter_type == 'outbound' %}selected{% endif %}>Outbound</option>
-            <option value="stuart" {% if filter_type == 'stuart' %}selected{% endif %}>Stuart</option>
+            <option value="stuart" {% if filter_type == 'stuart' %}selected{% endif %}>Rosie</option>
         </select>
         {% if filter_staff == 'mine' %}<input type="hidden" name="staff" value="mine">{% endif %}
         {% if can_filter_staff %}
@@ -332,7 +332,7 @@ input:checked + .toggle-slider:before {
                 </td>
                 <td>
                     {% if rec.is_stuart %}
-                    <span class="call-type-badge stuart">Stuart</span>
+                    <span class="call-type-badge stuart">Rosie</span>
                     {% elif rec.call_type == 'inbound' %}
                     <span class="call-type-badge inbound">Inbound</span>
                     {% elif rec.call_type == 'outbound' %}
@@ -351,7 +351,7 @@ input:checked + .toggle-slider:before {
                     {% endif %}
                 </td>
                 <td class="staff-cell">
-                    {{ rec.staff_name or (rec.staff_email.split('@')[0] if rec.staff_email else ('Stuart' if rec.is_stuart else '-')) }}
+                    {{ rec.staff_name or (rec.staff_email.split('@')[0] if rec.staff_email else ('Rosie' if rec.is_stuart else '-')) }}
                 </td>
                 <td class="duration-cell">
                     {% set mins = (rec.duration_seconds // 60)|int %}

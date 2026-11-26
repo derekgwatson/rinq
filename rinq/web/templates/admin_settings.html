@@ -221,8 +221,8 @@
         <h3>Test line (9000): pretend it's another time</h3>
         {% if pretend %}
         <p class="settings-description">
-            <strong>On: ring 9000 and Stuart answers as {{ pretend_said }}</strong> &mdash; open or
-            closed by that store's real hours and closures at that moment, and that's the time he
+            <strong>On: ring 9000 and Rosie answers as {{ pretend_said }}</strong> &mdash; open or
+            closed by that store's real hours and closures at that moment, and that's the time it
             goes by for the whole call. It switches itself off in an hour. Real calls aren't affected.
         </p>
         {% else %}
@@ -251,12 +251,12 @@
         {% endif %}
     </div>
 
-    <!-- Unanswered extensions: Stuart takes a message -->
+    <!-- Unanswered extensions: Rosie takes a message -->
     <div class="settings-section" style="margin-top: 24px;">
         <h3>Unanswered extensions</h3>
         {% if extension_ai %}
         <p class="settings-description">
-            <strong>On: when someone's extension isn't answered, Stuart takes the call</strong> and
+            <strong>On: when someone's extension isn't answered, Rosie takes the call</strong> and
             files a message for that person in Zelda. A colleague calling from Tina or a desk phone
             is recognised as staff; anyone coming through the extension line is treated as a customer.
         </p>
@@ -264,14 +264,14 @@
         <p class="settings-description">
             <strong>Off: unanswered extensions work as they always have.</strong> A customer using
             the extension line gets the call flow's usual fallback; a colleague calling from Tina
-            hears "The call was not answered." Turn this on to have Stuart take a message for the
+            hears "The call was not answered." Turn this on to have Rosie take a message for the
             person instead.
         </p>
         {% endif %}
         <form method="POST" action="{{ url_for('web.admin_settings_set_extension_ai') }}">
             <input type="hidden" name="extension_ai" value="{{ '0' if extension_ai else '1' }}">
             <button type="submit" class="btn{{ '' if extension_ai else ' btn-primary' }}">
-                {{ 'Turn off' if extension_ai else 'Send unanswered extensions to Stuart' }}
+                {{ 'Turn off' if extension_ai else 'Send unanswered extensions to Rosie' }}
             </button>
         </form>
     </div>

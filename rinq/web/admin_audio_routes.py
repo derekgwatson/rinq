@@ -393,7 +393,7 @@ def register(bp):
     @bp.route('/admin/settings/extension-ai', methods=['POST'])
     @admin_required
     def admin_settings_set_extension_ai():
-        """Turn "an unanswered extension goes to Stuart" on or off (per tenant)."""
+        """Turn "an unanswered extension goes to Rosie" on or off (per tenant)."""
         from rinq.api.ai_test_routes import EXTENSION_AI_KEY
 
         enable = request.form.get('extension_ai') == '1'
@@ -403,11 +403,11 @@ def register(bp):
         db.log_activity(
             'extension_ai_changed',
             'on' if enable else 'off',
-            f"Unanswered extensions go to Stuart: turned {'on' if enable else 'off'}",
+            f"Unanswered extensions go to Rosie: turned {'on' if enable else 'off'}",
             user.email,
         )
         if enable:
-            flash('Unanswered extensions now go to Stuart, who takes a message for the person.', 'success')
+            flash('Unanswered extensions now go to Rosie, who takes a message for the person.', 'success')
         else:
             flash('Unanswered extensions are back to how they were before.', 'success')
         return redirect(url_for('web.admin_settings'))
@@ -434,7 +434,7 @@ def register(bp):
             return redirect(url_for('web.admin_settings', _anchor='test-line'))
         said = spoken_pretend(fake)
         db.log_activity('ai_test_pretend', 'on', f"Test line pretending it's {said}", user.email)
-        flash(f"Ring 9000: Stuart will answer as {said}, for the next {PRETEND_MINUTES} minutes.",
+        flash(f"Ring 9000: Rosie will answer as {said}, for the next {PRETEND_MINUTES} minutes.",
               'success')
         return redirect(url_for('web.admin_settings', _anchor='test-line'))
 
