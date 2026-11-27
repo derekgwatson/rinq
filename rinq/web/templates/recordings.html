@@ -243,6 +243,50 @@ input:checked + .toggle-slider:before {
 .close-player:hover {
     color: #333;
 }
+
+/* Phone: each recording is a card - who it was with and the Play button on
+   top, the staff member under that, then type / when / length. Before this the Play button
+   sat in the last column, off the right edge of the screen. */
+@media (max-width: 700px) {
+    .recordings-table,
+    .recordings-table > tbody { display: block; width: 100%; }
+    .recordings-table > thead { display: none; }
+
+    /* No !important on display: the search filter hides rows inline. */
+    .recordings-table tr.rec-row {
+        display: grid;
+        grid-template-columns: auto auto 1fr auto;
+        grid-template-areas:
+            "cust  cust  cust  play"
+            "staff staff staff staff"
+            "type  time  .     dur";
+        align-items: center;
+        gap: 6px 10px;
+        padding: 12px 4px;
+        border-bottom: 1px solid #eee;
+    }
+    .recordings-table tr.rec-row > td { display: block; padding: 0; border: none; }
+    .recordings-table tr.rec-row > td:nth-child(1) { grid-area: time; font-size: 0.85em; }
+    .recordings-table tr.rec-row > td:nth-child(2) { grid-area: type; }
+    .recordings-table tr.rec-row > td.customer-cell,
+    .recordings-table tr.rec-row > td.staff-cell,
+    .recordings-table .customer-cell .customer-name {
+        max-width: none; white-space: normal; overflow: visible; overflow-wrap: break-word; min-width: 0;
+    }
+    .recordings-table tr.rec-row > td.customer-cell { grid-area: cust; }
+    .recordings-table tr.rec-row > td.staff-cell { grid-area: staff; font-size: 0.85em; color: #666; }
+    .recordings-table tr.rec-row > td.duration-cell { grid-area: dur; font-size: 0.85em; color: #666; }
+    .recordings-table tr.rec-row > td:nth-child(6) { grid-area: play; justify-self: end; }
+
+    /* The page's script opens these as 'table-row'; on a phone they are blocks. */
+    .recordings-table tr.detail-row:not([style*="none"]),
+    .recordings-table tr.audio-player-row:not([style*="none"]) { display: block !important; }
+    .recordings-table tr.detail-row > td,
+    .recordings-table tr.audio-player-row > td { display: block; padding: 8px 4px; }
+    .recordings-table .detail-grid { overflow-wrap: anywhere; }
+    .recordings-table audio { width: 100%; max-width: 100%; }
+    .recordings-table .audio-player-container { display: flex; align-items: center; gap: 8px; }
+}
 {% endblock %}
 
 {% block content %}
@@ -313,7 +357,7 @@ input:checked + .toggle-slider:before {
     </form>
 
     {% if recordings %}
-    <table>
+    <table class="recordings-table">
         <thead>
             <tr>
                 <th>Time</th>
